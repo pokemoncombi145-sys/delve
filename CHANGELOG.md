@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.0.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.1 | Brain`).
+
+## v4.1: Scan every 10 runs
+- The Index / Stats / Equipment scan no longer runs on every launch. It runs **after every 10 finished runs** (mine or delve), between runs, and the very first time if it has never scanned.
+- New Brain tab slider: **Scan every this many runs** (1-50, default 10). The **Scan Index + Equipment now** button still scans whenever you want.
+- The run counter is saved in the brain, so it carries over between sessions.
 
 ## v4.0.2: Skip items already scanned
 - Items studied before are never clicked again. v4.0 would have re-studied all 177 once to clear the FIELD STONE bug; instead the bad row is now removed from the saved data in place (from 176 items; STONE keeps it because Field Stone really drops it), and those items count as done.

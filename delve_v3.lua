@@ -138,6 +138,7 @@ local m = {
 		dropWebhook = true,
 		rareDropOdds = 500,
 		autoIndexScan = true,
+		scanEveryRuns = 10,
 		rareTopPct = 3,
 		-- new settings
 		mineRange = 150,
@@ -5197,6 +5198,7 @@ local indexAPI = (function()
 		end;
 		if summary.waiting then return; end; -- Roblox not focused yet: try again later
 		done = true;
+		brain.runsAtScan = tonumber(brain.runCount) or 0;
 		local t = brain.indexTotals;
 		notify(string.format("Scan done%s. Index %s, %d items read, %d new studied, %d already known (skipped). %d stats read.%s Scanning stops now.",
 			reason and (" (" .. reason .. ")") or "", t and (t.found .. "/" .. t.total) or "?",
@@ -5393,10 +5395,14 @@ local indexAPI = (function()
 		if not addConn then hook(); end;
 		pcall(gearTick);
 		-- one scan per launch, outside a run, once Roblox is focused; then it's done
-		if not done and not busy and CFG.autoIndexScan ~= false and now - startedAt > 10
+		-- scan every N finished runs (mine or delve), between runs; the very first time as soon as possible
+		local every = math.max(1, math.floor(tonumber(CFG.scanEveryRuns) or 10));
+		local runsSince = (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtScan) or 0);
+		local due = brain.indexScannedAt == nil or runsSince >= every;
+		if due and not busy and CFG.autoIndexScan ~= false and now - startedAt > 10
 			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10 then
 			r.scanTryAt = now;
-			task.spawn(scan, "launch");
+			task.spawn(scan, brain.indexScannedAt == nil and "first scan" or string.format("after %d runs", runsSince));
 		end;
 	end;
 	local function report()
@@ -5821,7 +5827,8 @@ end;
 				{ k = "relicNotify", t = "toggle", text = "Announce relic choice" },
 				{ k = "relicDelay", t = "slider", text = "Relic pick delay", min = .2, max = 5, step = .1, suffix = " s" },
 				{ k = "relicCodexNotify", t = "toggle", text = "Announce newly discovered relics" },
-				{ k = "autoIndexScan", t = "toggle", text = "Read Index + Equipment on launch (T menu)" },
+				{ k = "autoIndexScan", t = "toggle", text = "Auto-scan Index + Stats + Equipment (T menu)" },
+				{ k = "scanEveryRuns", t = "slider", text = "Scan every this many runs", min = 1, max = 50, step = 1, suffix = " runs" },
 				{ k = "rareTopPct", t = "slider", text = "Also rare: top % rarest in your Index", min = 0, max = 25, step = 1, suffix = " %" },
 				{ k = "dodgeLearn", t = "toggle", text = "Learn from hits (margins, mob reach, roll timing)" },
 				{ k = "smartEscape", t = "toggle", text = "Pathfind out of attacks (tile map)" },
@@ -5943,7 +5950,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.0.2 | Brain",
+		Title = "Delve v4.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
