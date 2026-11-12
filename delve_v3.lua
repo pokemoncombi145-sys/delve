@@ -3551,7 +3551,9 @@ local relicAPI = (function()
 			for _, o in ipairs(box and box:GetChildren() or {}) do
 				if o:IsA("TextLabel") and o ~= hud.timer and shown(o) then
 					local u = trim(txt(o)):upper();
-					if u ~= "DELVE" and u:match("%a") and #u <= 48 and not u:find("^DEPTH") then obj[#obj + 1] = u; end;
+					-- "DEPTH 340 M - 1 MOB LEFT": keep the goal part after the dash
+					if u:find("^DEPTH") then u = u:match("%-%s*(.+)$") or ""; end;
+					if u ~= "DELVE" and u:match("%a") and #u <= 48 then obj[#obj + 1] = u; end;
 				end;
 			end;
 			run.objective = table.concat(obj, " | ");
@@ -3975,7 +3977,7 @@ end;
 -- ATTACK ROLLS: when nothing is about to hit you, spend the roll going INTO the target.
 -- Auto = only when your race has a roll perk (read from the Races tab, e.g. Onibi Step: the roll
 -- drops spirit flames that hunt mobs). The roll distance is learned from real rolls.
-local function OQ(m)
+local function attackRoll(m)
 	local G = sQ();
 	-- measure how far a roll actually goes
 	local rf = r.rollFrom;
@@ -4037,7 +4039,7 @@ end;
 local function mh(m)
 	NQ(m);
 	IQ(m);
-	pcall(OQ, m);
+	pcall(attackRoll, m);
 	if not next(Cl) then
 		JQ = nil;
 		return;
@@ -6673,7 +6675,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.6 | Brain",
+		Title = "Delve v4.6.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

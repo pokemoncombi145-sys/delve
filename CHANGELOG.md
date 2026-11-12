@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.6 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.6.1 | Brain`).
+
+## v4.6.1: Tool switching fixed
+- **Fixed: it stopped switching between pickaxe and sword** (stood at ores holding the sword, at mobs holding the pickaxe). The v4.5 attack-roll code reused the name of the tool-switch function, so the tool switch never ran. Renamed; switching works again.
+- **Floor goals in the depth line** ("DEPTH 340 M - 1 MOB LEFT") are now read, so it fights the remaining mobs on floors that need them dead, even under 10 s on the timer.
 
 ## v4.6: Game font in the window
 - The script window now uses the game's own pixel font for every label, button and text box (read from the game's HUD, the same font as the pop-ups). Elements added later get it too.
