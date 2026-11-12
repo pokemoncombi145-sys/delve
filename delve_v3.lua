@@ -2876,7 +2876,7 @@ local relicAPI = (function()
 		if not draft then return; end;
 		disconnectDraft();
 		local picked = draft.picked;
-		if not picked and draft.clicks > 0 then picked = draft.choice; end;
+		if not picked and draft.clicks > 0 and d() - draft.ourClickAt < 1.5 then picked = draft.choice; end;
 		for _, c in ipairs(draft.cards) do
 			local rec = relicRec(c.key);
 			rec.offered = (tonumber(rec.offered) or 0) + 1;
@@ -3004,7 +3004,14 @@ local relicAPI = (function()
 		if draft and draft.sig ~= sig then
 			finishDraft();
 		end;
-		if not draft then openDraft(cards, now); end;
+		if not draft then
+			openDraft(cards, now);
+			if not r.relicDumped and r.dumpGui then
+				r.relicDumped = true;
+				local lc = cards[1].root:FindFirstAncestorWhichIsA("LayerCollector");
+				task.spawn(function() pcall(r.dumpGui, lc, "relic"); end);
+			end;
+		end;
 		draft.lastSeen = now;
 		local ps = posSig(cards);
 		if ps ~= draft.pos then draft.pos, draft.stableSince = ps, now; end;
@@ -3057,8 +3064,14 @@ local relicAPI = (function()
 			draft.method = method;
 			if method == "signal" then
 				draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
-				local okA = inp.clickGui(choice.button or choice.root);
-				if not okA then inp.clickGui(choice.root); end;
+				-- every event the card can listen to: its button, the card itself, and the label's parent
+				local fired = false;
+				for _, t2 in ipairs({ choice.button, choice.root, choice.tierLabel and choice.tierLabel.Parent }) do
+					if t2 then
+						if r.fireAll then fired = (r.fireAll(t2)) or fired; end;
+						fired = inp.clickGui(t2) or fired;
+					end;
+				end;
 				return false;
 			elseif method == "vim" then
 				draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
@@ -4658,6 +4671,7 @@ local indexAPI = (function()
 		end;
 		return fired, vx, vy;
 	end;
+	r.fireAll = fireAll;
 	-- click with increasingly "real" methods until check() says it worked
 	local function clickVerified(obj, check, label)
 		if not obj then return false; end;
@@ -4738,8 +4752,15 @@ local indexAPI = (function()
 	local function dump(win, tag)
 		if type(writefile) ~= "function" or not win then return; end;
 		local lines = { "Delve GUI dump: " .. tag .. "  " .. os.date("!%Y-%m-%d %H:%M:%S") };
+		local rowsSeen = {};
 		local function walk(o, depth)
-			if #lines > 6000 then return; end;
+			if #lines > 12000 then return; end;
+			if not (o:IsA("GuiObject") or o:IsA("LayerCollector") or o:IsA("Folder")) then return; end;
+			if o.Name == "Row" or o.Name == "Tile" then
+				local key = tostring(o.Parent) .. o.Name;
+				rowsSeen[key] = (rowsSeen[key] or 0) + 1;
+				if rowsSeen[key] > 3 then return; end;
+			end;
 			local info = string.rep("  ", depth) .. o.ClassName .. " '" .. o.Name .. "'";
 			if o:IsA("GuiObject") then
 				local p, sz = o.AbsolutePosition, o.AbsoluteSize;
@@ -4750,11 +4771,13 @@ local indexAPI = (function()
 				info = info .. string.format(" canvas=%d window=%d", o.AbsoluteCanvasSize.Y, o.AbsoluteWindowSize.Y);
 			end;
 			lines[#lines + 1] = info;
+			if o:IsA("ViewportFrame") then return; end;
 			for _, c in ipairs(o:GetChildren()) do walk(c, depth + 1); end;
 		end;
 		walk(win, 0);
 		pcall(writefile, "DelveGuiDump_" .. tag .. ".txt", table.concat(lines, "\n"));
 	end;
+	r.dumpGui = dump;
 	-- ---------------------------------------------------------------- index
 	local function biggestScroller(win, exclude)
 		local best, bn;
@@ -4790,33 +4813,40 @@ local indexAPI = (function()
 		if fallback then brain.indexTotals = fallback; end;
 	end;
 	local function collectTiles(grid, tiles, order)
-		-- zone headers: letter-only labels that are not inside a tile button
-		local headers = {};
-		for _, L in ipairs(labelsIn(grid)) do
-			if not L.o:FindFirstAncestorWhichIsA("GuiButton") and L.t:match("^[%u%s'%-]+$") and #L.t >= 3 then
-				headers[#headers + 1] = { name = L.raw, y = L.y };
+		local items = {};
+		for _, c in ipairs(grid:GetDescendants()) do
+			if c:IsA("GuiObject") and c.Visible and (c.Name == "Header" or c.Name == "Tile") and c.Parent and c.Parent.Visible
+				and not (c.Parent.Name == "Templates" or (c.Parent.Parent and c.Parent.Parent.Name == "Templates")) then
+				items[#items + 1] = c;
 			end;
 		end;
-		table.sort(headers, function(a2, b2) return a2.y < b2.y; end);
-		for _, b in ipairs(grid:GetDescendants()) do
-			if b:IsA("GuiButton") and not tiles[b] and b.Visible then
-				local s2 = b.AbsoluteSize;
-				if s2.X >= 50 and s2.X <= 300 and s2.Y >= 50 then
-					local text, ls = joined(b);
-					local odds = oddsIn(text);
-					if odds then
-						local name;
-						for _, L in ipairs(ls) do
-							if L.t:match("%a") and not L.t:find("1%s+IN") then name = L.raw; break; end;
-						end;
-						local zone;
-						for _, h in ipairs(headers) do
-							if h.y <= b.AbsolutePosition.Y then zone = h.name; end;
-						end;
-						tiles[b] = { button = b, name = name or "???", odds = odds, zone = zone,
-							found = name ~= nil and not name:find("%?") };
-						order[#order + 1] = b;
-					end;
+		table.sort(items, function(a2, b2)
+			local pa, pb = a2.AbsolutePosition, b2.AbsolutePosition;
+			if math.abs(pa.Y - pb.Y) > 4 then return pa.Y < pb.Y; end;
+			return pa.X < pb.X;
+		end);
+		local zone, zoneTally;
+		for _, c in ipairs(items) do
+			if c.Name == "Header" then
+				local t1, t2 = c:FindFirstChild("Title"), c:FindFirstChild("Tally");
+				zone = t1 and trim(txt(t1)) or zone;
+				zoneTally = t2 and trim(txt(t2)) or nil;
+				if zone and zoneTally then
+					local fa, fb = zoneTally:match("(%d+)%s*/%s*(%d+)");
+					brain.zones = type(brain.zones) == "table" and brain.zones or {};
+					brain.zones[zone] = { found = tonumber(fa), total = tonumber(fb) };
+				end;
+			elseif not tiles[c] then
+				local nameL, countL = c:FindFirstChild("ItemName"), c:FindFirstChild("Count");
+				local hit = c:FindFirstChild("Hit") or c:FindFirstChildWhichIsA("GuiButton");
+				local name = nameL and trim(txt(nameL)) or nil;
+				local odds = countL and oddsIn(txt(countL)) or oddsIn((joined(c)));
+				if name or odds then
+					tiles[c] = {
+						button = hit or c, tile = c, name = (name and name ~= "") and name or "???", odds = odds, zone = zone,
+						found = name ~= nil and name ~= "" and not name:find("%?"),
+					};
+					order[#order + 1] = c;
 				end;
 			end;
 		end;
@@ -4918,12 +4948,17 @@ local indexAPI = (function()
 				if e.found and not (type(rec) == "table" and rec.studied) then
 					if run.active or relicAPI.hasDraft() or not findWindow("INDEX") then break; end;
 					-- bring the item into view, click it, give the details time to load
-					local offset = b.AbsolutePosition.Y - grid.AbsolutePosition.Y + grid.CanvasPosition.Y;
+					local offset = e.tile.AbsolutePosition.Y - grid.AbsolutePosition.Y + grid.CanvasPosition.Y;
 					grid.CanvasPosition = Vector2.new(grid.CanvasPosition.X, math.max(0, offset - 40));
 					task.wait(.25);
-					local shownNow = clickVerified(b, function() return detailHasName(win, grid, e.name); end, e.name);
+					local shownNow = clickVerified(e.button, function() return detailHasName(win, grid, e.name); end, e.name);
 					if shownNow then
 						task.wait(.35);
+						if studied == 0 then
+							local hdr = detailHasName(win, grid, e.name);
+							local pnl = hdr and sizedAncestor(hdr.o, 250, 300);
+							if pnl then dump(pnl, "index_detail"); end;
+						end;
 						if readDetail(win, grid, e) then studied = studied + 1; end;
 					end;
 				end;
@@ -5038,6 +5073,8 @@ local indexAPI = (function()
 		if busy then return; end;
 		busy = true;
 		r.scanning = true;
+		if r.win and r.win.Close then pcall(r.win.Close); end;
+		task.wait(.3);
 		local summary = {};
 		local ok, err = pcall(function()
 			local opened = false;
@@ -5284,7 +5321,7 @@ local indexAPI = (function()
 		if not addConn then hook(); end;
 		pcall(gearTick);
 		-- one scan per launch, outside a run, once Roblox is focused; then it's done
-		if not done and not busy and CFG.autoIndexScan ~= false and now - startedAt > 5
+		if not done and not busy and CFG.autoIndexScan ~= false and now - startedAt > 20
 			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10 then
 			r.scanTryAt = now;
 			task.spawn(scan, "launch");
@@ -5834,7 +5871,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v3.8 | Brain",
+		Title = "Delve v3.9 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -5849,6 +5886,7 @@ end;
 	local visible = true;
 	r.win = {
 		alive = true,
+		Close = function() pcall(function() window:Close(); end); end,
 		IsVisible = function() return visible; end,
 		Unload = function(self)
 			self.alive = false;

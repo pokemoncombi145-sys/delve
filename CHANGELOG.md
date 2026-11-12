@@ -1,6 +1,20 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v3.8 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v3.9 | Brain`).
+
+## v3.9: Reads every Index item, real relic clicks
+**Fixed**
+- **Index read 0 items.** The layout file from v3.8 showed how the Index is built: `ScrollingFrame > Row > Tile { ItemName, Count "1 IN 2", Hit button }`, with `Header { Title "GRASSLANDS", Tally "22/23" }` between rows. v3.9 reads tiles by that exact structure, so every item gets its name, odds and zone. It clicks each tile's `Hit` button, waits for the item to appear in the detail panel, then scrolls the "drops from" list to the end (Field Stone, Copper Vein, Quartz Geode, Rockback, Chests…).
+- **Relics weren't really clicked.** Relic cards now get the same click methods as the menu tabs: every click event on the card's button, the card itself and its frame, then a virtual mouse click, then the real mouse.
+- **Picks counted that never happened.** A relic only counts as picked if the draft closed within 1.5 s of the click. Before, a draft the game closed on its own timer was counted as the script's pick.
+
+**Changed**
+- **Waits 20 s after launch** before the first scan, so the game is fully loaded.
+- **Minimises the script window** before scanning so it isn't in the way.
+- **Smaller, more useful layout files.** They skip 3D item previews and long repeated rows. New: `DelveGuiDump_index_detail.txt` (the item detail panel) and `DelveGuiDump_relic.txt` (the relic draft, saved the first time one opens).
+
+**Confirmed working (from v3.8 data)**
+- The tabs open. Stats are read correctly: all 27 Your Stats (Cinderclaw +37 at 14,418, Nightbloom Rapier +43 at 905, Mine Power 20,820, Mining Range 1.4 cells…) and all 46 Lifetime stats. The Index total reads 177/277.
 
 ## v3.8: Tabs actually get clicked
 **Fixed**
