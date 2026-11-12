@@ -217,6 +217,22 @@ do
 		end;
 	end;
 end;
+-- REASONING LOG: why it fought / mined / took a relic. DelveReasoning.txt in the workspace + last 40 in memory
+r.whyLines = {};
+pcall(function()
+	if type(isfile) == "function" and isfile("DelveReasoning.txt") and #readfile("DelveReasoning.txt") > 2000000 then
+		writefile("DelveReasoning.txt", "");
+	end;
+end);
+r.why = function(kind, text)
+	local line = string.format("%s [%s] %s", os.date("%H:%M:%S"), tostring(kind), tostring(text));
+	table.insert(r.whyLines, line);
+	while #r.whyLines > 40 do table.remove(r.whyLines, 1); end;
+	pcall(function()
+		if type(appendfile) == "function" then appendfile("DelveReasoning.txt", line .. "\n");
+		elseif type(writefile) == "function" then writefile("DelveReasoning.txt", line .. "\n"); end;
+	end);
+end;
 r.saveSettings = function(force)
 	if type(writefile) ~= "function" then return; end;
 	local copy = {};
@@ -2324,7 +2340,23 @@ end;
 local function SQ(m, G)
 	-- an attack roll is lined up: face the target for a moment so the roll goes into it
 	local fd = r.forceDir;
-	if fd and d() < fd.untilT then m, G = fd.x, fd.z; end;
+	local dt = r.detour;
+	if fd and d() < fd.untilT then
+		m, G = fd.x, fd.z;
+	elseif dt and m and not r.dodging then
+		local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+		if hrp and d() < dt.untilT then
+			local p0 = hrp.Position;
+			local wp = dt.path[dt.i];
+			while wp and (wp.x - p0.X) ^ 2 + (wp.z - p0.Z) ^ 2 < 2.25 do
+				dt.i = dt.i + 1;
+				wp = dt.path[dt.i];
+			end;
+			if wp then m, G = wp.x - p0.X, wp.z - p0.Z; else r.detour = nil; end;
+		else
+			r.detour = nil;
+		end;
+	end;
 	if not m then
 		Pl();
 		return;
@@ -3381,6 +3413,14 @@ local relicAPI = (function()
 			lines[#lines + 1] = string.format("%s [%s] = %.0f  (%s)", c.name, c.tier, c.score, table.concat(c.parts, ", "));
 		end;
 		r.lastDraft = lines;
+		if r.why then
+			local head;
+			if draft.fork then head = "fork: " .. (choice and choice.name or "?") .. " (" .. tostring(draft.forkWhy) .. ")";
+			elseif draft.trader then head = choice and ("trader: buy " .. choice.name) or "trader: nothing worth buying, walk on by";
+			else head = "pick " .. (choice and choice.name or "?") .. (draft.explored and " (exploring a close 2nd)" or " (highest score)"); end;
+			r.why("relic", string.format("%s | %s", tostring(draft.room or "draft"), head));
+			for _, ln in ipairs(lines) do r.why("relic", "   " .. ln); end;
+		end;
 		if Q.relicNotify ~= false and draft.fork and choice then
 			notify(string.format("Fork: taking %s (%s)", choice.name, tostring(draft.forkWhy)), "Delve path");
 		elseif Q.relicNotify ~= false and draft.trader then
@@ -3762,6 +3802,12 @@ local relicAPI = (function()
 				end;
 			end;
 			run.buffSets, run.buffLines = sets, lines;
+			local bsig = table.concat(lines, "|");
+			if run.buffSig and bsig ~= run.buffSig and r.readStats and CFG.autoStats ~= false then
+				pcall(r.readStats, true);
+				if r.why then r.why("mine", "buffs changed: re-reading mining range and radius from the game"); end;
+			end;
+			run.buffSig = bsig;
 			local life = false;
 			for _, u in ipairs(lines) do
 				if r.prio and r.prio.has(" " .. u .. " ", r.prio.life) then life = true; end;
@@ -4065,10 +4111,16 @@ local function YQ()
 	local manual = tonumber(Q.fightDist) or 8;
 	-- live range from the attack cone, else the range learned for the sword you hold
 	local rg = r.range or r.swordLearnedRange;
+	local out = manual;
 	if Q.autoCombatStats and rg then
-		return math.min(rg * .7, manual);
+		out = math.min(rg * .7, manual);
 	end;
-	return manual;
+	-- learned live: where hits really land (bigger with range relics), minus a shrink when swings miss
+	if r.liveHitMax == nil and type(brain.swordHit) == "table" and brain.player then
+		r.liveHitMax = tonumber(brain.swordHit[tostring(brain.player.sword or "?")]);
+	end;
+	if r.liveHitMax then out = math.max(out, math.min(manual, r.liveHitMax * .9)); end;
+	return math.max(2, out - (tonumber(r.orbitShrink) or 0));
 end;
 local function pQ(m, G)
 	if not a or #i < 3 then
@@ -4468,6 +4520,58 @@ function nav.pop(h)
 	end;
 	return top[1], top[2];
 end;
+-- shortest walk over the floor tiles from A to B, going around tiles marked blocked (pillars, walls)
+local function navRoute(px, pz, gx, gz, now)
+	if not navBuild() then return nil; end;
+	local map, open = nav.map, nav.open;
+	local scx, scz = navCellAt(px, pz);
+	local gcx, gcz = navCellAt(gx, gz);
+	if not (scx and gcx) then return nil; end;
+	local startKey, goalKey = scx * 4096 + scz, gcx * 4096 + gcz;
+	if not map[goalKey] then
+		-- goal off the tile map: aim for the tile nearest to it
+		local best, bd;
+		for key, t in pairs(map) do
+			local dd = (t.wx - gx) ^ 2 + (t.wz - gz) ^ 2;
+			if not bd or dd < bd then best, bd = key, dd; end;
+		end;
+		goalKey = best;
+	end;
+	if not goalKey or not map[startKey] then return nil; end;
+	local dist, prev, heap, seen = { [startKey] = 0 }, {}, {}, 0;
+	nav.push(heap, 0, startKey);
+	while true do
+		local c, key = nav.pop(heap);
+		if not key then break; end;
+		seen = seen + 1;
+		if key == goalKey or seen > 4000 then break; end;
+		if c <= (dist[key] or math.huge) then
+			local t = map[key];
+			for _, dl in ipairs(nav.N8) do
+				local k2 = (t.cx + dl[1]) * 4096 + t.cz + dl[2];
+				local blocked = (nav.blocked[k2] or 0) > now;
+				if map[k2] and not blocked then
+					local step = (dl[1] ~= 0 and dl[2] ~= 0) and 1.42 or 1;
+					if (open[k2] or 0) == 0 then step = step + 3; end;
+					local nc = c + step;
+					if nc < (dist[k2] or math.huge) then
+						dist[k2], prev[k2] = nc, key;
+						nav.push(heap, nc, k2);
+					end;
+				end;
+			end;
+		end;
+	end;
+	if not prev[goalKey] then return nil; end;
+	local path, key = {}, goalKey;
+	while key and key ~= startKey do
+		local t = map[key];
+		table.insert(path, 1, { x = t.wx, z = t.wz });
+		key = prev[key];
+	end;
+	return path;
+end;
+r.navRoute = navRoute;
 local function navEscape(px, pz, zones, now)
 	if CFG.smartEscape == false or not navBuild() then return nil; end;
 	local map, open, cell = nav.map, nav.open, nav.cell;
@@ -4727,6 +4831,128 @@ end;
 --   at low HP it stops chasing normal mobs and keeps mining/dodging instead.
 --   The threat radius is learned: mobs hitting you while you mine push it out, quiet mining pulls it in.
 -- ===================================================================================
+-- BOSS STUDY (live): measures how fast the boss actually loses HP while you hit it, compared with
+-- your normal damage on other mobs. If the boss is tanky and there are other things on the field
+-- (Worldheart + Heart Pylons), it goes for those first, and learns which of them make the boss
+-- vulnerable: a kill that makes boss damage jump is remembered for that boss in every later run.
+local bossStudy = { at = -1e9, notes = {} };
+function bossStudy.rateOf(hist)
+	local h1, h2 = hist[1], hist[#hist];
+	if not (h1 and h2) or h2.t - h1.t < 2 then return nil; end;
+	local on = 0;
+	for _, h in ipairs(hist) do if h.on then on = on + 1; end; end;
+	if on < #hist * .7 then return nil; end;
+	return math.max(0, (h1.hp - h2.hp) / (h2.t - h1.t));
+end;
+function bossStudy.tick(list, pos, now)
+	if now - bossStudy.at < .4 or not pos then return; end;
+	bossStudy.at = now;
+	brain.bossAdds = type(brain.bossAdds) == "table" and brain.bossAdds or {};
+	local boss, near = nil, {};
+	for _, mob in ipairs(list) do
+		local mx = tonumber(mob.max) or 0;
+		if mob.boss and (not boss or mx > (tonumber(boss.max) or 0)) then boss = mob; end;
+	end;
+	if not boss and run.bossNow then
+		for _, mob in ipairs(list) do
+			if not boss or (tonumber(mob.max) or 0) > (tonumber(boss.max) or 0) then boss = mob; end;
+		end;
+	end;
+	-- your normal damage rate: HP lost per second by whatever non-boss mob you're hitting
+	local tg = bossStudy.tgt;
+	for _, mob in ipairs(list) do
+		if mob.addr == xQ and mob ~= boss and tonumber(mob.hp) then
+			if not tg or tg.addr ~= mob.addr then tg = { addr = mob.addr, hist = {} }; bossStudy.tgt = tg; end;
+			local dd = math.sqrt((mob.x - pos.X) ^ 2 + (mob.z - pos.Z) ^ 2);
+			tg.hist[#tg.hist + 1] = { t = now, hp = tonumber(mob.hp), on = dd <= (tonumber(CFG.fightDist) or 8) + 4 };
+			while #tg.hist > 0 and now - tg.hist[1].t > 4 do table.remove(tg.hist, 1); end;
+			local rt = bossStudy.rateOf(tg.hist);
+			if rt and rt > 0 then brain.dmgRate = (tonumber(brain.dmgRate) or rt) * .9 + rt * .1; end;
+			-- LIVE SWORD RANGE: the farthest distance your hits really land at (relics/gear change it)
+			local n2 = #tg.hist;
+			local prevH = n2 >= 2 and tg.hist[n2 - 1] or nil;
+			if prevH and tg.hist[n2].hp < prevH.hp - .5 then
+				r.liveHitMax = math.max((tonumber(r.liveHitMax) or dd) * .995, dd);
+				r.noHitSince = now;
+				r.orbitShrink = math.max(0, (tonumber(r.orbitShrink) or 0) - .1);
+				brain.swordHit = type(brain.swordHit) == "table" and brain.swordHit or {};
+				brain.swordHit[tostring(brain.player and brain.player.sword or "?")] = r.liveHitMax;
+			elseif WQ == "combat" and now - (r.noHitSince or now) > 2.5 then
+				-- swinging but nothing lands: get closer
+				r.orbitShrink = math.min(4, (tonumber(r.orbitShrink) or 0) + .5);
+				r.noHitSince = now;
+				if r.why then r.why("combat", string.format("hits not landing at %.1f st: moving %.1f st closer", dd, r.orbitShrink)); end;
+			end;
+		end;
+	end;
+	if not boss then bossStudy.cur = nil; return; end;
+	local cur = bossStudy.cur;
+	if not cur or cur.addr ~= boss.addr then
+		cur = { addr = boss.addr, name = tostring(boss.name), hist = {}, adds = {} };
+		bossStudy.cur = cur;
+	end;
+	local bd = math.sqrt((boss.x - pos.X) ^ 2 + (boss.z - pos.Z) ^ 2);
+	if tonumber(boss.hp) then
+		cur.hist[#cur.hist + 1] = { t = now, hp = tonumber(boss.hp), on = xQ == boss.addr and bd <= (tonumber(CFG.fightDist) or 8) + 6 };
+		while #cur.hist > 0 and now - cur.hist[1].t > 4 do table.remove(cur.hist, 1); end;
+	end;
+	local rate = bossStudy.rateOf(cur.hist);
+	if rate then cur.rate = rate; end;
+	-- tanky? (you do under 30% of your normal damage to it)
+	local normal = tonumber(brain.dmgRate);
+	cur.shielded = rate ~= nil and normal ~= nil and normal > 0 and rate < normal * .3;
+	-- the other things on the field, and which of them just died
+	local alive = {};
+	for _, mob in ipairs(list) do
+		if mob ~= boss and (mob.x - boss.x) ^ 2 + (mob.z - boss.z) ^ 2 < 10000 then
+			alive[mob.addr] = tostring(mob.name);
+		end;
+	end;
+	for addr, name in pairs(cur.adds) do
+		if not alive[addr] and not cur.pending then
+			cur.pending = { name = name, at = now, before = cur.rate or 0 };
+			cur.hist, cur.rate = {}, nil;
+		end;
+	end;
+	cur.adds = alive;
+	-- 4 s after an add died: did the boss start taking more damage?
+	local pend = cur.pending;
+	if pend and now - pend.at > 4 then
+		cur.pending = nil;
+		local after = cur.rate;
+		if after then
+			local book = type(brain.bossAdds[cur.name]) == "table" and brain.bossAdds[cur.name] or {};
+			local rec = type(book[pend.name]) == "table" and book[pend.name] or { score = 0, n = 0 };
+			rec.n = (tonumber(rec.n) or 0) + 1;
+			local helped = after > (pend.before or 0) * 1.8 + 1;
+			rec.score = math.max(-2, math.min(5, (tonumber(rec.score) or 0) + (helped and 1 or -.5)));
+			book[pend.name] = rec;
+			brain.bossAdds[cur.name] = book;
+			markBrain();
+			if helped and not bossStudy.notes[cur.name .. pend.name] then
+				bossStudy.notes[cur.name .. pend.name] = true;
+				notify(string.format("%s takes more damage after %s dies. Killing those first from now on.", cur.name, pend.name), "Delve boss");
+				if r.why then r.why("boss", string.format("%s damage went %.0f/s -> %.0f/s after %s died: learned, kill it first", cur.name, pend.before or 0, after, pend.name)); end;
+			end;
+		end;
+	end;
+	if cur.shielded and next(alive) and not bossStudy.notes[cur.name .. ":shield"] then
+		bossStudy.notes[cur.name .. ":shield"] = true;
+		notify(string.format("%s is barely taking damage. Trying the other targets on the field first.", cur.name), "Delve boss");
+		if r.why then r.why("boss", string.format("%s takes %.0f/s vs your normal %.0f/s: shielded, switching to adds", cur.name, rate or 0, normal or 0)); end;
+	end;
+end;
+-- how much closer (in studs) a mob should count when picking a target
+function bossStudy.bias(mob)
+	local cur = bossStudy.cur;
+	if not cur or mob.addr == cur.addr then return 0; end;
+	local book = type(brain.bossAdds) == "table" and brain.bossAdds[cur.name];
+	local rec = type(book) == "table" and book[tostring(mob.name)];
+	if type(rec) == "table" and (tonumber(rec.score) or 0) >= 1 then return 60; end;
+	if type(rec) == "table" and (tonumber(rec.score) or 0) <= -1 then return 0; end;
+	if cur.shielded then return 30; end;
+	return 0;
+end;
 local function wantFight(list, pos, now)
 	local pr = CFG.mobPriority or "Smart";
 	if pr == "Always fight" or not CFG.mine then
@@ -4806,7 +5032,28 @@ local function lh(m)
 			-- stuck on a rock / wall: remember the blocked tile so the pathfinder routes around it
 			local dir = run.lastDir;
 			if dir then
-				navBlock(G.X + dir[1] * nav.cell * .8, G.Z + dir[2] * nav.cell * .8, m, 2.5);
+				-- stuck at the same spot again: block longer and wider
+				local near = r.lastStuck and (r.lastStuck.x - G.X) ^ 2 + (r.lastStuck.z - G.Z) ^ 2 < 9 and m - r.lastStuck.t < 15;
+				r.stuckStreak = near and (r.stuckStreak or 0) + 1 or 1;
+				r.lastStuck = { x = G.X, z = G.Z, t = m };
+				local secs = math.min(30, 8 * r.stuckStreak);
+				local ax, az = G.X + dir[1] * nav.cell * .8, G.Z + dir[2] * nav.cell * .8;
+				navBlock(ax, az, m, secs);
+				if r.stuckStreak >= 2 then
+					-- also the tiles beside it: the obstacle is wider than one tile
+					navBlock(ax - dir[2] * nav.cell, az + dir[1] * nav.cell, m, secs);
+					navBlock(ax + dir[2] * nav.cell, az - dir[1] * nav.cell, m, secs);
+				end;
+				local goal = { x = G.X + dir[1] * 18, z = G.Z + dir[2] * 18 };
+				local okR, path = pcall(navRoute, G.X, G.Z, goal.x, goal.z, m);
+				if okR and path and #path >= 1 then
+					r.detour = { path = path, i = 1, untilT = m + 4 };
+					f(string.format("stuck (x%d): detour of %d tiles around the obstacle", r.stuckStreak, #path));
+					if r.why then r.why("move", string.format("stuck on an obstacle (x%d), walking around it", r.stuckStreak)); end;
+				else
+					-- no tile route: back off and sidestep
+					r.forceDir = { x = -dir[2] - dir[1] * .5, z = dir[1] - dir[2] * .5, untilT = m + .5 };
+				end;
 			end;
 			Qh = nil;
 			Pl();
@@ -4817,6 +5064,7 @@ local function lh(m)
 		r.stuckRef = nil;
 	end;
 	local S = ol();
+	pcall(bossStudy.tick, S, G, m);
 	r.mobCount = #S;
 	if #S > 0 and Q.combat and wantFight(S, G, m) then
 		WQ = "combat";
@@ -4830,6 +5078,8 @@ local function lh(m)
 	for m, Q in ipairs(S) do
 		local e = math.sqrt(((Q.x - G.X)) ^ 2 + ((Q.z - G.Z)) ^ 2);
 		Q.d = e;
+		local okB, bias = pcall(bossStudy.bias, Q);
+		if okB and bias then e = e - bias; end;
 		if r.keepTarget == Q.addr then
 			e = e - 4;
 		end;
@@ -4842,6 +5092,22 @@ local function lh(m)
 		r.keepTarget = w.addr;
 	else
 		r.keepTarget = nil;
+	end;
+	do
+		local tname = WQ == "combat" and w and tostring(w.name) or "-";
+		local reason = WQ == "combat" and tostring(r.fightWhy or "fight")
+			or (r.danger and string.format("timer %ss: ignoring mobs", tostring(run.timeLeft)) or (#S > 0 and "mobs not a threat, ores first" or "no mobs"));
+		local key = WQ .. "|" .. tname .. "|" .. reason;
+		if key ~= r.whyKey and m - (r.whyAt or 0) > 1.5 then
+			r.whyKey, r.whyAt = key, m;
+			local extra = "";
+			if WQ == "combat" and w then
+				local okB, bias = pcall(bossStudy.bias, w);
+				extra = string.format(", %.1f st away", tonumber(w.d) or 0) .. ((okB and (bias or 0) > 0) and ", priority target (boss mechanic)" or "")
+					.. (w.boss and ", boss" or "");
+			end;
+			if r.why then r.why("combat", string.format("%s %s: %s%s, %d mobs up", WQ, tname ~= "-" and tname or "", reason, extra, #S)); end;
+		end;
 	end;
 	if WQ == "mine" then
 		if y(m) then
@@ -7099,7 +7365,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.9.1 | Brain",
+		Title = "Delve v5.0 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -7269,6 +7535,14 @@ end;
 				end,
 			});
 			tab:Button({
+				Title = "Show recent reasoning (combat + relics)",
+				Callback = function()
+					local lines = {};
+					for k = math.max(1, #r.whyLines - 12), #r.whyLines do lines[#lines + 1] = r.whyLines[k]; end;
+					notify(#lines > 0 and table.concat(lines, "\n") or "Nothing yet. Full log: DelveReasoning.txt in the Volt workspace.", "Delve reasoning");
+				end,
+			});
+			tab:Button({
 				Title = "Show danger learned (attacks, floors, bosses)",
 				Callback = function()
 					local out = {};
@@ -7285,6 +7559,13 @@ end;
 					for sig, fr in pairs(brain.floorHaz or {}) do
 						if type(fr) == "table" and (tonumber(fr.hits) or 0) >= 2 then
 							out[#out + 1] = string.format("Floor %s: %d hits (avoided)", sig:match("^[^|]*"), tonumber(fr.hits) or 0);
+						end;
+					end;
+					for boss, book in pairs(brain.bossAdds or {}) do
+						for add, rec in pairs(type(book) == "table" and book or {}) do
+							if type(rec) == "table" and (tonumber(rec.score) or 0) >= 1 then
+								out[#out + 1] = string.format("Boss %s: kill %s first", boss, add);
+							end;
 						end;
 					end;
 					for boss, pt in pairs(brain.patterns or {}) do

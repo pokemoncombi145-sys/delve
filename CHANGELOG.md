@@ -1,6 +1,22 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.9.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.0 | Brain`).
+
+## v5.0: Boss study, reasoning log, unsticking, live ranges
+**Boss study (live)**
+- Measures how fast the boss really loses HP while you hit it, compared with your normal damage on other mobs. If the boss is barely taking damage (Worldheart with its Heart Pylons up), it switches to the other targets on the field first.
+- Learns which adds make a boss vulnerable: when killing one makes boss damage jump, that add is a priority target for that boss in every later run (and one that doesn't help is dropped).
+
+**Reasoning log**
+- `DelveReasoning.txt` in the Volt workspace explains every decision: why it's fighting or mining (boss, mob stage, threat distance, timer danger zone…), which target and why (priority boss mechanic), the full score breakdown of every relic draft and why it picked, forks, traders, boss findings, getting stuck, range changes.
+- Brain tab: **Show recent reasoning (combat + relics)** shows the last lines.
+
+**No more getting stuck on pillars**
+- When it stops moving against something, it blocks that spot for longer (8 s, more each time it gets stuck at the same place, and the tiles beside it from the 2nd time) and walks a detour over the floor tiles around it, instead of walking straight back into it.
+
+**Ranges adapt live**
+- **Mining:** whenever ACTIVE BUFFS change (new relic, blessing, "+50% MINING RANGE"), it re-reads the game's live mining range and radius.
+- **Sword:** it learns the farthest distance your hits actually land at (per sword, saved), so range relics let it fight from further out; if swings stop landing, it moves closer until they do.
 
 ## v4.9.1: Mythic drops to Discord
 - Drop alerts (pop-up and Discord, with a screenshot when the helper runs) now go out for **Mythic tier or higher**, whatever the odds (e.g. Moonlit Glowcap, Mythic, 1 in 6,000). Lower tiers are no longer posted.
