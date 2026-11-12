@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.5 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.6 | Brain`).
+
+## v4.6: Game font in the window
+- The script window now uses the game's own pixel font for every label, button and text box (read from the game's HUD, the same font as the pop-ups). Elements added later get it too.
+- Setting: **Use the game's font in this window** (Settings tab). Turning it off puts the original font back.
 
 ## v4.5: Auto Farm, cleaner UI, game-style pop-ups, attack rolls
 **Auto Farm (Farm tab)**

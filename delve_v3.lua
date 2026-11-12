@@ -124,6 +124,7 @@ local m = {
 		stageOther = "",
 		startClosed = true,
 		niceToasts = true,
+		uiGameFont = true,
 		mechNotify = true,
 		dangerTime = 10,
 		forkPath = "Smart",
@@ -6462,6 +6463,7 @@ end;
 			items = {
 				{ k = "startClosed", t = "toggle", text = "Start with this window closed" },
 				{ k = "niceToasts", t = "toggle", text = "Game-style pop-ups" },
+				{ k = "uiGameFont", t = "toggle", text = "Use the game's font in this window" },
 				{ k = "relicNotify", t = "toggle", text = "Pop-ups: relic, trader and path choices" },
 				{ k = "mechNotify", t = "toggle", text = "Pop-ups: new relics and mechanics" },
 				{ k = "background", t = "toggle", text = "Background mode (work while tabbed out)" },
@@ -6491,6 +6493,7 @@ end;
 				r.statsFound = false;
 				fQ(true);
 			end;
+			if key == "uiGameFont" and r.applyGameFont then task.spawn(r.applyGameFont); end;
 			if key == "centerFarm" and not value then r.centerFarmChest = nil; r.strayTrip = false; end;
 			if key == "background" or key == "silentAim" then
 				if value then
@@ -6567,6 +6570,8 @@ end;
 			end;
 			return Font.fromEnum(Enum.Font.Arcade);
 		end;
+		r.gameFont = gameFont;
+		r.gameFontReady = function() return font ~= nil; end;
 		local function ensure()
 			if holder and holder.Parent and holder.Parent.Parent then return true; end;
 			local sg = Instance.new("ScreenGui");
@@ -6668,7 +6673,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.5 | Brain",
+		Title = "Delve v4.6 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -6917,6 +6922,58 @@ end;
 				pcall(setting.widget.Set, setting.widget, value);
 			end;
 		end;
+	end;
+	-- the game's pixel font for this window too (every label, button and text box, including ones added later)
+	do
+		local original = setmetatable({}, { __mode = "k" });
+		local root, conn;
+		local function findRoot()
+			if root and root.Parent then return root; end;
+			local okU, main = pcall(function() return window.UIElements and window.UIElements.Main; end);
+			if okU and typeof(main) == "Instance" then
+				root = main:FindFirstAncestorWhichIsA("LayerCollector") or main;
+				return root;
+			end;
+			local places = {};
+			if type(gethui) == "function" then pcall(function() places[#places + 1] = gethui(); end); end;
+			pcall(function() places[#places + 1] = game:GetService("CoreGui"); end);
+			places[#places + 1] = l:FindFirstChild("PlayerGui");
+			for _, place in ipairs(places) do
+				local okD, all = pcall(function() return place:GetDescendants(); end);
+				for _, o in ipairs(okD and all or {}) do
+					if o:IsA("TextLabel") and o.Text:find("Delve v", 1, true) and o.Text:find("Brain", 1, true) then
+						root = o:FindFirstAncestorWhichIsA("LayerCollector");
+						return root;
+					end;
+				end;
+			end;
+			return nil;
+		end;
+		local function setOne(o, ff)
+			if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+				if original[o] == nil then original[o] = o.FontFace; end;
+				if ff then
+					o.FontFace = Font.new(ff.Family, original[o].Weight, original[o].Style);
+				else
+					o.FontFace = original[o];
+				end;
+			end;
+		end;
+		r.applyGameFont = function()
+			local g = findRoot();
+			if not g then return; end;
+			local ff = CFG.uiGameFont ~= false and r.gameFont and r.gameFont() or nil;
+			for _, o in ipairs(g:GetDescendants()) do pcall(setOne, o, ff); end;
+			if conn then conn:Disconnect(); conn = nil; end;
+			if ff then
+				conn = g.DescendantAdded:Connect(function(o) pcall(setOne, o, ff); end);
+			end;
+		end;
+		task.delay(.5, function() pcall(r.applyGameFont); end);
+		-- the game's HUD may not be fully loaded yet: try again once it is
+		task.delay(15, function()
+			if r.gameFontReady and not r.gameFontReady() then pcall(r.applyGameFont); end;
+		end);
 	end;
 	if CFG.startClosed ~= false then
 		task.delay(.3, function() pcall(function() window:Close(); end); end);
