@@ -1,6 +1,20 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v3.7 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v3.8 | Brain`).
+
+## v3.8: Tabs actually get clicked
+**Fixed**
+- **The scan opened the T menu but never switched to Index, Stats or Equipment**, so nothing was read. These tabs don't respond to the button-click events v3.7 used.
+
+**Changed**
+- **Verified clicking.** Each tab, and each Index item, is now clicked with increasingly real methods until the screen confirms it worked:
+  1. every click event the button has (mouse down/up/click/activated, plus a simulated mouse press);
+  2. a virtual mouse click at the tab's centre;
+  3. a real mouse click (only when Roblox is focused and Background mode is off).
+
+  After each attempt it waits for that window's title (INDEX / STATS / EQUIPMENT), or the item's name in the detail panel, before moving on.
+- **Window detection** only accepts the title at the top of a window, so the tab labels in the bottom bar can't be mistaken for an open window.
+- **Menu layout file.** The first time the menu is open it writes `DelveGuiDump_menu.txt`. If a tab still can't be opened, the "Scan done" pop-up says which one.
 
 ## v3.7: Careful one-time scan, no more frame drops
 **Fixed**

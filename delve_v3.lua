@@ -4583,13 +4583,117 @@ local indexAPI = (function()
 		for _, o in ipairs(pg:GetDescendants()) do
 			if o:IsA("TextLabel") and trim(txt(o)):upper() == title and shown(o) and not o:FindFirstAncestorWhichIsA("GuiButton") then
 				local win = sizedAncestor(o, 500, 300);
-				if win then return win; end;
+				if win and o.AbsolutePosition.Y < win.AbsolutePosition.Y + 90 then return win; end;
 			end;
 		end;
 		return nil;
 	end;
+	-- the tab bar ("Backpack Equipment Index Stats Races"): any of its words on screen means the menu is open
+	local function tabLabels(name)
+		local pg = pgui();
+		local out = {};
+		for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+			if isText(o) and trim(txt(o)):upper() == name and shown(o) then out[#out + 1] = o; end;
+		end;
+		-- the tab is the one lowest on screen (window titles sit at the top)
+		table.sort(out, function(a2, b2) return a2.AbsolutePosition.Y > b2.AbsolutePosition.Y; end);
+		return out;
+	end;
+	local VIMx;
+	pcall(function() VIMx = game:GetService("VirtualInputManager"); end);
+	local function centerOf(obj)
+		local pos, size = obj.AbsolutePosition, obj.AbsoluteSize;
+		local cx, cy = pos.X + size.X / 2, pos.Y + size.Y / 2;
+		local inset = guiService:GetGuiInset();
+		local sg = obj:FindFirstAncestorWhichIsA("ScreenGui");
+		local ignore = false;
+		if sg then
+			local ok, v = pcall(function() return sg.IgnoreGuiInset; end);
+			ignore = ok and v == true;
+		end;
+		-- viewport coordinates (VirtualInputManager / screen in fullscreen)
+		return cx + (ignore and 0 or inset.X), cy + (ignore and 0 or inset.Y), cx, cy;
+	end;
+	-- fire every way a game can listen for a click on this object
+	local function fireAll(obj)
+		local fired = false;
+		local vx, vy, cx, cy = centerOf(obj);
+		for _, sigName in ipairs({ "MouseButton1Down", "MouseButton1Up", "MouseButton1Click", "Activated" }) do
+			local okS, sig = pcall(function() return obj[sigName]; end);
+			if okS and sig then
+				if type(getconnections) == "function" then
+					for _, c in ipairs(getconnections(sig)) do
+						if type(c.Function) == "function" then
+							task.spawn(c.Function, cx, cy);
+							fired = true;
+						elseif type(c.Fire) == "function" then
+							pcall(c.Fire, c, cx, cy);
+							fired = true;
+						end;
+					end;
+				elseif type(firesignal) == "function" and pcall(firesignal, sig) then
+					fired = true;
+				end;
+			end;
+		end;
+		if type(getconnections) == "function" then
+			for _, ev in ipairs({ "InputBegan", "InputEnded" }) do
+				local okI, sig = pcall(function() return obj[ev]; end);
+				if okI and sig then
+					local fake = {
+						UserInputType = Enum.UserInputType.MouseButton1,
+						UserInputState = ev == "InputBegan" and Enum.UserInputState.Begin or Enum.UserInputState.End,
+						Position = Vector3.new(cx, cy, 0),
+						Delta = Vector3.zero,
+						KeyCode = Enum.KeyCode.Unknown,
+					};
+					for _, c in ipairs(getconnections(sig)) do
+						if type(c.Function) == "function" then
+							task.spawn(c.Function, fake, false);
+							fired = true;
+						end;
+					end;
+				end;
+			end;
+		end;
+		return fired, vx, vy;
+	end;
+	-- click with increasingly "real" methods until check() says it worked
+	local function clickVerified(obj, check, label)
+		if not obj then return false; end;
+		local targets = {};
+		local btn = obj:IsA("GuiButton") and obj or obj:FindFirstAncestorWhichIsA("GuiButton");
+		if btn then targets[#targets + 1] = btn; end;
+		if obj.Parent and obj.Parent:IsA("GuiObject") and obj.Parent ~= btn then targets[#targets + 1] = obj.Parent; end;
+		targets[#targets + 1] = obj;
+		for _, t2 in ipairs(targets) do
+			fireAll(t2);
+			if waitFor(check, 1.2) then return true, "events"; end;
+		end;
+		local vx, vy = centerOf(btn or obj);
+		local focusedNow = inp.focused();
+		if VIMx and (focusedNow or Q.background == true) then
+			pcall(VIMx.SendMouseMoveEvent, VIMx, vx, vy, game);
+			task.wait(.05);
+			pcall(VIMx.SendMouseButtonEvent, VIMx, vx, vy, 0, true, game, 0);
+			task.wait(.06);
+			pcall(VIMx.SendMouseButtonEvent, VIMx, vx, vy, 0, false, game, 0);
+			if waitFor(check, 1.2) then return true, "virtual mouse"; end;
+		end;
+		if focusedNow and Q.background ~= true then
+			-- real mouse: fullscreen, so viewport coordinates are screen coordinates
+			inp.mouseMove(math.floor(vx + .5), math.floor(vy + .5));
+			task.wait(.15);
+			inp.mouseDown();
+			task.wait(.07);
+			inp.mouseUp();
+			if waitFor(check, 1.5) then return true, "mouse"; end;
+		end;
+		notify("Couldn't click " .. tostring(label or obj.Name) .. ". Layout saved to DelveGuiDump_menu.txt.", "Delve index");
+		return false;
+	end;
 	local function menuOpen()
-		return findWindow("INDEX") or findWindow("STATS") or findWindow("EQUIPMENT") or findWindow("BACKPACK") or findWindow("RACES");
+		return #tabLabels("RACES") > 0 or #tabLabels("BACKPACK") > 0;
 	end;
 	local function pressT()
 		if not (Q.background == true or inp.focused()) then return false; end;
@@ -4598,16 +4702,13 @@ local indexAPI = (function()
 		inp.key(84, false);
 		return true;
 	end;
-	local function clickTab(name)
-		local pg = pgui();
-		if not pg then return false; end;
-		for _, o in ipairs(pg:GetDescendants()) do
-			if isText(o) and trim(txt(o)):upper() == name and shown(o) then
-				local btn = o:IsA("GuiButton") and o or o:FindFirstAncestorWhichIsA("GuiButton");
-				if btn and inp.clickGui(btn) then return true; end;
-			end;
-		end;
-		return false;
+	-- click a bottom tab and wait until that window's title is showing
+	local function openTab(name)
+		if findWindow(name) then return findWindow(name); end;
+		local tab = tabLabels(name)[1];
+		if not tab then return nil; end;
+		local ok = clickVerified(tab, function() return findWindow(name); end, name .. " tab");
+		return ok and findWindow(name) or nil;
 	end;
 	local function scrollers(win)
 		local list = {};
@@ -4784,6 +4885,16 @@ local indexAPI = (function()
 		end;
 		return true;
 	end;
+	local menuDumped = false;
+	local function dumpMenu()
+		if menuDumped then return; end;
+		local tab = tabLabels("RACES")[1] or tabLabels("BACKPACK")[1];
+		local lc = tab and tab:FindFirstAncestorWhichIsA("LayerCollector");
+		if lc then
+			menuDumped = true;
+			dump(lc, "menu");
+		end;
+	end;
 	local function scanIndex(win, study)
 		local grid = biggestScroller(win);
 		if not grid then return 0, 0; end;
@@ -4810,8 +4921,8 @@ local indexAPI = (function()
 					local offset = b.AbsolutePosition.Y - grid.AbsolutePosition.Y + grid.CanvasPosition.Y;
 					grid.CanvasPosition = Vector2.new(grid.CanvasPosition.X, math.max(0, offset - 40));
 					task.wait(.25);
-					inp.clickGui(b);
-					if waitFor(function() return detailHasName(win, grid, e.name); end, 2.5) then
+					local shownNow = clickVerified(b, function() return detailHasName(win, grid, e.name); end, e.name);
+					if shownNow then
 						task.wait(.35);
 						if readDetail(win, grid, e) then studied = studied + 1; end;
 					end;
@@ -4938,24 +5049,28 @@ local indexAPI = (function()
 				opened = true;
 				if not waitFor(menuOpen, 3) then summary.noMenu = true; return; end;
 			end;
-			task.wait(.4);
-			clickTab("INDEX");
-			local win = waitFor(function() return findWindow("INDEX"); end, 3);
+			task.wait(.5);
+			dumpMenu();
+			local win = openTab("INDEX");
 			if win then
-				task.wait(.5);
+				task.wait(.6);
 				summary.entries, summary.studied = scanIndex(win, not run.active);
+			else
+				summary.failed = (summary.failed or "") .. " Index";
 			end;
-			clickTab("STATS");
-			win = waitFor(function() return findWindow("STATS"); end, 3);
+			win = openTab("STATS");
 			if win then
-				task.wait(.5);
+				task.wait(.6);
 				summary.stats = scanStats(win);
+			else
+				summary.failed = (summary.failed or "") .. " Stats";
 			end;
-			clickTab("EQUIPMENT");
-			win = waitFor(function() return findWindow("EQUIPMENT"); end, 3);
+			win = openTab("EQUIPMENT");
 			if win then
-				task.wait(.5);
+				task.wait(.6);
 				scanEquipment(win);
+			else
+				summary.failed = (summary.failed or "") .. " Equipment";
 			end;
 			if opened then
 				pressT();
@@ -4974,9 +5089,10 @@ local indexAPI = (function()
 		if summary.waiting then return; end; -- Roblox not focused yet: try again later
 		done = true;
 		local t = brain.indexTotals;
-		notify(string.format("Scan done%s. Index %s, %d items read, %d studied. %d stats read. Scanning stops now.",
+		notify(string.format("Scan done%s. Index %s, %d items read, %d studied. %d stats read.%s Scanning stops now.",
 			reason and (" (" .. reason .. ")") or "", t and (t.found .. "/" .. t.total) or "?",
-			summary.entries or 0, summary.studied or 0, summary.stats or 0), "Delve index");
+			summary.entries or 0, summary.studied or 0, summary.stats or 0,
+			summary.failed and (" Couldn't open:" .. summary.failed .. ".") or ""), "Delve index");
 	end;
 	-- ---------------------------------------------------------------- gear memory (cheap, no GUI)
 	local gear = {};
@@ -5718,7 +5834,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v3.7 | Brain",
+		Title = "Delve v3.8 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
