@@ -6848,6 +6848,30 @@ local indexAPI = (function()
 	--   Races (hub only): set 1 and 3 wear Drakon, set 2 wears Shura (editable). Never touches reroll or Robux buttons.
 	local lo = { cur = nil, switchAt = -1e9, hubDone = false, hitsAt = 0, hitsT = 0, hardUntil = 0, raceChecked = false };
 	lo.ROLL = { SHURA = "Onibi Step", DRAKON = "Flame Dash", OLYMPIAN = "Radiant Dash" };
+	do
+		local function P(n, d2) return { name = n, desc = d2 }; end;
+		local seed = {
+			ANDROS = { done = true, P("QUICK STUDY", "+10% XP from everything you mine."), P("WELL ROUNDED", "+5% Mine Speed and +5% Walk Speed.") },
+			OLYMPIAN = { done = true, P("RADIANT DASH", "A longer, faster roll that lands in a burst of sunlight."), P("BLESSED", "+30% Luck, +15% Quantity and +15% XP."), P("SWIFT", "+15% Walk Speed."), P("SHINY", "+5% Luck, XP, Mine Power and Weapon Power.") },
+			DACTYL = { done = true, P("STOUT", "14% shorter, built for tunnels."), P("DEEP DELVER", "+12% Mine Power and +10% Quantity.") },
+			TITAN = { done = true, P("BRUTE FORCE", "+25% Weapon Power."), P("THICK HIDE", "+25 Max Health."), P("HEAVY SWING", "+8% Mine Power.") },
+			DRYAD = { done = true, P("FOREST FORTUNE", "+10% Luck on every drop."), P("LIGHT STEP", "+10% Walk Speed."), P("LONG REACH", "+0.05 Mining Range.") },
+			HYDRA = { done = true, P("REGROWTH", "Go 3s without a hit and heal 5% health a second."), P("SNAPPING HEADS", "Your heads bite the nearest mob every few seconds."), P("WIDE COIL", "+25% Mining Circle."), P("VENOM BITE", "+20% Weapon Power and +40 Max Health."), P("OLD BLOOD", "+20% Rune Find."), P("MANY EYES", "+20% Luck and +10% Quantity.") },
+			-- partial (read the rest the first time they're worn)
+			SHURA = { P("ONIBI STEP II", "Your roll drops 3 spirit flames that hunt the nearest mobs and burst."), P("WRATH", "Kills stack +2% Weapon Power, up to 10, while the fight lasts."), P("WAR GOD", "+50% Luck, +20% Quantity and +20% XP."), P("CROWNED", "+30% Mine Power and +30% Weapon Power."), P("HARDENED", "Take 10% less damage.") },
+			DRAKON = { P("FLAME DASH", "Your roll scorches every mob it passes and leaves the ground burning."), P("DRAGON MIGHT", "+25% Mine Power and +25% Weapon Power.") },
+		};
+		brain.racePerks = type(brain.racePerks) == "table" and brain.racePerks or {};
+		brain.racePerksDone = type(brain.racePerksDone) == "table" and brain.racePerksDone or {};
+		for name, v in pairs(seed) do
+			if brain.racePerks[name] == nil then
+				local list = {};
+				for _, pk in ipairs(v) do list[#list + 1] = pk; end;
+				brain.racePerks[name] = list;
+				if v.done then brain.racePerksDone[name] = true; end;
+			end;
+		end;
+	end;
 	function lo.raceOf(n)
 		local v = trim(tostring(CFG["setRace" .. n] or "")):upper();
 		if v == "" or v:find("DON'T", 1, true) then return nil; end;
@@ -7050,14 +7074,20 @@ local indexAPI = (function()
 				task.wait(.6);
 			end;
 			local worn = lo.rowWorn(lo.raceRow(name));
-			-- read this race's perks while the page is up (they're shown for the race you wear)
-			if worn then
-				local okP = pcall(scanRace);
-				if okP and type(brain.race) == "table" then
-					brain.racePerks = type(brain.racePerks) == "table" and brain.racePerks or {};
+			-- capture this race's perks (only shown for the race you wear), once: races already captured are skipped
+			brain.racePerks = type(brain.racePerks) == "table" and brain.racePerks or {};
+			brain.racePerksDone = type(brain.racePerksDone) == "table" and brain.racePerksDone or {};
+			if worn and not brain.racePerksDone[name] then
+				local okP, nP = pcall(scanRace);
+				if okP and (nP or 0) > 0 and type(brain.race) == "table" then
 					brain.racePerks[name] = brain.race.perks;
+					brain.racePerksDone[name] = true;
 					brain.race.name = name;
+					markBrain();
+					if r.why then r.why("gear", string.format("captured %d perks for %s", nP, name)); end;
 				end;
+			elseif worn and r.why then
+				r.why("gear", name .. " perks already known: skipped reading them");
 			end;
 			if r.why then r.why("gear", string.format("race %s %s (%s)", name, worn and "worn" or "not confirmed", tostring(reason))); end;
 			-- leave the race page
@@ -8100,7 +8130,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.7 | Brain",
+		Title = "Delve v5.7.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

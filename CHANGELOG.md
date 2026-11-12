@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.7 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.7.1 | Brain`).
+
+## v5.7.1: Race details captured once
+- During the race check, a race's perks are read only the first time it's worn; races already captured are skipped (logged as "perks already known").
+- Races you showed are pre-filled so they don't need visiting: Andros, Olympian, Dactyl, Titan, Dryad and Hydra (complete), plus Shura and Drakon (partial; the rest is read the first time they're worn). Races you don't own are never needed: the dropdown per set decides which races are used.
 
 ## v5.7: Race per set, checked once
 - Gear tab: a **race dropdown for each set** (set 1 mining: Drakon, set 2 damage: Shura, set 3 selling: Drakon by default; "Don't change" skips a set). Shiny versions (e.g. "Shiny Dactyl") match too.
