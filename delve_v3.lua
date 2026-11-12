@@ -307,6 +307,20 @@ do
 	brain.dodge.leadAdj = tonumber(brain.dodge.leadAdj) or 0;
 	brain.dodge.hits = tonumber(brain.dodge.hits) or 0;
 	brain.dodge.dodges = tonumber(brain.dodge.dodges) or 0;
+	if (tonumber(brain.cleanV) or 0) < 1 then
+		brain.cleanV = 1;
+		local bad = {};
+		for key, cx in pairs(brain.codex) do
+			if type(cx) ~= "table" or tostring(cx.desc or ""):upper():find("1 IN %d") then bad[key] = true; end;
+		end;
+		for key in pairs(bad) do
+			brain.codex[key], brain.relics[key], brain.sets[key] = nil, nil, nil;
+		end;
+		for pk in pairs(brain.pairs) do
+			local a2, b2 = tostring(pk):match("^(.-)||(.*)$");
+			if (a2 and bad[a2]) or (b2 and bad[b2]) then brain.pairs[pk] = nil; end;
+		end;
+	end;
 	if next(brain.windups) then
 		r.windups = r.windups or {};
 		for name, dur in pairs(brain.windups) do
@@ -2570,10 +2584,20 @@ local relicAPI = (function()
 				local t = trim(txt(o)):upper();
 				if TIER_VALUE[t] and shown(o) then
 					local card = o.Parent;
-					while card and card:IsA("GuiObject") and (card.AbsoluteSize.Y < 120 or card.AbsoluteSize.X < 90) do
+					local minH = math.max(120, vp.Y * .18);
+					while card and card:IsA("GuiObject") and (card.AbsoluteSize.Y < minH or card.AbsoluteSize.X < 90) do
 						card = card.Parent;
 					end;
-					if card and card:IsA("GuiObject") and not seen[card] and card.AbsoluteSize.X < vp.X * .6 then
+					local toast = false;
+					if card and card:IsA("GuiObject") then
+						for _, o2 in ipairs(card:GetDescendants()) do
+							if (o2:IsA("TextLabel") or o2:IsA("TextButton")) and txt(o2):upper():find("1 IN %d") then
+								toast = true;
+								break;
+							end;
+						end;
+					end;
+					if card and card:IsA("GuiObject") and not toast and not seen[card] and card.AbsoluteSize.X < vp.X * .6 then
 						seen[card] = true;
 						found[#found + 1] = { root = card, tierLabel = o, tier = t };
 					end;
@@ -2619,8 +2643,30 @@ local relicAPI = (function()
 		end;
 		return nil;
 	end;
+	local prompt = { label = nil, scanAt = -1e9 };
+	local function promptVisible(now)
+		local lbl = prompt.label;
+		if lbl and lbl.Parent and shown(lbl) and txt(lbl):upper():find("PICK A RELIC") then return true; end;
+		if now - prompt.scanAt < .25 then return false; end;
+		prompt.scanAt = now;
+		prompt.label = nil;
+		local pg = l:FindFirstChild("PlayerGui");
+		if not pg then return false; end;
+		for _, o in ipairs(pg:GetDescendants()) do
+			if o:IsA("TextLabel") and txt(o):upper():find("PICK A RELIC") and shown(o) then
+				prompt.label = o;
+				return true;
+			end;
+		end;
+		return false;
+	end;
 	local fullScanAt = -1e9;
 	local function findCardsSlow(now)
+		if not promptVisible(now) then
+			local pg = l:FindFirstChild("PlayerGui");
+			local rd = pg and pg:FindFirstChild("RelicDraft");
+			if not (rd and rd:IsA("LayerCollector") and rd.Enabled ~= false) then return nil; end;
+		end;
 		local cards = findCards();
 		if cards or now - fullScanAt < 1.5 then return cards; end;
 		fullScanAt = now;
@@ -3063,7 +3109,7 @@ local relicAPI = (function()
 				for _, o in ipairs(pg:GetDescendants()) do
 					if o:IsA("TextLabel") then
 						local u = trim(txt(o)):upper();
-						if u:find("DEPTH%D*%d") then hud.depth = o; end;
+						if u:find("^DEPTH%s*%d") then hud.depth = o; end;
 						if u:find("WAVE%s*%d") then hud.wave = o; end;
 						if u == "DELVE" then hud.delve = o; end;
 						if u:find("BOSS") and #u <= 40 then hud.boss = o; end;
@@ -3072,7 +3118,7 @@ local relicAPI = (function()
 			end;
 		end;
 		if hud.depth and hud.depth.Parent then
-			local v = tonumber(txt(hud.depth):upper():match("DEPTH%D*(%d+)"));
+			local v = tonumber(trim(txt(hud.depth)):upper():match("^DEPTH%s*(%d+)"));
 			if v and v > run.depth then run.depth = v; end;
 		end;
 		if hud.wave and hud.wave.Parent then
