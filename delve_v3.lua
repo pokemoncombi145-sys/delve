@@ -119,6 +119,7 @@ local m = {
 		-- brain / learning
 		relicLearn = true,
 		relicExplore = true,
+		mechNotify = true,
 		dangerTime = 10,
 		forkPath = "Smart",
 		traderBuy = true,
@@ -291,6 +292,7 @@ local brain = {
 	pairs = {},   -- relic combos taken in the same run and how those runs went
 	catMode = {}, -- category weights learned separately for delve runs and wave runs
 	threat = {},  -- how close a mob may get before it's worth stopping mining to fight it
+	mech = {},    -- every game mechanic seen (rooms, card types, effects, objectives, screens) and how runs went with it
 };
 do
 	local Http, BRAIN_FILE = game:GetService("HttpService"), brain.file;
@@ -308,7 +310,7 @@ do
 			end;
 		end;
 	end;
-	for _, key in ipairs({ "relics", "cat", "sets", "runs", "mobReach", "windups", "codex", "pairs", "catMode", "threat" }) do
+	for _, key in ipairs({ "relics", "cat", "sets", "runs", "mobReach", "windups", "codex", "pairs", "catMode", "threat", "mech" }) do
 		if type(brain[key]) ~= "table" then brain[key] = {}; end;
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
@@ -2810,6 +2812,59 @@ local relicAPI = (function()
 		return c;
 	end;
 
+	-- MECHANICS: anything the game shows that the brain hasn't met before (room types, card types,
+	-- effects it can't classify, floor objectives, new screens). Each is remembered, and every run
+	-- where it showed up feeds its score, so effects it doesn't understand still get judged by results.
+	r.mechNorm = function(t)
+		local u = trim(tostring(t or "")):upper();
+		u = u:gsub("[%d][%d%.,]*", "#");
+		u = u:gsub("%s+", " ");
+		return u;
+	end;
+	r.mechSeen = function(kind, text, quiet)
+		local norm = r.mechNorm(text);
+		if #norm < 2 or #norm > 90 or not norm:match("%a") then return; end;
+		local key = kind .. ":" .. norm;
+		local m = brain.mech[key];
+		local isNew = type(m) ~= "table";
+		if isNew then
+			m = { kind = kind, text = norm, first = os.time(), seen = 0, n = 0, zsum = 0 };
+			brain.mech[key] = m;
+		end;
+		m.seen = (tonumber(m.seen) or 0) + 1;
+		m.last, m.sample = os.time(), trim(tostring(text));
+		m.depth = run.active and run.depth > 0 and run.depth or m.depth;
+		if run.active then
+			run.mechs = type(run.mechs) == "table" and run.mechs or {};
+			run.mechs[key] = true;
+			if isNew then
+				run.newMechs = type(run.newMechs) == "table" and run.newMechs or {};
+				run.newMechs[#run.newMechs + 1] = kind .. ": " .. m.sample;
+			end;
+		end;
+		if isNew and not quiet then
+			pcall(function()
+				if type(appendfile) == "function" then
+					appendfile("DelveMechanics.jsonl", game:GetService("HttpService"):JSONEncode({
+						t = os.time(), kind = kind, text = m.sample, depth = run.depth,
+					}) .. "\n");
+				end;
+			end);
+			if Q.mechNotify ~= false and d() - (r.mechNoteAt or -1e9) > 3 then
+				r.mechNoteAt = d();
+				notify(string.format("New %s discovered: %s. I'll learn how it affects runs.", kind, m.sample), "Delve mechanics");
+			end;
+		end;
+		markBrain();
+		return m, isNew;
+	end;
+	-- learned value of a mechanic: average run z-score when it showed up (nil until seen in 2+ runs)
+	r.mechZ = function(kind, text)
+		local m = brain.mech[kind .. ":" .. r.mechNorm(text)];
+		local n = type(m) == "table" and tonumber(m.n) or 0;
+		if n < 2 then return nil, n; end;
+		return math.max(-2, math.min(2, (tonumber(m.zsum) or 0) / n)), n;
+	end;
 	local function scoreCard(c)
 		local parts = {};
 		if c.taken then return -1e6, { "taken" }, {}; end;
@@ -2821,6 +2876,14 @@ local relicAPI = (function()
 		local text = table.concat(c.desc, "\n"):gsub("%s+([%+%-]%d)", "\n%1");
 		for cl in text:gmatch("[^\n]+") do
 			local v, cat = clauseValue(cl);
+			if not cat and Q.relicLearn ~= false then
+				local mz, mn = r.mechZ("effect", cl);
+				if mz then
+					local adj = mz * 25 * (mn / (mn + 3));
+					total = total + adj;
+					parts[#parts + 1] = string.format("effect learned %+.0f", adj);
+				end;
+			end;
 			if v ~= 0 then
 				local w = catWeight(cat);
 				total = total + v * w;
@@ -3009,6 +3072,22 @@ local relicAPI = (function()
 		table.sort(scored, function(x, y) return x.score > y.score; end);
 		local choice = scored[1];
 		draft.explored = false;
+		pcall(function()
+			local sgM = cards[1].root:FindFirstAncestorWhichIsA("LayerCollector");
+			local tm = sgM and sgM:FindFirstChild("Timer", true);
+			if tm then
+				-- "A TRADER IN THE DARK - LEAVING IN 5s" -> "A TRADER IN THE DARK"
+				local room = trim(txt(tm)):upper():gsub("%s*%-%s*[^%-]*%d+%s*S%s*$", "");
+				draft.room = room;
+				r.mechSeen("room", room);
+			end;
+			for _, c in ipairs(scored) do
+				r.mechSeen("card type", trim(txt(c.tierLabel)));
+				for _, ef in ipairs(c.effects or {}) do
+					if ef.cat == "other" then r.mechSeen("effect", ef.text); end;
+				end;
+			end;
+		end);
 		-- trader ("A TRADER IN THE DARK"): same window, cards cost cash and there is a WALK ON BY button
 		local sg = cards[1].root:FindFirstAncestorWhichIsA("LayerCollector");
 		local walk = sg and sg:FindFirstChild("WalkOn", true);
@@ -3458,6 +3537,10 @@ local relicAPI = (function()
 				end;
 			end;
 			run.objective = table.concat(obj, " | ");
+			if run.objective ~= "" and run.objective ~= run.lastObjective then
+				run.lastObjective = run.objective;
+				for _, ob in ipairs(obj) do pcall(r.mechSeen, "objective", ob); end;
+			end;
 			if not r.hudDumped and r.dumpGui then
 				r.hudDumped = true;
 				local lc = hud.timer:FindFirstAncestorWhichIsA("LayerCollector");
@@ -3466,8 +3549,28 @@ local relicAPI = (function()
 		end;
 		run.bossHud = (hud.boss and hud.boss.Parent and shown(hud.boss)) and true or false;
 	end;
+	task.spawn(function()
+		local pg = l:WaitForChild("PlayerGui", 30);
+		if not pg then return; end;
+		local quiet = brain.mechBaseline == nil;
+		brain.mechBaseline = true;
+		for _, sg in ipairs(pg:GetChildren()) do
+			if sg:IsA("LayerCollector") then pcall(r.mechSeen, "screen", sg.Name, true); end;
+		end;
+		local dumps = 0;
+		pg.ChildAdded:Connect(function(sg)
+			if not sg:IsA("LayerCollector") or sg.Name:find("Delve") or sg.Name:find("Wind") then return; end;
+			local ok, m, isNew = pcall(r.mechSeen, "screen", sg.Name, quiet and not run.active);
+			-- save the layout of a screen it has never seen, so its readers can be added
+			if ok and isNew and dumps < 5 and r.dumpGui then
+				dumps = dumps + 1;
+				task.delay(1, function() pcall(r.dumpGui, sg, "new_" .. sg.Name:gsub("[^%w_]", "")); end);
+			end;
+		end);
+	end);
 	local function runStart(now)
 		run.active, run.startAt = true, now;
+		run.mechs, run.newMechs = {}, {};
 		run.relics, run.depth, run.wave, run.died, run.hits = {}, 0, 0, false, 0;
 		run.combatT, run.mineT = 0, 0;
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
@@ -3536,6 +3639,12 @@ local relicAPI = (function()
 				end;
 			end;
 		end;
+		for key in pairs(type(snap.mechs) == "table" and snap.mechs or {}) do
+			local m = brain.mech[key];
+			if type(m) == "table" then
+				m.n, m.zsum = (tonumber(m.n) or 0) + 1, (tonumber(m.zsum) or 0) + zc;
+			end;
+		end;
 		-- full run history (one JSON line per run) so the brain keeps a long memory
 		local names = {};
 		for _, pick in ipairs(snap.relics) do
@@ -3553,7 +3662,7 @@ local relicAPI = (function()
 			power = brain.player and brain.player.power, luck = brain.player and brain.player.luck,
 			combatPct = (snap.combatT + snap.mineT) > 0 and math.floor(snap.combatT / (snap.combatT + snap.mineT) * 100 + .5) or nil,
 		};
-		record.rareDrops, record.closeCalls = snap.rare, snap.close;
+		record.rareDrops, record.closeCalls, record.newMechanics = snap.rare, snap.close, snap.newMechs;
 		pcall(function()
 			local line = Http:JSONEncode(record) .. "\n";
 			if type(appendfile) == "function" and type(isfile) == "function" and isfile("DelveRuns.jsonl") then
@@ -3585,6 +3694,7 @@ local relicAPI = (function()
 			relics = run.relics, depth = run.depth, wave = run.wave, died = run.died, hits = run.hits,
 			cash0 = run.cash0, cashExact0 = run.cashExact0, level0 = run.level0, isDelve = run.isDelve,
 			combatT = run.combatT, mineT = run.mineT, rare = run.rareSeen, close = run.dangerCount,
+			mechs = run.mechs, newMechs = run.newMechs,
 		};
 		if dur < 20 then return; end;
 		task.spawn(function()
@@ -4559,6 +4669,9 @@ r.sendRunWebhook = function(info, isTest)
 	add("Run score", string.format("%.1f (%+.2f vs avg)", tonumber(info.score) or 0, tonumber(info.z) or 0));
 	add("Fighting", info.combatPct and (tostring(info.combatPct) .. "% of the time") or "?");
 	if info.closeCalls then add("Timer close calls", tostring(info.closeCalls)); end;
+	if type(info.newMechanics) == "table" and #info.newMechanics > 0 then
+		add("New mechanics found", table.concat(info.newMechanics, "\n"):sub(1, 1000), false);
+	end;
 	if type(info.rareDrops) == "table" and next(info.rareDrops) then
 		local rl = {};
 		for nm, n in pairs(info.rareDrops) do rl[#rl + 1] = string.format("%s x%d", nm, n); end;
@@ -6014,6 +6127,7 @@ end;
 				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
 				{ k = "traderMinScore", t = "slider", text = "Trader: only buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
 				{ k = "relicNotify", t = "toggle", text = "Announce relic choice" },
+				{ k = "mechNotify", t = "toggle", text = "Announce new mechanics found" },
 				{ k = "relicDelay", t = "slider", text = "Relic pick delay", min = .2, max = 5, step = .1, suffix = " s" },
 				{ k = "relicCodexNotify", t = "toggle", text = "Announce newly discovered relics" },
 				{ k = "autoIndexScan", t = "toggle", text = "Auto-scan Index + Stats + Equipment (T menu)" },
@@ -6140,7 +6254,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.3 | Brain",
+		Title = "Delve v4.4 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -6359,6 +6473,24 @@ end;
 				Title = "Scan Index + Equipment now",
 				Callback = function()
 					task.spawn(indexAPI.scan, "manual");
+				end,
+			});
+			tab:Button({
+				Title = "Show mechanics learned",
+				Callback = function()
+					local list = {};
+					for _, m in pairs(brain.mech) do
+						if type(m) == "table" and m.kind ~= "screen" then list[#list + 1] = m; end;
+					end;
+					table.sort(list, function(x, y) return (tonumber(x.first) or 0) > (tonumber(y.first) or 0); end);
+					local out = {};
+					for k = 1, math.min(15, #list) do
+						local m = list[k];
+						local n = tonumber(m.n) or 0;
+						out[#out + 1] = string.format("[%s] %s: seen %dx, %s", tostring(m.kind), tostring(m.sample or m.text), tonumber(m.seen) or 0,
+							n > 0 and string.format("%+.2f over %d runs", (tonumber(m.zsum) or 0) / n, n) or "no runs yet");
+					end;
+					notify(#list .. " mechanics known (newest first).\n" .. table.concat(out, "\n"), "Delve mechanics");
 				end,
 			});
 			tab:Button({

@@ -1,6 +1,18 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.3 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.4 | Brain`).
+
+## v4.4: Learns new mechanics
+- **Mechanic discovery.** The brain now notices anything new the game shows and remembers it:
+  - **rooms** from the relic window header (Pick a relic, A Trader in the Dark, The Tunnel Forks, A Blessing Shrine, and any future ones);
+  - **card types** (Rare, Blessing, Trader, Next 5 rooms…);
+  - **effects** it can't classify by keyword (for example "Sword lightning, 3 mobs");
+  - **floor objectives** shown next to the delve timer;
+  - **new screens** the game opens. The layout of a new screen is saved to `DelveGuiDump_new_<name>.txt` so it can be supported properly.
+- **It learns from them.** Every run where a mechanic showed up feeds its score (how that run went compared to your average). Effects it doesn't understand are then valued by those results when they come up on a card again.
+- A pop-up announces each new discovery (toggle: **Announce new mechanics found**), they're logged to `DelveMechanics.jsonl`, and the Run Complete post lists **New mechanics found**.
+- Brain tab button: **Show mechanics learned**.
+- **Start Delve Screenshots.bat**: double-click to run the Discord screenshot helper. README has step-by-step setup.
 
 ## v4.3: Delve timer danger zone, forks, blessings
 - **Floor timer.** Reads the delve countdown under DELVE ("0:30"). At **10 s or less** it stops chasing mobs and spends the time on ores, unless the floor needs mobs dead (boss, guardian, or an objective like slay / kill / defeat / clear / elites). Adjustable: **Delve timer danger zone** slider (0-30 s, Targeting tab).

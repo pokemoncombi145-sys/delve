@@ -4,7 +4,7 @@
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v4.3**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each update.
+Current version: **v4.4**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each update.
 
 ## Features
 - **Dodging.** Plans a path over the floor tiles out of attack zones, avoids corners, and learns from every hit you take.
@@ -21,9 +21,17 @@ Current version: **v4.3**. See [CHANGELOG.md](CHANGELOG.md) for what changed in 
 | `DelveBrain.json` | everything learned: relics, codex, Index, gear, dodging |
 | `DelveRuns.jsonl` | one line per run |
 | `DelveDrops.jsonl` | one line per rare drop |
+| `DelveMechanics.jsonl` | one line per new mechanic discovered |
 
 ## Screenshots in Discord posts
-Keep this running on your PC while you play:
+Roblox scripts can't take screenshots, so a small helper on your PC does it. The script drops a "job" file in your executor's `workspace\DelveWebhook` folder when a run ends; the helper sees it, screenshots your main monitor and posts it to Discord with the run stats.
+
+1. In Discord: Server Settings → Integrations → Webhooks → New Webhook → pick the channel → **Copy Webhook URL**.
+2. In the script's **Webhook** tab: paste the URL, turn the webhook on, and press **Send test**.
+3. Download `delve_webhook_helper.ps1` and `Start Delve Screenshots.bat` into the same folder (with Volt they're already in `%LOCALAPPDATA%\Volt\scripts`).
+4. Double-click **Start Delve Screenshots.bat** and leave that window open (minimised is fine) while you play. Close it to stop.
+
+Without the helper, runs are still posted, just without a picture. If Windows asks about running the file, choose **More info → Run anyway** (it's a plain text script you can open in Notepad). Manual start instead of the .bat:
 ```
 powershell -ExecutionPolicy Bypass -File .\delve_webhook_helper.ps1
 ```
