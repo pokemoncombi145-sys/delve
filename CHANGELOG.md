@@ -1,6 +1,25 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v3.6 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v3.7 | Brain`).
+
+## v3.7: Careful one-time scan, no more frame drops
+**Fixed**
+- **Frame drops.** v3.6 kept searching the whole screen every few seconds after its scan, and checked every new label as you moved. Now:
+  - the Index/Stats/Equipment scan runs **once per launch** (or when you press Scan), then stops;
+  - drop pop-ups are caught only from text that newly appears **during a run**, handled in small batches;
+  - the relic prompt and the results screen are found from that same new text, instead of a screen search a few times a second.
+- **Rare drop posted from the Index screen** (CRIMSON HORN). Drops now only count during a run, never while a menu is open, and only from pop-ups that show a tier word (Uncommon, Rare, Epic…).
+- **Stats paired across panels** (RACE = 1,137,902). Stats are now read row by row inside each panel, so a value always belongs to its own row.
+- **Index read 0 items.** Rewritten: it finds the window by its title and reads each item tile as a whole, so names and odds split across several labels are joined.
+
+**Changed**
+- **Index scan is slow and careful.** It scrolls the grid top to bottom, then clicks every found item it hasn't studied, waits for the detail panel to show that item, and scrolls the "drops from" list to the end. Sources are mobs or rocks with their zone and odds (for example Ghoul, Grasslands, 1 in 5.8). Items already studied are skipped next launch.
+- **Stats scan** scrolls both panels (Your Stats and Lifetime) to the end, keeping sub-sections such as Bosses.
+- **Your Stats are used.** Pickaxe and sword names with their power, mine power, weapon power, attack speed, mining range (applied if the memory scan found none), walk speed and max health.
+- **Discord run post** shows a short Lifetime summary (cash earned, best run, deepest delve, runs, rocks, materials, mobs, bosses, chests, runes, time mining, index) and your Loadout.
+- **Rare drop post** lists where the item drops from.
+- **Menu layout files.** Each scan writes `DelveGuiDump_index.txt`, `DelveGuiDump_stats.txt` and `DelveGuiDump_equipment.txt` to the workspace, so the readers can be fixed against the real menu if anything reads wrong.
+- One-time brain cleanup clears the bad v3.6 index and lifetime data so it can be read again properly.
 
 ## v3.6: Index, Equipment, Stats and rare drops
 **Added**

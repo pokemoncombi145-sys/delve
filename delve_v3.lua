@@ -2650,17 +2650,21 @@ local relicAPI = (function()
 	end;
 	local prompt = { label = nil, scanAt = -1e9 };
 	local function promptVisible(now)
-		local lbl = prompt.label;
-		if lbl and lbl.Parent and shown(lbl) and txt(lbl):upper():find("PICK A RELIC") then return true; end;
-		if now - prompt.scanAt < .25 then return false; end;
+		local lbl = r.relicPromptLabel or prompt.label;
+		if lbl and lbl.Parent then
+			-- keep the label even while hidden: checking it is cheap, searching the screen is not
+			prompt.label = lbl;
+			return shown(lbl) and txt(lbl):upper():find("PICK A RELIC") ~= nil;
+		end;
+		if now - prompt.scanAt < 5 then return false; end;
 		prompt.scanAt = now;
 		prompt.label = nil;
 		local pg = l:FindFirstChild("PlayerGui");
 		if not pg then return false; end;
 		for _, o in ipairs(pg:GetDescendants()) do
-			if o:IsA("TextLabel") and txt(o):upper():find("PICK A RELIC") and shown(o) then
+			if o:IsA("TextLabel") and txt(o):upper():find("PICK A RELIC") then
 				prompt.label = o;
-				return true;
+				return shown(o);
 			end;
 		end;
 		return false;
@@ -3159,9 +3163,12 @@ local relicAPI = (function()
 	local resLbl = { label = nil, scanAt = -1e9 };
 	local RESULT_WORDS = { "TRIP COMPLETE", "RUN COMPLETE", "RUN OVER", "YOU DIED" };
 	local function resultsTitle(now)
-		local lbl = resLbl.label;
-		if lbl and lbl.Parent and shown(lbl) then return lbl; end;
-		if now - resLbl.scanAt < .75 then return nil; end;
+		local lbl = r.resultsLabel or resLbl.label;
+		if lbl and lbl.Parent then
+			resLbl.label = lbl;
+			return shown(lbl) and lbl or nil;
+		end;
+		if now - resLbl.scanAt < 2 then return nil; end;
 		resLbl.scanAt = now;
 		resLbl.label = nil;
 		local pg = l:FindFirstChild("PlayerGui");
@@ -3250,7 +3257,7 @@ local relicAPI = (function()
 		local ls = leaderRead();
 		if ls.depth and ls.depth > run.depth then run.depth = ls.depth; end;
 		if ls.wave and ls.wave > run.wave then run.wave = ls.wave; end;
-		if now - hud.scanAt > 3 then
+		if now - hud.scanAt > 10 then
 			hud.scanAt = now;
 			local pg = l:FindFirstChild("PlayerGui");
 			if pg then
@@ -4367,11 +4374,16 @@ r.sendRunWebhook = function(info, isTest)
 	end;
 	if type(brain.lifetime) == "table" and next(brain.lifetime) then
 		local lines = {};
-		for k2, v2 in pairs(brain.lifetime) do lines[#lines + 1] = k2 .. ": " .. v2; end;
-		table.sort(lines);
-		local lt = table.concat(lines, "\n");
-		if #lt > 1000 then lt = lt:sub(1, 997) .. "..."; end;
-		add("Lifetime stats", lt, false);
+		for _, k2 in ipairs({ "CASH EARNED", "BEST RUN", "DEEPEST DELVE", "RUNS", "ROCKS BROKEN", "MATERIALS MINED",
+			"MOBS KILLED", "BIG BOSSES SLAIN", "CHESTS OPENED", "RUNES FOUND", "TIME MINING", "INDEX" }) do
+			local v2 = brain.lifetime[k2];
+			if v2 then lines[#lines + 1] = k2:sub(1, 1) .. k2:sub(2):lower() .. ": " .. tostring(v2); end;
+		end;
+		if #lines > 0 then add("Lifetime", table.concat(lines, "\n"), false); end;
+	end;
+	if type(brain.player) == "table" and brain.player.pickaxe then
+		add("Loadout", string.format("%s (%s)\n%s (%s)", tostring(brain.player.pickaxe), tostring(brain.player.pickPower or "?"),
+			tostring(brain.player.sword or "?"), tostring(brain.player.swordPower or "?")), true);
 	end;
 	add("Relics taken (" .. tostring(type(info.relics) == "table" and #info.relics or 0) .. ")", relicText, false);
 	local title = isTest and "Webhook test" or "Run Complete";
@@ -4475,9 +4487,29 @@ end;
 --   * uses the drop tables to rate rocks: rocks that drop rare or still-missing ores get mined first
 -- ===================================================================================
 local indexAPI = (function()
+	-- ===============================================================================
+	-- INDEX / EQUIPMENT / STATS: one careful scan, then it stops.
+	--   * runs once per launch (outside a run), or when you press "Scan" in the Brain tab
+	--   * Index: scrolls the grid top to bottom, clicks every found item, waits for its details,
+	--     scrolls the details list to the end and saves every source (mob/rock, zone, odds).
+	--     Items already studied are skipped next launch.
+	--   * Stats: scrolls both panels (Your Stats + Lifetime) to the end, reading row by row.
+	--   * Equipment: read only, never clicks.
+	--   * Writes the real menu layout to DelveGuiDump_*.txt so the readers can be tuned.
+	--   After the scan nothing here touches the GUI again: drops are caught only from text that
+	--   newly appears during a run (no repeated whole-screen searches -> no frame drops).
+	-- ===============================================================================
 	brain.index = type(brain.index) == "table" and brain.index or {};
-	brain.rocks = type(brain.rocks) == "table" and brain.rocks or {};
+	brain.sources = type(brain.sources) == "table" and brain.sources or {};
 	brain.player = type(brain.player) == "table" and brain.player or {};
+	brain.you = type(brain.you) == "table" and brain.you or {};
+	brain.lifetime = type(brain.lifetime) == "table" and brain.lifetime or {};
+	brain.gear = type(brain.gear) == "table" and brain.gear or {};
+	if (tonumber(brain.cleanV) or 0) < 2 then
+		-- v3.6 read the Stats panels badly and logged index-screen labels as drops: start those fresh
+		brain.cleanV = 2;
+		brain.lifetime, brain.index, brain.rocks = {}, {}, nil;
+	end;
 	local TIERS = { COMMON = 1, UNCOMMON = 2, RARE = 3, EPIC = 4, LEGENDARY = 5, MYTHIC = 6, EXOTIC = 6, DIVINE = 7, SECRET = 7 };
 	local function trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")); end;
 	local function txt(o)
@@ -4493,9 +4525,8 @@ local indexAPI = (function()
 		end;
 		return false;
 	end;
-	local function norm(s) return (tostring(s or ""):lower():gsub("[^%w]", "")); end;
-	local function oddsOf(t)
-		local n = trim(t):upper():match("^1%s+IN%s+([%d,%.]+)$");
+	local function oddsIn(t)
+		local n = tostring(t or ""):upper():match("1%s+IN%s+([%d,%.]+)");
 		return n and tonumber((n:gsub(",", ""))) or nil;
 	end;
 	local function numOf(t)
@@ -4503,66 +4534,38 @@ local indexAPI = (function()
 		return tonumber(v);
 	end;
 	local function pgui() return l:FindFirstChild("PlayerGui"); end;
-	local function labelsIn(root, visibleOnly)
+	local function isText(o) return o:IsA("TextLabel") or o:IsA("TextButton"); end;
+	local function labelsIn(root)
 		local out = {};
 		for _, o in ipairs(root:GetDescendants()) do
-			if (o:IsA("TextLabel") or o:IsA("TextButton")) and (not visibleOnly or o.Visible) then
+			if isText(o) and o.Visible then
 				local raw = trim(txt(o));
 				if raw ~= "" then
 					local p, sz = o.AbsolutePosition, o.AbsoluteSize;
-					out[#out + 1] = { o = o, raw = raw, t = raw:upper(), x = p.X + sz.X / 2, y = p.Y + sz.Y / 2, w = sz.X, h = sz.Y };
+					out[#out + 1] = { o = o, raw = raw, t = raw:upper(), x = p.X, y = p.Y + sz.Y / 2, w = sz.X, h = sz.Y };
 				end;
 			end;
 		end;
 		return out;
 	end;
-	local function sizedAncestor(o, minX, minY, maxX)
-		local a = o.Parent;
-		while a and a:IsA("GuiObject") do
-			local s = a.AbsoluteSize;
-			if s.X >= minX and s.Y >= minY and (not maxX or s.X <= maxX) then return a; end;
-			a = a.Parent;
+	local function joined(root)
+		local ls = labelsIn(root);
+		table.sort(ls, function(a2, b2)
+			if math.abs(a2.y - b2.y) > 6 then return a2.y < b2.y; end;
+			return a2.x < b2.x;
+		end);
+		local parts = {};
+		for _, L in ipairs(ls) do parts[#parts + 1] = L.raw; end;
+		return table.concat(parts, " "), ls;
+	end;
+	local function sizedAncestor(o, minX, minY)
+		local a2 = o.Parent;
+		while a2 and a2:IsA("GuiObject") do
+			local s2 = a2.AbsoluteSize;
+			if s2.X >= minX and s2.Y >= minY then return a2; end;
+			a2 = a2.Parent;
 		end;
 		return nil;
-	end;
-	local function findShownLabel(pred)
-		local pg = pgui();
-		if not pg then return nil; end;
-		for _, o in ipairs(pg:GetDescendants()) do
-			if o:IsA("TextLabel") and pred(trim(txt(o)):upper()) and shown(o) then return o; end;
-		end;
-		return nil;
-	end;
-	-- ---------------------------------------------------------------- menu control
-	local function indexWindow()
-		local found = findShownLabel(function(u) return u == "FOUND"; end);
-		return found and sizedAncestor(found, 600, 400) or nil;
-	end;
-	local function equipWindow()
-		local lbl = findShownLabel(function(u) return u == "EQUIPPED ITEMS"; end);
-		return lbl and lbl:FindFirstAncestorWhichIsA("LayerCollector") or nil;
-	end;
-	local function menuOpen()
-		return findShownLabel(function(u) return u == "BACKPACK" or u == "EQUIPMENT" or u == "INDEX"; end) ~= nil;
-	end;
-	local function pressT()
-		-- never type into another window: only when Roblox is focused or background input is on
-		if not (Q.background == true or inp.focused()) then return false; end;
-		inp.key(84, true);
-		task.wait(.06);
-		inp.key(84, false);
-		return true;
-	end;
-	local function clickTab(name)
-		local pg = pgui();
-		if not pg then return false; end;
-		for _, o in ipairs(pg:GetDescendants()) do
-			if (o:IsA("TextLabel") or o:IsA("TextButton")) and trim(txt(o)):upper() == name and shown(o) then
-				local btn = o:IsA("GuiButton") and o or o:FindFirstAncestorWhichIsA("GuiButton");
-				if btn and inp.clickGui(btn) then return true; end;
-			end;
-		end;
-		return false;
 	end;
 	local function waitFor(fn, secs)
 		local t0 = d();
@@ -4573,352 +4576,453 @@ local indexAPI = (function()
 		end;
 		return nil;
 	end;
-	-- ---------------------------------------------------------------- index reading
-	local function detailRootOf(labels, win)
-		for _, L in ipairs(labels) do
-			if L.t:match("^MINED%s+[%d,]+%s+TIMES?$") then
-				return sizedAncestor(L.o, 150, 250, win.AbsoluteSize.X * .6), L;
+	-- ---------------------------------------------------------------- windows
+	local function findWindow(title)
+		local pg = pgui();
+		if not pg then return nil; end;
+		for _, o in ipairs(pg:GetDescendants()) do
+			if o:IsA("TextLabel") and trim(txt(o)):upper() == title and shown(o) and not o:FindFirstAncestorWhichIsA("GuiButton") then
+				local win = sizedAncestor(o, 500, 300);
+				if win then return win; end;
 			end;
 		end;
-		return nil, nil;
+		return nil;
 	end;
-	local function readGrid(win)
-		local labels = labelsIn(win, true);
-		local detail = detailRootOf(labels, win);
+	local function menuOpen()
+		return findWindow("INDEX") or findWindow("STATS") or findWindow("EQUIPMENT") or findWindow("BACKPACK") or findWindow("RACES");
+	end;
+	local function pressT()
+		if not (Q.background == true or inp.focused()) then return false; end;
+		inp.key(84, true);
+		task.wait(.06);
+		inp.key(84, false);
+		return true;
+	end;
+	local function clickTab(name)
+		local pg = pgui();
+		if not pg then return false; end;
+		for _, o in ipairs(pg:GetDescendants()) do
+			if isText(o) and trim(txt(o)):upper() == name and shown(o) then
+				local btn = o:IsA("GuiButton") and o or o:FindFirstAncestorWhichIsA("GuiButton");
+				if btn and inp.clickGui(btn) then return true; end;
+			end;
+		end;
+		return false;
+	end;
+	local function scrollers(win)
+		local list = {};
+		for _, o in ipairs(win:GetDescendants()) do
+			if o:IsA("ScrollingFrame") and o.Visible then list[#list + 1] = o; end;
+		end;
+		return list;
+	end;
+	-- step a ScrollingFrame from the top to the very bottom, calling onStep at every position
+	local function scrollThrough(sf, onStep, pause)
+		pause = pause or .3;
+		local function maxY() return math.max(0, sf.AbsoluteCanvasSize.Y - sf.AbsoluteWindowSize.Y); end;
+		sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, 0);
+		task.wait(pause);
+		pcall(onStep);
+		local step = math.max(30, sf.AbsoluteWindowSize.Y * .5);
+		for _ = 1, 400 do
+			local before = sf.CanvasPosition.Y;
+			if before >= maxY() - 1 then break; end;
+			sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, math.min(maxY(), before + step));
+			task.wait(pause);
+			pcall(onStep);
+			if sf.CanvasPosition.Y <= before + .5 then break; end;
+		end;
+	end;
+	-- ---------------------------------------------------------------- layout dump (for tuning)
+	local function dump(win, tag)
+		if type(writefile) ~= "function" or not win then return; end;
+		local lines = { "Delve GUI dump: " .. tag .. "  " .. os.date("!%Y-%m-%d %H:%M:%S") };
+		local function walk(o, depth)
+			if #lines > 6000 then return; end;
+			local info = string.rep("  ", depth) .. o.ClassName .. " '" .. o.Name .. "'";
+			if o:IsA("GuiObject") then
+				local p, sz = o.AbsolutePosition, o.AbsoluteSize;
+				info = info .. string.format(" pos=%d,%d size=%d,%d%s", p.X, p.Y, sz.X, sz.Y, o.Visible and "" or " HIDDEN");
+			end;
+			if isText(o) then info = info .. " text=\"" .. trim(txt(o)):gsub("\n", "\\n") .. "\""; end;
+			if o:IsA("ScrollingFrame") then
+				info = info .. string.format(" canvas=%d window=%d", o.AbsoluteCanvasSize.Y, o.AbsoluteWindowSize.Y);
+			end;
+			lines[#lines + 1] = info;
+			for _, c in ipairs(o:GetChildren()) do walk(c, depth + 1); end;
+		end;
+		walk(win, 0);
+		pcall(writefile, "DelveGuiDump_" .. tag .. ".txt", table.concat(lines, "\n"));
+	end;
+	-- ---------------------------------------------------------------- index
+	local function biggestScroller(win, exclude)
+		local best, bn;
+		for _, sf in ipairs(scrollers(win)) do
+			if sf ~= exclude then
+				local n = 0;
+				for _, o in ipairs(sf:GetDescendants()) do if o:IsA("GuiButton") then n = n + 1; end; end;
+				if not bn or n > bn then best, bn = sf, n; end;
+			end;
+		end;
+		return best;
+	end;
+	local function readTotals(win, grid)
+		-- "177 /277 FOUND 63%": may be split over several labels, so read whole rows
+		local fallback;
+		local checked = {};
+		for _, L in ipairs(labelsIn(win)) do
+			local row = L.o.Parent;
+			if row and not checked[row] and row ~= grid and not row:IsDescendantOf(grid) then
+				checked[row] = true;
+				local text = joined(row):upper();
+				local a2, b2 = text:match("(%d+)%s*/%s*(%d+)");
+				if a2 then
+					if text:find("FOUND") then
+						brain.indexTotals = { found = tonumber(a2), total = tonumber(b2) };
+						return;
+					elseif tonumber(b2) >= 100 then
+						fallback = fallback or { found = tonumber(a2), total = tonumber(b2) };
+					end;
+				end;
+			end;
+		end;
+		if fallback then brain.indexTotals = fallback; end;
+	end;
+	local function collectTiles(grid, tiles, order)
+		-- zone headers: letter-only labels that are not inside a tile button
 		local headers = {};
-		for _, L in ipairs(labels) do
-			local a, b = L.t:match("^(%d+)%s*/%s*(%d+)$");
-			if a and L.w < 120 then
-				-- zone header: a word label on the same row to the left ("GRASSLANDS   22/23")
-				local best, bd;
-				for _, M in ipairs(labels) do
-					if M ~= L and math.abs(M.y - L.y) < 12 and M.x < L.x and M.t:match("^[%u%s'%-]+$") then
-						local dd = L.x - M.x;
-						if not bd or dd < bd then best, bd = M, dd; end;
-					end;
-				end;
-				if best and best.t == "INDEX" then
-					brain.indexTotals = { found = tonumber(a), total = tonumber(b) };
-				elseif best and best.t ~= "FOUND" and not (detail and L.o:IsDescendantOf(detail)) then
-					headers[#headers + 1] = { name = best.raw, y = L.y, found = tonumber(a), total = tonumber(b) };
-				end;
+		for _, L in ipairs(labelsIn(grid)) do
+			if not L.o:FindFirstAncestorWhichIsA("GuiButton") and L.t:match("^[%u%s'%-]+$") and #L.t >= 3 then
+				headers[#headers + 1] = { name = L.raw, y = L.y };
 			end;
 		end;
-		table.sort(headers, function(x, y) return x.y < y.y; end);
-		local entries, seen = {}, {};
-		for _, L in ipairs(labels) do
-			local odds = oddsOf(L.t);
-			if odds and not (detail and L.o:IsDescendantOf(detail)) then
-				local tile = sizedAncestor(L.o, 60, 60, 260);
-				if tile and not seen[tile] then
-					seen[tile] = true;
-					local name, ny;
-					for _, M in ipairs(labelsIn(tile, true)) do
-						if not oddsOf(M.t) and M.t:match("%a") and (not ny or M.y < ny) then name, ny = M.raw, M.y; end;
-					end;
-					local ty = tile.AbsolutePosition.Y;
-					local zone;
-					for _, h in ipairs(headers) do
-						if h.y <= ty + 5 then zone = h.name; end;
-					end;
-					local found = name ~= nil and not name:find("%?");
-					local btn = tile:IsA("GuiButton") and tile or tile:FindFirstChildWhichIsA("GuiButton", true) or L.o:FindFirstAncestorWhichIsA("GuiButton");
-					entries[#entries + 1] = { name = name or "???", odds = odds, zone = zone, found = found, button = btn };
-				end;
-			end;
-		end;
-		brain.zones = brain.zones or {};
-		for _, h in ipairs(headers) do brain.zones[h.name] = { found = h.found, total = h.total }; end;
-		for i2, e in ipairs(entries) do
-			local key = e.found and e.name:upper() or string.format("??? %s 1 IN %s #%d", tostring(e.zone or "?"), tostring(e.odds), i2);
-			local rec = type(brain.index[key]) == "table" and brain.index[key] or {};
-			rec.name, rec.odds, rec.zone, rec.found = e.name, e.odds, e.zone or rec.zone, e.found or rec.found == true;
-			brain.index[key] = rec;
-			e.key = key;
-		end;
-		brain.indexScannedAt = os.time();
-		return entries, labels;
-	end;
-	local function readDetail(win)
-		local labels = labelsIn(win, true);
-		local droot, minedL = detailRootOf(labels, win);
-		if not droot then return nil; end;
-		local dl = {};
-		for _, L in ipairs(labels) do
-			if L.o:IsDescendantOf(droot) then dl[#dl + 1] = L; end;
-		end;
-		local tierL;
-		for _, L in ipairs(dl) do
-			if L.t:match("^%u+%s+ORE$") or L.t:match("^%u+%s+%u+$") and TIERS[L.t:match("^(%u+)")] then tierL = L; break; end;
-		end;
-		local name;
-		if tierL then
-			local bd;
-			for _, L in ipairs(dl) do
-				local dy = tierL.y - L.y;
-				if dy > 0 and dy < 80 and L.t:match("%a") and not oddsOf(L.t) and (not bd or dy < bd) then name, bd = L.raw, dy; end;
-			end;
-		end;
-		if not name then return nil; end;
-		local headOdds, headY;
-		for _, L in ipairs(dl) do
-			local o2 = oddsOf(L.t);
-			if o2 and L.y < minedL.y and (not headY or L.y > headY) then headOdds, headY = o2, L.y; end;
-		end;
-		local sources = {};
-		for _, L in ipairs(dl) do
-			local o2 = oddsOf(L.t);
-			if o2 and L.y > minedL.y then
-				local rock, bd;
-				for _, M in ipairs(dl) do
-					if M ~= L and math.abs(M.y - L.y) < math.max(10, L.h) and M.x < L.x and M.t:match("%a") and not oddsOf(M.t) then
-						local dd = L.x - M.x;
-						if not bd or dd < bd then rock, bd = M, dd; end;
-					end;
-				end;
-				if rock then
-					local zone, zd;
-					for _, M in ipairs(dl) do
-						local dy = M.y - rock.y;
-						if dy > 4 and dy < 30 and math.abs((M.x - M.w / 2) - (rock.x - rock.w / 2)) < 40 and not oddsOf(M.t) then
-							if not zd or dy < zd then zone, zd = M.raw, dy; end;
+		table.sort(headers, function(a2, b2) return a2.y < b2.y; end);
+		for _, b in ipairs(grid:GetDescendants()) do
+			if b:IsA("GuiButton") and not tiles[b] and b.Visible then
+				local s2 = b.AbsoluteSize;
+				if s2.X >= 50 and s2.X <= 300 and s2.Y >= 50 then
+					local text, ls = joined(b);
+					local odds = oddsIn(text);
+					if odds then
+						local name;
+						for _, L in ipairs(ls) do
+							if L.t:match("%a") and not L.t:find("1%s+IN") then name = L.raw; break; end;
 						end;
+						local zone;
+						for _, h in ipairs(headers) do
+							if h.y <= b.AbsolutePosition.Y then zone = h.name; end;
+						end;
+						tiles[b] = { button = b, name = name or "???", odds = odds, zone = zone,
+							found = name ~= nil and not name:find("%?") };
+						order[#order + 1] = b;
 					end;
-					sources[#sources + 1] = { rock = rock.raw, zone = zone, odds = o2 };
 				end;
 			end;
 		end;
-		local key = name:upper();
-		local rec = type(brain.index[key]) == "table" and brain.index[key] or { name = name, found = true };
-		rec.tier = tierL and tierL.raw or rec.tier;
-		rec.odds = headOdds or rec.odds;
-		rec.mined = numOf(minedL.t);
-		rec.sources = sources;
-		rec.studied = os.time();
-		brain.index[key] = rec;
-		for _, sv in ipairs(sources) do
-			local rk = sv.rock:upper();
-			local rrec = type(brain.rocks[rk]) == "table" and brain.rocks[rk] or { name = sv.rock, drops = {} };
-			rrec.zone = sv.zone or rrec.zone;
-			rrec.drops = type(rrec.drops) == "table" and rrec.drops or {};
-			rrec.drops[key] = sv.odds;
-			brain.rocks[rk] = rrec;
-		end;
-		return rec;
 	end;
-	-- ---------------------------------------------------------------- equipment reading
-	local function readEquipment()
-		local gui = equipWindow();
-		if not gui then return false; end;
-		local labels = labelsIn(gui, true);
-		local equippedL;
-		for _, L in ipairs(labels) do if L.t == "EQUIPPED ITEMS" then equippedL = L; break; end; end;
-		local panel = equippedL and sizedAncestor(equippedL.o, 250, 300);
-		local function near(key, scope)
-			for _, L in ipairs(labels) do
-				if L.t == key and (not scope or L.o:IsDescendantOf(scope)) then
-					local best, bd;
-					for _, M in ipairs(labels) do
-						if M ~= L and M.t:find("%d") and (not scope or M.o:IsDescendantOf(scope)) then
-							local dy, dx = L.y - M.y, math.abs(M.x - L.x);
-							if dx < 120 and dy > 0 and dy < 45 then
-								if not bd or dy < bd then best, bd = M, dy; end;
+	local function detailHasName(win, grid, name)
+		local want = tostring(name):upper();
+		for _, L in ipairs(labelsIn(win)) do
+			if not L.o:IsDescendantOf(grid) and L.t == want then return L; end;
+		end;
+		return nil;
+	end;
+	local function readDetail(win, grid, entry)
+		local header = detailHasName(win, grid, entry.name);
+		if not header then return false; end;
+		local key = tostring(entry.name):upper();
+		local rec = type(brain.index[key]) == "table" and brain.index[key] or {};
+		-- header info: "COMMON ORE", "1 IN 6", "MINED 5,246 TIMES"
+		local panel = sizedAncestor(header.o, 200, 200) or win;
+		for _, L in ipairs(labelsIn(panel)) do
+			if not L.o:IsDescendantOf(grid) then
+				if L.t:match("^%u+%s+%u+$") and TIERS[L.t:match("^(%u+)")] then rec.tier = L.raw; end;
+				local mined = L.t:match("MINED%s+([%d,]+)");
+				if mined then rec.mined = numOf(mined); end;
+			end;
+		end;
+		-- sources list: scroll it to the end and read every row
+		local list;
+		for _, sf in ipairs(scrollers(win)) do
+			if sf ~= grid and not sf:IsDescendantOf(grid) then list = sf; break; end;
+		end;
+		local sources, seen = {}, {};
+		local function readRows()
+			local root = list or panel;
+			for _, row in ipairs(root:GetDescendants()) do
+				if row:IsA("GuiObject") and not isText(row) and row.AbsoluteSize.Y <= 80 then
+					local text, ls = joined(row);
+					local odds = oddsIn(text);
+					local direct = 0;
+					for _, c in ipairs(row:GetChildren()) do if isText(c) then direct = direct + 1; end; end;
+					if odds and direct >= 2 then
+						local nameL, zoneL;
+						for _, L in ipairs(ls) do
+							if L.t:match("%a") and not L.t:find("1%s+IN") then
+								if not nameL then nameL = L; elseif not zoneL then zoneL = L; end;
 							end;
 						end;
+						if nameL and nameL.t ~= key and not seen[nameL.t] then
+							seen[nameL.t] = true;
+							sources[#sources + 1] = { name = nameL.raw, zone = zoneL and zoneL.raw, odds = odds };
+						end;
 					end;
-					if best then return numOf(best.t), best.raw; end;
+				end;
+			end;
+		end;
+		if list then scrollThrough(list, readRows, .25); else readRows(); end;
+		rec.name, rec.odds, rec.zone, rec.found = entry.name, entry.odds, entry.zone or rec.zone, true;
+		rec.sources, rec.studied = sources, os.time();
+		brain.index[key] = rec;
+		for _, sv in ipairs(sources) do
+			local sk = sv.name:upper();
+			local srec = type(brain.sources[sk]) == "table" and brain.sources[sk] or { name = sv.name, drops = {} };
+			srec.zone = sv.zone or srec.zone;
+			srec.drops = type(srec.drops) == "table" and srec.drops or {};
+			srec.drops[key] = sv.odds;
+			brain.sources[sk] = srec;
+		end;
+		return true;
+	end;
+	local function scanIndex(win, study)
+		local grid = biggestScroller(win);
+		if not grid then return 0, 0; end;
+		dump(win, "index");
+		readTotals(win, grid);
+		local tiles, order = {}, {};
+		scrollThrough(grid, function() collectTiles(grid, tiles, order); end, .3);
+		for _, b in ipairs(order) do
+			local e = tiles[b];
+			local key = e.found and e.name:upper() or string.format("??? %s 1 IN %s", tostring(e.zone or "?"), tostring(e.odds));
+			local rec = type(brain.index[key]) == "table" and brain.index[key] or {};
+			rec.name, rec.odds, rec.zone = e.name, e.odds, e.zone or rec.zone;
+			rec.found = e.found or rec.found == true;
+			brain.index[key] = rec;
+		end;
+		local studied = 0;
+		if study then
+			for _, b in ipairs(order) do
+				local e = tiles[b];
+				local rec = brain.index[e.found and e.name:upper() or ""];
+				if e.found and not (type(rec) == "table" and rec.studied) then
+					if run.active or relicAPI.hasDraft() or not findWindow("INDEX") then break; end;
+					-- bring the item into view, click it, give the details time to load
+					local offset = b.AbsolutePosition.Y - grid.AbsolutePosition.Y + grid.CanvasPosition.Y;
+					grid.CanvasPosition = Vector2.new(grid.CanvasPosition.X, math.max(0, offset - 40));
+					task.wait(.25);
+					inp.clickGui(b);
+					if waitFor(function() return detailHasName(win, grid, e.name); end, 2.5) then
+						task.wait(.35);
+						if readDetail(win, grid, e) then studied = studied + 1; end;
+					end;
+				end;
+			end;
+			grid.CanvasPosition = Vector2.new(grid.CanvasPosition.X, 0);
+		end;
+		brain.indexScannedAt = os.time();
+		return #order, studied;
+	end;
+	-- ---------------------------------------------------------------- stats (row by row)
+	local function scanStats(win)
+		dump(win, "stats");
+		local count = 0;
+		for _, sf in ipairs(scrollers(win)) do
+			-- which panel: nearest header label above this list ("YOUR STATS" / "LIFETIME")
+			local panelName, pd;
+			for _, L in ipairs(labelsIn(win)) do
+				if not L.o:IsDescendantOf(sf) then
+					local dy = sf.AbsolutePosition.Y - L.y;
+					local overlap = L.x >= sf.AbsolutePosition.X - 20 and L.x <= sf.AbsolutePosition.X + sf.AbsoluteSize.X;
+					if overlap and dy > 0 and dy < 80 and L.t:match("%a") and (not pd or dy < pd) then panelName, pd = L.t, dy; end;
+				end;
+			end;
+			local target;
+			if panelName then
+				target = panelName:find("LIFE") and brain.lifetime or brain.you;
+			else
+				-- no header found: the right-hand panel is Lifetime
+				target = (sf.AbsolutePosition.X > win.AbsolutePosition.X + win.AbsoluteSize.X / 2) and brain.lifetime or brain.you;
+			end;
+			local section = nil;
+			scrollThrough(sf, function()
+				local rows = {};
+				for _, o in ipairs(sf:GetDescendants()) do
+					if isText(o) and o.Visible and trim(txt(o)) ~= "" then
+						local row = o.Parent;
+						rows[row] = rows[row] or {};
+						table.insert(rows[row], o);
+					end;
+				end;
+				local ordered = {};
+				for row, ls in pairs(rows) do ordered[#ordered + 1] = { row = row, ls = ls, y = ls[1].AbsolutePosition.Y }; end;
+				table.sort(ordered, function(a2, b2) return a2.y < b2.y; end);
+				for _, it in ipairs(ordered) do
+					table.sort(it.ls, function(a2, b2) return a2.AbsolutePosition.X < b2.AbsolutePosition.X; end);
+					if #it.ls == 1 then
+						section = trim(txt(it.ls[1])):upper();
+					elseif #it.ls >= 2 then
+						local k2 = trim(txt(it.ls[1])):upper();
+						local v2 = trim(txt(it.ls[#it.ls]));
+						if k2 ~= "" and v2 ~= "" then
+							if target[k2] ~= nil and section and target[k2] ~= v2 and not target[section .. " " .. k2] then
+								k2 = section .. " " .. k2;
+							end;
+							if target[k2] == nil then count = count + 1; end;
+							target[k2] = v2;
+						end;
+					end;
+				end;
+			end, .3);
+		end;
+		brain.statsAt = os.time();
+		-- feed what matters into the rest of the script
+		local you, p = brain.you, brain.player;
+		p.pickaxe, p.sword = you["PICKAXE"] or p.pickaxe, you["SWORD"] or p.sword;
+		p.pickPower = numOf(you["PICKAXE POWER"]) or p.pickPower;
+		p.swordPower = numOf(you["SWORD POWER"]) or p.swordPower;
+		p.power = numOf(you["MINE POWER"]) or p.power;
+		p.weaponPower = numOf(you["WEAPON POWER"]) or p.weaponPower;
+		p.attackSpeed = numOf(you["ATTACK SPEED"]) or p.attackSpeed;
+		p.mineSpeed = numOf(you["MINE SPEED"]) or p.mineSpeed;
+		p.walkSpeed = numOf(you["WALK SPEED"]) or p.walkSpeed;
+		p.miningRange = numOf(you["MINING RANGE"]) or p.miningRange;
+		p.maxHealth = numOf(you["MAX HEALTH"]) or p.maxHealth;
+		p.race = you["RACE"] or p.race;
+		p.level = numOf(you["LEVEL"]) or p.level;
+		-- the Stats tab states the mining range directly: use it if the memory scan found nothing
+		if p.miningRange and p.miningRange > 0 and not r.statsFound then
+			Q.radius = p.miningRange;
+			if r.sync then r.sync(); end;
+		end;
+		return count;
+	end;
+	-- ---------------------------------------------------------------- equipment (read only)
+	local function scanEquipment(win)
+		dump(win, "equipment");
+		local labels = labelsIn(win);
+		local function above(key)
+			for _, L in ipairs(labels) do
+				if L.t == key then
+					local best, bd;
+					for _, M in ipairs(labels) do
+						if M ~= L and M.t:find("%d") then
+							local dy, dx = L.y - M.y, math.abs((M.x + M.w / 2) - (L.x + L.w / 2));
+							if dx < 120 and dy > 0 and dy < 45 and (not bd or dy < bd) then best, bd = M, dy; end;
+						end;
+					end;
+					if best then return numOf(best.t); end;
 				end;
 			end;
 			return nil;
 		end;
 		local p = brain.player;
-		p.luck = near("LUCK", panel) or p.luck;
-		p.power = near("POWER", panel) or p.power;
-		p.damage = near("DAMAGE", panel) or p.damage;
-		p.health = near("HEALTH", panel) or p.health;
-		-- the item shown in the detail card (outside the equipped panel)
-		local _, swingRaw = near("SWING SPEED");
-		if swingRaw then
-			p.swing = numOf(swingRaw);
-			p.range = near("RANGE");
-			p.crit = near("CRIT CHANCE");
-			for _, L in ipairs(labels) do
-				if L.t:match("^[%u%s']+%s+%+%d+$") and not (panel and L.o:IsDescendantOf(panel)) and L.h >= 14 then
-					p.item = L.raw;
-				end;
-				if L.t:match("%u+%s+SWORD$") or L.t:match("%u+%s+PICKAXE$") then p.itemTier = L.raw; end;
-			end;
-		end;
+		p.luck = above("LUCK") or p.luck;
+		p.health = above("HEALTH") or p.health;
+		p.damage = above("DAMAGE") or p.damage;
 		p.t = os.time();
-		return true;
 	end;
-	-- ---------------------------------------------------------------- lifetime stats (Stats tab)
-	local function readStats()
-		local title;
-		local pg = pgui();
-		for _, o2 in ipairs(pg and pg:GetDescendants() or {}) do
-			if o2:IsA("TextLabel") and trim(txt(o2)):upper() == "STATS" and shown(o2) and not o2:FindFirstAncestorWhichIsA("GuiButton") then
-				title = o2;
-				break;
-			end;
-		end;
-		local win = title and sizedAncestor(title, 500, 300);
-		if not win then return false; end;
-		local labels = labelsIn(win, true);
-		local out, n = {}, 0;
-		for _, L in ipairs(labels) do
-			if L.t:match("%a") and not L.t:find("%d") and L.t ~= "STATS" and not L.o:FindFirstAncestorWhichIsA("GuiButton") then
-				local best, bd;
-				for _, M in ipairs(labels) do
-					if M ~= L and M.t:find("%d") and math.abs(M.y - L.y) < math.max(10, L.h * .7) and M.x > L.x then
-						local dd = M.x - L.x;
-						if not bd or dd < bd then best, bd = M, dd; end;
-					end;
-				end;
-				if best then
-					out[L.raw] = best.raw;
-					n = n + 1;
-				end;
-			end;
-		end;
-		if n > 0 then
-			brain.lifetime = out;
-			brain.lifetimeAt = os.time();
-		end;
-		return n > 0;
-	end;
-	-- ---------------------------------------------------------------- gear tracking
-	-- remembers mining radius/reach per pickaxe and attack range per sword, so a swap is
-	-- handled instantly (no re-learning) and orbit/mining distances match the tool you hold
-	brain.gear = type(brain.gear) == "table" and brain.gear or {};
-	local gear = { pick = nil, sword = nil };
-	local function gearTick(now)
-		local character = l.Character;
-		if not character then return; end;
-		local tool = character:FindFirstChildOfClass("Tool");
-		local name = tool and tool.Name;
-		if not name then return; end;
-		if character:GetAttribute("PickaxeOut") == true then
-			local g = type(brain.gear[name]) == "table" and brain.gear[name] or { kind = "pickaxe" };
-			brain.gear[name] = g;
-			if gear.pick ~= name then
-				local prev = gear.pick;
-				gear.pick = name;
-				r.pickName = name;
-				if prev then
-					if g.radius and g.reach then
-						Q.radius, Q.reach = g.radius, g.reach;
-						if r.sync then r.sync(); end;
-					end;
-					-- new pickaxe: re-read mining stats from the game
-					if r.readStats then task.delay(1, function() pcall(r.readStats, true); end); end;
-					notify(string.format("Pickaxe changed to %s%s", name, g.radius and string.format(" (radius %.2f, reach %.2f known)", g.radius, g.reach) or ", learning its stats"), "Delve gear");
-					r.indexPending = true;
-				end;
-			end;
-			if r.statsFound then g.radius, g.reach = Q.radius, Q.reach; end;
-		elseif character:GetAttribute("WeaponDrawn") == true then
-			local g = type(brain.gear[name]) == "table" and brain.gear[name] or { kind = "sword" };
-			brain.gear[name] = g;
-			if gear.sword ~= name then
-				local prev = gear.sword;
-				gear.sword = name;
-				r.swordName = name;
-				if prev then
-					notify(string.format("Sword changed to %s%s", name, g.coneRange and string.format(" (range %.1f known)", g.coneRange) or ", learning its range"), "Delve gear");
-					r.indexPending = true;
-				end;
-			end;
-			if r.range then g.coneRange = r.range; end;
-			r.swordLearnedRange = g.coneRange;
-		end;
-	end;
-	-- ---------------------------------------------------------------- rarity ranking from the Index
-	-- (mining stays the same: every rock is mined. The Index only decides what counts as rare.)
-	local oddsSorted = {};
-	local function rebuild()
-		local list = {};
-		for _, rec in pairs(brain.index) do
-			local od = type(rec) == "table" and tonumber(rec.odds);
-			if od then list[#list + 1] = od; end;
-		end;
-		table.sort(list, function(x, y) return x > y; end);
-		oddsSorted = list;
-	end;
-	-- rank 1 = rarest entry in your Index; returns rank, total
-	local function rarityRank(odds)
-		if not odds or #oddsSorted == 0 then return nil, #oddsSorted; end;
-		local rank = 1;
-		for _, v in ipairs(oddsSorted) do
-			if v > odds then rank = rank + 1; else break; end;
-		end;
-		return rank, #oddsSorted;
-	end;
-	-- ---------------------------------------------------------------- scan
-	local busy = false;
-	local function scan(reason, studyAllowed)
+	-- ---------------------------------------------------------------- the scan
+	local busy, done = false, false;
+	local function scan(reason)
 		if busy then return; end;
 		busy = true;
 		r.scanning = true;
+		local summary = {};
 		local ok, err = pcall(function()
 			local opened = false;
 			if not menuOpen() then
 				if not pressT() then
-					r.indexPending = true;
+					summary.waiting = true;
 					return;
 				end;
 				opened = true;
-				if not waitFor(menuOpen, 2) then return; end;
+				if not waitFor(menuOpen, 3) then summary.noMenu = true; return; end;
 			end;
+			task.wait(.4);
 			clickTab("INDEX");
-			local win = waitFor(indexWindow, 2);
+			local win = waitFor(function() return findWindow("INDEX"); end, 3);
 			if win then
-				local entries = readGrid(win);
-				local studied = 0;
-				if studyAllowed then
-					for _, e in ipairs(entries) do
-						local rec = brain.index[e.key];
-						if e.found and e.button and not (type(rec) == "table" and type(rec.sources) == "table" and #rec.sources > 0) then
-							if relicAPI.hasDraft() or run.active then break; end;
-							inp.clickGui(e.button);
-							task.wait(.18);
-							if readDetail(win) then studied = studied + 1; end;
-						end;
-					end;
-				end;
-				r.indexStudied = studied;
-			end;
-			if clickTab("EQUIPMENT") then
 				task.wait(.5);
-				readEquipment();
+				summary.entries, summary.studied = scanIndex(win, not run.active);
 			end;
-			if clickTab("STATS") then
+			clickTab("STATS");
+			win = waitFor(function() return findWindow("STATS"); end, 3);
+			if win then
 				task.wait(.5);
-				readStats();
+				summary.stats = scanStats(win);
+			end;
+			clickTab("EQUIPMENT");
+			win = waitFor(function() return findWindow("EQUIPMENT"); end, 3);
+			if win then
+				task.wait(.5);
+				scanEquipment(win);
 			end;
 			if opened then
 				pressT();
-				task.wait(.4);
+				task.wait(.5);
 				if menuOpen() then pressT(); end;
 			end;
 		end);
 		r.scanning = false;
 		busy = false;
-		rebuild();
 		markBrain();
 		saveBrain(true);
 		if not ok then
-			notify("Index scan error: " .. tostring(err), "Delve index");
-		elseif not r.indexPending then
-			local t = brain.indexTotals;
-			notify(string.format("Index read%s: %s found. Studied %d new entries.",
-				reason and (" (" .. reason .. ")") or "", t and (t.found .. "/" .. t.total) or "?",
-				r.indexStudied or 0), "Delve index");
+			notify("Scan error: " .. tostring(err), "Delve index");
+			return;
+		end;
+		if summary.waiting then return; end; -- Roblox not focused yet: try again later
+		done = true;
+		local t = brain.indexTotals;
+		notify(string.format("Scan done%s. Index %s, %d items read, %d studied. %d stats read. Scanning stops now.",
+			reason and (" (" .. reason .. ")") or "", t and (t.found .. "/" .. t.total) or "?",
+			summary.entries or 0, summary.studied or 0, summary.stats or 0), "Delve index");
+	end;
+	-- ---------------------------------------------------------------- gear memory (cheap, no GUI)
+	local gear = {};
+	local function gearTick()
+		local character = l.Character;
+		local tool = character and character:FindFirstChildOfClass("Tool");
+		if not tool then return; end;
+		local name = tool.Name;
+		local kind = character:GetAttribute("PickaxeOut") == true and "pickaxe" or (character:GetAttribute("WeaponDrawn") == true and "sword") or nil;
+		if not kind then return; end;
+		local g = type(brain.gear[name]) == "table" and brain.gear[name] or { kind = kind };
+		brain.gear[name] = g;
+		if gear[kind] ~= name then
+			local prev = gear[kind];
+			gear[kind] = name;
+			if prev then
+				if kind == "pickaxe" then
+					if g.radius and g.reach then
+						Q.radius, Q.reach = g.radius, g.reach;
+						if r.sync then r.sync(); end;
+					end;
+					if r.readStats then task.delay(1, function() pcall(r.readStats, true); end); end;
+				end;
+				notify(string.format("%s changed to %s%s", kind == "pickaxe" and "Pickaxe" or "Sword", name,
+					(g.radius or g.coneRange) and " (stats known)" or " (learning it)"), "Delve gear");
+			end;
+		end;
+		if kind == "pickaxe" and r.statsFound then g.radius, g.reach = Q.radius, Q.reach; end;
+		if kind == "sword" then
+			if r.range then g.coneRange = r.range; end;
+			r.swordLearnedRange = g.coneRange;
 		end;
 	end;
-	-- ---------------------------------------------------------------- drop pop-ups
-	local seenToast = setmetatable({}, { __mode = "k" });
-	local lastPost = -1e9;
+	-- ---------------------------------------------------------------- drops (only during runs)
+	local function rarityRank(odds)
+		local list = {};
+		for _, rec in pairs(brain.index) do
+			local od = type(rec) == "table" and tonumber(rec.odds);
+			if od then list[#list + 1] = od; end;
+		end;
+		if not odds or #list == 0 then return nil, #list; end;
+		local rank = 1;
+		for _, v in ipairs(list) do if v > odds then rank = rank + 1; end; end;
+		return rank, #list;
+	end;
+	local lastPost, dropSeen = -1e9, setmetatable({}, { __mode = "k" });
 	local function onDrop(name, odds, tier, count, fromChat)
 		local key = name:upper();
 		local rec = brain.index[key];
@@ -4930,9 +5034,9 @@ local indexAPI = (function()
 		brain.index[key] = rec;
 		markBrain();
 		local tierRank = TIERS[tostring(tier or ""):upper()] or 0;
-		local rank, totalRanked = rarityRank(odds);
+		local rank, total = rarityRank(odds);
 		local topPct = tonumber(CFG.rareTopPct) or 3;
-		local inTop = rank and totalRanked >= 20 and topPct > 0 and rank <= math.max(1, math.ceil(totalRanked * topPct / 100));
+		local inTop = rank and total >= 20 and topPct > 0 and rank <= math.max(1, math.ceil(total * topPct / 100));
 		local rare = (odds or 0) >= (tonumber(CFG.rareDropOdds) or 500) or tierRank >= 4 or isNew or inTop or fromChat == true;
 		if not rare then return; end;
 		pcall(function()
@@ -4945,14 +5049,22 @@ local indexAPI = (function()
 		notify(string.format("%s %s (1 in %s)%s", isNew and "NEW INDEX ENTRY:" or "Rare drop:", name, tostring(odds or "?"), tier and (" [" .. tier .. "]") or ""), "Delve drop");
 		if CFG.dropWebhook ~= false and d() - lastPost > 3 then
 			lastPost = d();
+			local where = {};
+			if type(rec.sources) == "table" then
+				for k = 1, math.min(3, #rec.sources) do
+					local sv = rec.sources[k];
+					where[#where + 1] = string.format("%s (%s) 1 in %s", sv.name, tostring(sv.zone or "?"), tostring(sv.odds));
+				end;
+			end;
 			local fields = {
 				{ name = "Odds", value = odds and ("1 in " .. tostring(odds)) or "?", inline = true },
-				{ name = "Rarity", value = tostring(tier or (rec.tier or "?")), inline = true },
+				{ name = "Rarity", value = tostring(tier or rec.tier or "?"), inline = true },
 				{ name = "Amount", value = count and ("x" .. count) or "x1", inline = true },
-				{ name = "Where", value = tostring(rec.zone or "?") .. (run.depth > 0 and string.format(" | depth %d m", run.depth) or ""), inline = true },
+				{ name = "Rarity rank", value = rank and string.format("#%d of %d", rank, total) or "?", inline = true },
+				{ name = "Depth", value = run.depth > 0 and (run.depth .. " m") or "?", inline = true },
 				{ name = "Index", value = brain.indexTotals and (brain.indexTotals.found .. "/" .. brain.indexTotals.total) or "?", inline = true },
-				{ name = "Rarity rank", value = rank and string.format("#%d rarest of %d known", rank, totalRanked) or "?", inline = true },
 			};
+			if #where > 0 then fields[#fields + 1] = { name = "Drops from", value = table.concat(where, "\n"), inline = false }; end;
 			if fromChat then fields[#fields + 1] = { name = "Seen in", value = "Roblox chat", inline = true }; end;
 			task.spawn(r.postEmbed, {
 				title = (isNew and "NEW INDEX ENTRY: " or "Rare drop: ") .. name,
@@ -4961,22 +5073,20 @@ local indexAPI = (function()
 				footer = { text = "Delve v3 brain | " .. tostring(l.Name) },
 			});
 		end;
-		if isNew then task.delay(3, function() r.indexPending = true; end); end;
-		rebuild();
 	end;
-	local function checkToast(lbl, silent)
-		if not (lbl and lbl.Parent and lbl:IsA("TextLabel")) then return; end;
-		local odds = oddsOf(txt(lbl));
-		if not odds or not shown(lbl) or lbl:FindFirstAncestorWhichIsA("ScrollingFrame") then return; end;
-		-- climb to the pop-up box (small), never into a big menu window
+	-- a newly appeared label: is it a drop pop-up? (pop-ups have a tier word and "1 in N")
+	local function checkToast(lbl)
+		if not (lbl.Parent and run.active and not r.scanning) then return; end;
+		local odds = oddsIn(txt(lbl));
+		if not odds or lbl:FindFirstAncestorWhichIsA("ScrollingFrame") or not shown(lbl) then return; end;
 		local box = lbl.Parent;
 		while box and box.Parent and box.Parent:IsA("GuiObject") and box.Parent.AbsoluteSize.Y <= 140 and box.Parent.AbsoluteSize.X <= 520 do
 			box = box.Parent;
 		end;
-		if not box or not box:IsA("GuiObject") or box.AbsoluteSize.X > 520 then return; end;
+		if not box or not box:IsA("GuiObject") or box.AbsoluteSize.X > 520 or box.AbsoluteSize.Y > 140 then return; end;
 		local name, tier, count;
-		for _, M in ipairs(labelsIn(box, true)) do
-			if not oddsOf(M.t) then
+		for _, M in ipairs(labelsIn(box)) do
+			if not oddsIn(M.t) then
 				if TIERS[M.t] then
 					tier = M.raw;
 				elseif M.t:match("%a") and not name then
@@ -4985,33 +5095,22 @@ local indexAPI = (function()
 				end;
 			end;
 		end;
-		if not name or name == "" then return; end;
-		if seenToast[box] == name then return; end;
-		seenToast[box] = name;
-		if not silent then onDrop(name, odds, tier, tonumber(count)); end;
+		if not tier or not name or name == "" then return; end; -- no tier word = not a drop pop-up
+		if dropSeen[box] == name then return; end;
+		dropSeen[box] = name;
+		onDrop(name, odds, tier, tonumber(count));
 	end;
-	local function sweep(silent)
-		local pg = pgui();
-		if not pg then return; end;
-		local win = indexWindow();
-		for _, o2 in ipairs(pg:GetDescendants()) do
-			if o2:IsA("TextLabel") and not (win and o2:IsDescendantOf(win)) then pcall(checkToast, o2, silent); end;
-		end;
-	end;
-	local conn, chatConn;
-	local chatSeen = {};
+	-- labels that appear are queued and handled in small batches (cheap, no screen-wide searches)
+	local queue = {};
+	local addConn, chatConn;
 	local function onChat(text)
+		if not run.active then return; end;
 		local plain = tostring(text or ""):gsub("<[^>]->", "");
 		local up = plain:upper();
 		local oddsStr = up:match("1%s+OUT%s+OF%s+([%d,]+)") or up:match("1%s+IN%s+([%d,]+)") or up:match("1/([%d,]+)");
 		local odds = oddsStr and tonumber((oddsStr:gsub(",", "")));
 		if not odds then return; end;
-		-- only your own finds
-		local me1, me2 = tostring(l.Name):upper(), tostring(l.DisplayName):upper();
-		if not (up:find(me1, 1, true) or up:find(me2, 1, true)) then return; end;
-		local key = up .. "|" .. math.floor(os.time() / 10);
-		if chatSeen[key] then return; end;
-		chatSeen[key] = true;
+		if not (up:find(tostring(l.Name):upper(), 1, true) or up:find(tostring(l.DisplayName):upper(), 1, true)) then return; end;
 		local item = plain:match("[Ff]ound%s+(.-)%s*[%(%[]") or plain:match("[Gg]ot%s+(.-)%s*[%(%[]")
 			or plain:match("[Oo]btained%s+(.-)%s*[%(%[]") or plain:match("[Mm]ined%s+(.-)%s*[%(%[]");
 		item = trim(item and item:gsub("^[Aa]n?%s+", "") or plain:sub(1, 60));
@@ -5021,109 +5120,79 @@ local indexAPI = (function()
 		end;
 		pcall(onDrop, item, odds, tier, nil, true);
 	end;
-	local function hookChat()
+	local function hook()
+		local pg = pgui();
+		if not pg then return false; end;
+		addConn = pg.DescendantAdded:Connect(function(o)
+			if o:IsA("TextLabel") and #queue < 400 then queue[#queue + 1] = o; end;
+		end);
 		pcall(function()
-			local tcs = game:GetService("TextChatService");
-			chatConn = tcs.MessageReceived:Connect(function(msg)
+			chatConn = game:GetService("TextChatService").MessageReceived:Connect(function(msg)
 				pcall(onChat, msg and msg.Text);
 			end);
 		end);
 		if not chatConn then
 			pcall(function()
-				local events = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents");
-				local ev = events and events:FindFirstChild("OnMessageDoneFiltering");
+				local ev = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents");
+				ev = ev and ev:FindFirstChild("OnMessageDoneFiltering");
 				if ev then
-					chatConn = ev.OnClientEvent:Connect(function(data)
-						pcall(onChat, type(data) == "table" and data.Message);
-					end);
+					chatConn = ev.OnClientEvent:Connect(function(data) pcall(onChat, type(data) == "table" and data.Message); end);
 				end;
 			end);
 		end;
-	end;
-	local function start()
-		local pg = pgui();
-		if not pg then return false; end;
-		sweep(true); -- pop-ups already on screen at launch don't count as new drops
-		hookChat();
-		conn = pg.DescendantAdded:Connect(function(o2)
-			if o2:IsA("TextLabel") then
-				task.delay(.15, function() pcall(checkToast, o2, false); end);
-			end;
-		end);
 		return true;
 	end;
 	r.stopIndex = function()
-		if conn then pcall(function() conn:Disconnect(); end); conn = nil; end;
+		if addConn then pcall(function() addConn:Disconnect(); end); addConn = nil; end;
 		if chatConn then pcall(function() chatConn:Disconnect(); end); chatConn = nil; end;
 	end;
-	local tickAt, sweepAt, startedAt = -1e9, -1e9, nil;
+	local tickAt, queueAt, startedAt = -1e9, -1e9, nil;
 	local function tick(now)
+		-- process newly appeared labels: drop pop-ups, and hand relic / results labels to the run tracker
+		if now - queueAt > .3 and #queue > 0 then
+			queueAt = now;
+			local batch = queue;
+			queue = {};
+			for _, o in ipairs(batch) do
+				if o.Parent then
+					local u = txt(o):upper();
+					if u:find("PICK A RELIC", 1, true) then r.relicPromptLabel = o; end;
+					if u:find("TRIP COMPLETE", 1, true) or u:find("RUN COMPLETE", 1, true) then r.resultsLabel = o; end;
+					if u:find("1%s+IN%s+%d") then pcall(checkToast, o); end;
+				end;
+			end;
+		end;
 		if now - tickAt < 1 then return; end;
 		tickAt = now;
-		pcall(gearTick, now);
 		startedAt = startedAt or now;
-		if not conn and not start() then return; end;
-		if now - sweepAt > 4 then
-			sweepAt = now;
-			sweep(false);
-		end;
-		-- you opened the Index yourself: learn from it (and from whatever entry you select)
-		if not busy and now - (r.passiveIdxAt or 0) > 3 then
-			r.passiveIdxAt = now;
-			local win = indexWindow();
-			if win then
-				pcall(readGrid, win);
-				pcall(readDetail, win);
-			end;
-			if equipWindow() then pcall(readEquipment); end;
-			pcall(readStats);
-		end;
-		if CFG.autoIndexScan ~= false and not busy and not relicAPI.hasDraft() then
-			if not r.indexLaunchDone and now - startedAt > 4 then
-				r.indexLaunchDone = true;
-				task.spawn(scan, "launch", not run.active);
-			elseif r.indexPending and not run.active then
-				r.indexPending = false;
-				task.spawn(scan, "update", true);
-			end;
+		if not addConn then hook(); end;
+		pcall(gearTick);
+		-- one scan per launch, outside a run, once Roblox is focused; then it's done
+		if not done and not busy and CFG.autoIndexScan ~= false and now - startedAt > 5
+			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10 then
+			r.scanTryAt = now;
+			task.spawn(scan, "launch");
 		end;
 	end;
-	pcall(rebuild);
 	local function report()
-		local found, total, studied, missingByZone = 0, 0, 0, {};
+		local found, total, studied = 0, 0, 0;
 		for _, rec in pairs(brain.index) do
 			if type(rec) == "table" then
 				total = total + 1;
-				if rec.found then found = found + 1; else
-					local z = tostring(rec.zone or "?");
-					missingByZone[z] = (missingByZone[z] or 0) + 1;
-				end;
-				if type(rec.sources) == "table" and #rec.sources > 0 then studied = studied + 1; end;
+				if rec.found then found = found + 1; end;
+				if rec.studied then studied = studied + 1; end;
 			end;
 		end;
-		local miss = {};
-		for z, n in pairs(missingByZone) do miss[#miss + 1] = z .. " " .. n; end;
-		local rocks = 0;
-		for _ in pairs(brain.rocks) do rocks = rocks + 1; end;
+		local nsrc = 0;
+		for _ in pairs(brain.sources) do nsrc = nsrc + 1; end;
 		local p = brain.player;
-		local gearList = {};
-		for gname, g in pairs(brain.gear) do
-			if type(g) == "table" then
-				if g.kind == "pickaxe" and g.radius then
-					gearList[#gearList + 1] = string.format("%s r%.2f/%.2f", gname, g.radius, g.reach or 0);
-				elseif g.kind == "sword" and g.coneRange then
-					gearList[#gearList + 1] = string.format("%s range %.1f", gname, g.coneRange);
-				end;
-			end;
-		end;
 		local life = 0;
-		for _ in pairs(type(brain.lifetime) == "table" and brain.lifetime or {}) do life = life + 1; end;
-		return string.format("Index: %d entries read, %d found, %d with drop sources. %d rocks known.\nMissing by zone: %s\nYou: luck %s, power %s, damage %s, health %s%s\nGear learned: %s\nLifetime stats read: %d",
-			total, found, studied, rocks, #miss > 0 and table.concat(miss, ", ") or "none",
-			tostring(p.luck or "?"), tostring(p.power or "?"), tostring(p.damage or "?"), tostring(p.health or "?"),
-			p.item and (", item " .. p.item) or "", #gearList > 0 and table.concat(gearList, ", ") or "none yet", life);
+		for _ in pairs(brain.lifetime) do life = life + 1; end;
+		return string.format("Index: %d items, %d found, %d studied, %d sources (mobs/rocks).\nYou: %s (%s power), %s (%s power), mine power %s, mining range %s, luck %s\nLifetime stats: %d",
+			total, found, studied, nsrc, tostring(p.pickaxe or "?"), tostring(p.pickPower or "?"), tostring(p.sword or "?"),
+			tostring(p.swordPower or "?"), tostring(p.power or "?"), tostring(p.miningRange or "?"), tostring(p.luck or "?"), life);
 	end;
-	return { tick = tick, scan = scan, report = report, rebuild = rebuild };
+	return { tick = tick, scan = function(reason) done = false; scan(reason); end, report = report };
 end)();
 -- ===================================================================================
 -- DODGE BRAIN: learns from every hit you take
@@ -5649,7 +5718,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v3.6 | Brain",
+		Title = "Delve v3.7 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -5866,7 +5935,7 @@ end;
 			tab:Button({
 				Title = "Scan Index + Equipment now",
 				Callback = function()
-					task.spawn(indexAPI.scan, "manual", not run.active);
+					task.spawn(indexAPI.scan, "manual");
 				end,
 			});
 			tab:Button({
