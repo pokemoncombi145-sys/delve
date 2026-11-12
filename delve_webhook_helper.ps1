@@ -91,5 +91,5 @@ while ($true) {
     } catch {
         Write-Host $_.Exception.Message -ForegroundColor Red
     }
-    Start-Sleep -Seconds 1
+    Start-Sleep -Milliseconds 250
 }

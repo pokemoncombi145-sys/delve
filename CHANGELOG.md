@@ -1,6 +1,30 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.7 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.9 | Brain`).
+
+## v4.9: Danger learning, boss patterns, perfect dodges, correct depth
+**Learns every attack type**
+- Each attack zone gets a signature (what kind of attack it is). A hit inside it gives that attack type more room and adjusts its roll timing; a death gives a much bigger push. Similar attacks are respected from then on. Clean dodges relax it again so it doesn't get over-cautious.
+- **Perfect dodges:** it learns how long the roll's invincibility lasts and, per attack type, whether rolls came too early (hit after the i-frames ended: roll later) or too late (roll earlier), so the roll lands right as the attack hits.
+
+**Boss mechanics**
+- **Ring attacks:** a small circle inside a big boss circle is treated as the safe spot, so it moves in close to the boss instead of running for the edge. If it still gets hit in there twice, it stops trusting that ring for that attack.
+- **Boss attack patterns:** for each boss it records which attack comes after which and how long after. Live in the fight it predicts the next attack: it keeps the roll ready, steps into the safe ring before a ring attack, or steps out before a big circle centred on the boss.
+- **"YOU DIED TO <boss>"** is read from the death screen; that boss's last attack gets extra room next time.
+
+**Dangerous floors**
+- Damage with no attack or mob to explain it (lava strips, glowing floor) marks the kind of floor you stood on. After 2 such hits it's avoided like an attack zone. Standing on it safely un-learns it.
+
+**Relics**
+- A clearly better relic beats set chasing: if another card is 35+ points better on its own, the set card loses its set bonus (keeps half if it would complete the set).
+
+**Depth and run score**
+- Fixed depth with commas ("9,060 M" read as 9 or a checkpoint like 880 m). The run uses the deepest of the results screen, player list and HUD.
+- A new personal best depth gets extra credit, so relics and choices from your best runs are learned as the good ones.
+
+**Discord**
+- Rare drop posts already include a screenshot when the helper runs; the helper now checks 4 times a second so the drop is still on screen. Restart `Start Delve Screenshots.bat` to get this.
+- Brain tab: **Show danger learned (attacks, floors, bosses)**.
 
 ## v4.7: Smarter relic priorities
 - **Reads ACTIVE BUFFS** (right side of the screen) during runs: sets in progress ("1/4 STORM", "1/5 FROST") and the effects you already have.

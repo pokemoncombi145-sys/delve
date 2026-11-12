@@ -307,6 +307,8 @@ local brain = {
 	pairs = {},   -- relic combos taken in the same run and how those runs went
 	catMode = {}, -- category weights learned separately for delve runs and wave runs
 	threat = {},  -- how close a mob may get before it's worth stopping mining to fight it
+	attacks = {}, -- per attack type: extra distance, earlier roll, hits, deaths (learned from getting hit)
+	floorHaz = {},-- floor parts that hurt you (lava strips etc.), learned from unexplained damage
 	mech = {},    -- every game mechanic seen (rooms, card types, effects, objectives, screens) and how runs went with it
 };
 do
@@ -325,7 +327,7 @@ do
 			end;
 		end;
 	end;
-	for _, key in ipairs({ "relics", "cat", "sets", "runs", "mobReach", "windups", "codex", "pairs", "catMode", "threat", "mech" }) do
+	for _, key in ipairs({ "relics", "cat", "sets", "runs", "mobReach", "windups", "codex", "pairs", "catMode", "threat", "mech", "attacks", "floorHaz" }) do
 		if type(brain[key]) ~= "table" then brain[key] = {}; end;
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
@@ -1920,6 +1922,135 @@ local function Ll(m)
 	end;
 	return Bl;
 end;
+-- DANGER MEMORY
+--  * every attack zone gets a signature (its folder/part name); hits and deaths inside it teach that
+--    attack type more distance (sx) and an earlier roll (sl), so similar attacks are respected next time
+--  * concentric circles: a small circle inside a big boss circle is the safe spot (stand close to the boss)
+--  * floor hazards: damage with no attack or mob to explain it marks the floor part under you (lava strips);
+--    after 2 such hits that kind of part is avoided like an attack zone
+local dangerMem = { floorZones = {}, refreshAt = -1e9 };
+function dangerMem.tag(z, part, kind)
+	if type(z) ~= "table" then return; end;
+	if not z.sig then
+		local pn = part and part.Parent and part.Parent.Name or "";
+		z.sig = tostring(kind or "zone") .. ":" .. pn .. "/" .. tostring(part and part.Name or "?");
+	end;
+	local a = type(brain.attacks) == "table" and brain.attacks[z.sig];
+	z.sx = type(a) == "table" and tonumber(a.extra) or 0;
+	z.sl = type(a) == "table" and tonumber(a.lead) or 0;
+	z.noHole = type(a) == "table" and a.noHole == true or nil;
+	if not z.seenAt and kind ~= "mob" and kind ~= "floor" then
+		z.seenAt = d();
+		pcall(dangerMem.onAttack, z, z.seenAt);
+	end;
+end;
+function dangerMem.holes(list)
+	for _, z in ipairs(list) do z.hole, z.safeHole = nil, nil; end;
+	for i, big in ipairs(list) do
+		if big.circle and (big.h1 or 0) >= 7 and not big.noHole then
+			for j, small in ipairs(list) do
+				if j ~= i and small.circle and (small.h1 or 0) < big.h1 * .5 and (small.h1 or 0) >= 1.5
+					and (small.x - big.x) ^ 2 + (small.z - big.z) ^ 2 < 2.25 then
+					big.hole, small.safeHole = small.h1, true;
+				end;
+			end;
+		end;
+	end;
+end;
+function dangerMem.sigOf(part)
+	local okS, sig = pcall(function() return part.Name .. "|" .. tostring(part.BrickColor) .. "|" .. part.Material.Name; end);
+	return okS and sig or nil;
+end;
+function dangerMem.active(sig)
+	local rec = type(brain.floorHaz) == "table" and brain.floorHaz[sig];
+	return type(rec) == "table" and (tonumber(rec.hits) or 0) >= 2 and (tonumber(rec.hits) or 0) * 3 > (tonumber(rec.safe) or 0);
+end;
+function dangerMem.partsNear(pos, radius, below)
+	local out = {};
+	local okQ, parts = pcall(function()
+		local op = OverlapParams.new();
+		op.FilterType = Enum.RaycastFilterType.Exclude;
+		op.FilterDescendantsInstances = { l.Character };
+		if below then
+			return workspace:GetPartBoundsInBox(CFrame.new(pos - Vector3.new(0, 3, 0)), Vector3.new(3, 4, 3), op);
+		end;
+		return workspace:GetPartBoundsInRadius(pos, radius, op);
+	end);
+	for _, part in ipairs(okQ and parts or {}) do
+		local sz = part.Size;
+		if math.max(sz.X, sz.Z) <= 120 then out[#out + 1] = part; end;
+	end;
+	return out;
+end;
+-- rebuild the floor-hazard zones around you (cheap spatial query, once a second)
+function dangerMem.refresh(pos, now)
+	if now - dangerMem.refreshAt < 1 then return; end;
+	dangerMem.refreshAt = now;
+	local zones = {};
+	if pos and next(brain.floorHaz or {}) then
+		for _, part in ipairs(dangerMem.partsNear(pos, 60)) do
+			local sig = dangerMem.sigOf(part);
+			if sig and dangerMem.active(sig) then
+				local okZ, z = pcall(El, part.CFrame, part.Size);
+				if okZ and type(z) == "table" then
+					z.pm, z.sig, z.floor = Vl, "floor:" .. sig, true;
+					zones[#zones + 1] = z;
+				end;
+			end;
+		end;
+	end;
+	dangerMem.floorZones = zones;
+end;
+-- which boss is on the field (highest max HP within 80 studs)
+function dangerMem.boss(pos)
+	local best, bestHp;
+	for _, mob in pairs(el) do
+		if mob.x and not mob.dead and mob.name then
+			local hp = tonumber(mob.max) or 0;
+			local near = not pos or (mob.x - pos.X) ^ 2 + (mob.z - pos.Z) ^ 2 < 6400;
+			if near and (mob.boss or hp > 0) and (not bestHp or hp > bestHp) then best, bestHp = mob, hp; end;
+		end;
+	end;
+	if best and (best.boss or run.bossNow) then return best; end;
+	return nil;
+end;
+-- a new attack appeared: record it in that boss's pattern and predict the next one
+function dangerMem.onAttack(z, now)
+	if not z.sig or z.floor then return; end;
+	local ch = l.Character;
+	local hrp = ch and ch:FindFirstChild("HumanoidRootPart");
+	local pos = hrp and hrp.Position;
+	local boss = dangerMem.boss(pos);
+	if not boss then return; end;
+	brain.patterns = type(brain.patterns) == "table" and brain.patterns or {};
+	local key = tostring(boss.name);
+	local pt = type(brain.patterns[key]) == "table" and brain.patterns[key] or { n = 0, sigs = {}, trans = {} };
+	pt.n = (tonumber(pt.n) or 0) + 1;
+	local sg = type(pt.sigs[z.sig]) == "table" and pt.sigs[z.sig] or { n = 0 };
+	sg.n = (tonumber(sg.n) or 0) + 1;
+	if z.circle then
+		sg.r = math.max(tonumber(sg.r) or 0, z.h1 or 0);
+		sg.onBoss = boss.x and (z.x - boss.x) ^ 2 + (z.z - boss.z) ^ 2 < 9 or false;
+	end;
+	if z.hole then sg.hole = z.hole; end;
+	pt.sigs[z.sig] = sg;
+	local live = dangerMem.live;
+	if live and live.boss == key and live.sig and now - live.at < 20 then
+		pt.trans[live.sig] = type(pt.trans[live.sig]) == "table" and pt.trans[live.sig] or {};
+		local tr = type(pt.trans[live.sig][z.sig]) == "table" and pt.trans[live.sig][z.sig] or { n = 0, gap = 0 };
+		tr.n = (tonumber(tr.n) or 0) + 1;
+		tr.gap = (tonumber(tr.gap) or 0) + (now - live.at);
+		pt.trans[live.sig][z.sig] = tr;
+	end;
+	brain.patterns[key] = pt;
+	-- predict: the attack that most often came next, and after how long
+	local nextSig, bestN, gap = nil, 0, nil;
+	for ns, tr in pairs(type(pt.trans[z.sig]) == "table" and pt.trans[z.sig] or {}) do
+		if type(tr) == "table" and (tonumber(tr.n) or 0) > bestN then nextSig, bestN, gap = ns, tonumber(tr.n), tr.gap / tr.n; end;
+	end;
+	dangerMem.live = { boss = key, sig = z.sig, at = now };
+	dangerMem.predict = (nextSig and bestN >= 2) and { boss = key, sig = nextSig, at = now + gap, info = pt.sigs[nextSig] } or nil;
+end;
 local function Xl(m, G)
 	Fl = {};
 	local e = G or d();
@@ -1944,6 +2075,7 @@ local function Xl(m, G)
 			if l then
 				local Q, S, w, q, l = Ul(instanceId(G), r, e);
 				Fl[#Fl + 1] = Q;
+				dangerMem.tag(Q, G, "hazard");
 				if S and m then
 					for d = 0, 8, 1 do
 						local f = (Zl * d) / 8;
@@ -1961,6 +2093,7 @@ local function Xl(m, G)
 		if not l and (not d and ((G.Transparency or 0)) < .95) then
 			local r, S, w, l = gl(instanceId(G), q, math.max(Q.X, Q.Y, Q.Z), e);
 			Fl[#Fl + 1] = r;
+			dangerMem.tag(r, G, "projectile");
 			if l and m then
 				local Q, d = m.X - q.X, m.Z - q.Z;
 				local f = Q * S + d * w;
@@ -2021,8 +2154,11 @@ local function Xl(m, G)
 					pm = Vl,
 				};
 			l[#l + 1] = { x = Q.X, z = Q.Z, block = e + Vl };
+			dangerMem.tag(Fl[#Fl], r, "mob");
 		end;
 	end;
+	for _, hz in ipairs(dangerMem.floorZones) do Fl[#Fl + 1] = hz; end;
+	pcall(dangerMem.holes, Fl);
 	J = l;
 	for G, r in ipairs(workspace:GetChildren()) do
 		if r.ClassName == "Part" then
@@ -2036,6 +2172,7 @@ local function Xl(m, G)
 						if Q < .2 then
 							m.pm = Vl;
 							Fl[#Fl + 1] = m;
+							dangerMem.tag(m, r, "floor");
 							S[#S + 1] = m;
 						end;
 					end;
@@ -2092,21 +2229,35 @@ local function Xl(m, G)
 	end;
 end;
 local function ul(m, G, r, Q)
+	if m.safeHole then
+		return nil;
+	end;
 	local e, N = G - m.x, r - m.z;
 	local S = e * m.ax + N * m.az;
 	local w = e * m.bx + N * m.bz;
 	if m.circle then
-		local G = m.h1 + Q;
+		local G = m.h1 + Q + (m.sx or 0);
 		local r = math.sqrt(S * S + w * w);
 		if r >= G then
 			return nil;
+		end;
+		if m.hole then
+			-- ring attack: the inner circle is safe; push inward when that's closer than the outside
+			local inner = m.hole - .6;
+			if r < inner then
+				return nil;
+			end;
+			if r - inner < G - r and r > .2 then
+				return r - inner, -e / r, -N / r;
+			end;
 		end;
 		if r < .2 then
 			return G, m.ax, m.az;
 		end;
 		return G - r, e / r, N / r;
 	end;
-	local q, l = ((m.h1 + Q)) - math.abs(S), ((m.h2 + Q)) - math.abs(w);
+	local sx = m.sx or 0;
+	local q, l = ((m.h1 + Q + sx)) - math.abs(S), ((m.h2 + Q + sx)) - math.abs(w);
 	if q <= 0 or l <= 0 then
 		return nil;
 	end;
@@ -2908,6 +3059,7 @@ local relicAPI = (function()
 	};
 	local function scoreCard(c)
 		local parts = {};
+		c.setBonus, c.completes = 0, false;
 		if c.taken then return -1e6, { "taken" }, {}; end;
 		local tierV = TIER_VALUE[c.tier] or 0;
 		local total = tierV;
@@ -2954,15 +3106,17 @@ local relicAPI = (function()
 		if prog and prog.need and prog.need > 0 then
 			local after = math.min(prog.need, (prog.have or 0) + 1);
 			local sb2 = 20 + 50 * (after / prog.need);
-			if after >= prog.need and (prog.have or 0) < prog.need then sb2 = sb2 + 80; end;
+			if after >= prog.need and (prog.have or 0) < prog.need then sb2 = sb2 + 80; c.completes = true; end;
 			total = total + sb2;
+			c.setBonus = sb2;
 			parts[#parts + 1] = string.format("builds %s %d/%d %+.0f", c.setName, after, prog.need, sb2);
 		elseif c.setN and c.setN > 0 and c.setP then
 			local sb = 10 + 30 * (c.setP / c.setN);
-			if c.setP == c.setN - 1 then sb = sb + 60; end;
+			if c.setP == c.setN - 1 then sb = sb + 60; c.completes = true; end;
 			local hist = brain.sets[tostring(c.setName)];
 			if type(hist) == "number" then sb = sb + math.min(20, hist * 2); end;
 			total = total + sb;
+			c.setBonus = sb;
 			parts[#parts + 1] = string.format("set %d/%d %+.0f", c.setP, c.setN, sb);
 		end;
 		local rec = brain.relics[c.key];
@@ -3132,6 +3286,17 @@ local relicAPI = (function()
 						if ok and cn then draft.conns[#draft.conns + 1] = cn; end;
 					end;
 				end;
+			end;
+		end;
+		-- a really good relic beats set chasing: if another card is clearly better on its own,
+		-- a set card loses its set bonus (half of it is kept when it would complete the set)
+		local bestBase = -1e9;
+		for _, c in ipairs(scored) do bestBase = math.max(bestBase, c.score - (c.setBonus or 0)); end;
+		for _, c in ipairs(scored) do
+			if (c.setBonus or 0) > 0 and bestBase - (c.score - c.setBonus) >= 35 then
+				local keep = c.completes and .5 or 0;
+				c.score = c.score - c.setBonus * (1 - keep);
+				c.parts[#c.parts + 1] = "set bonus dropped: a much better relic is up";
 			end;
 		end;
 		table.sort(scored, function(x, y) return x.score > y.score; end);
@@ -3398,7 +3563,7 @@ local relicAPI = (function()
 			if v:IsA("ValueBase") then
 				local ok, val = pcall(function() return v.Value; end);
 				if ok then
-					local sv = trim(tostring(val)):upper();
+					local sv = trim(tostring(val)):upper():gsub(",", "");
 					local n = v.Name:upper();
 					local dm, wm = sv:match("^(%d+)%s*M$"), sv:match("^(%d+)%s*W$");
 					if dm and not sv:find("%$") then
@@ -3509,7 +3674,7 @@ local relicAPI = (function()
 			end;
 			return nil;
 		end;
-		local tt = trim(txt(title)):upper();
+		local tt = trim(txt(title)):upper():gsub(",", "");
 		local res = { title = trim(txt(title)) };
 		res.depth = tonumber(tt:match("(%d+)%s*M%s*$")) or tonumber(tt:match("DELVE%s*(%d+)"));
 		res.wave = tonumber(tt:match("WAVE%s*(%d+)"));
@@ -3517,7 +3682,8 @@ local relicAPI = (function()
 		-- the coloured "DELVE 50M" part can be its own label
 		for _, L in ipairs(labels) do
 			if not res.depth then
-				local dv = L.t:match("DELVE%s*(%d+)%s*M") or L.t:match("^(%d+)%s*M$");
+				local lt = L.t:gsub(",", "");
+				local dv = lt:match("DELVE%s*(%d+)%s*M") or lt:match("^(%d+)%s*M$") or lt:match("DEPTH%s*(%d+)%s*M");
 				if dv then res.depth, res.mode = tonumber(dv), "delve"; end;
 			end;
 			if not res.wave then
@@ -3567,7 +3733,7 @@ local relicAPI = (function()
 			end;
 		end;
 		if not ls.depth and hud.depth and hud.depth.Parent then
-			local v = tonumber(trim(txt(hud.depth)):upper():match("^DEPTH%s*(%d+)"));
+			local v = tonumber((trim(txt(hud.depth)):upper():gsub(",", "")):match("^DEPTH%s*(%d+)"));
 			if v and v > run.depth then run.depth = v; end;
 		end;
 		if hud.wave and hud.wave.Parent then
@@ -3675,7 +3841,8 @@ local relicAPI = (function()
 		run.plateSeen = now;
 	end;
 	local function finalizeRun(snap, res, dur)
-		local depth = (res and res.depth) or snap.depth;
+		-- the deepest of: results screen, player list, HUD (the results screen can show a checkpoint, not your depth)
+		local depth = math.max((res and res.depth) or 0, snap.depth or 0);
 		local wave = math.max(snap.wave, (res and res.wave) or 0);
 		local mode = (res and res.mode) or ((depth > 0 or snap.isDelve) and "delve" or "waves");
 		local died = snap.died or (res and res.died) or false;
@@ -3689,7 +3856,11 @@ local relicAPI = (function()
 		end;
 		local tripValue = res and res.cashValue or nil;
 		local value = math.max(gain or 0, tripValue or 0);
-		local score = depth + wave * 15 + (value > 1 and math.log10(value) * 8 or 0)
+		-- depth is the main goal in a delve: a new personal best gets extra credit
+		local bestKey = mode .. "Best";
+		local prevBest = tonumber(brain[bestKey]) or 0;
+		if depth > prevBest then brain[bestKey] = depth; end;
+		local score = depth + (depth > prevBest and prevBest > 0 and 50 or 0) + wave * 15 + (value > 1 and math.log10(value) * 8 or 0)
 			+ math.min(40, ((res and res.rocks) or 0) * .05)
 			- (died and 30 or 0) - snap.hits * .5 + math.min(dur, 900) / 30;
 		-- compare a run against runs made with similar gear power, so upgrading gear
@@ -4075,6 +4246,9 @@ local function attackRoll(m)
 	local mode = CFG.attackRoll or "Auto";
 	if mode == "Off" or (mode == "Auto" and not r.rollPerk) or WQ ~= "combat" or not G or not inp.active() then return; end;
 	if CFG.autoRoll == false or m - (r.lastRoll or -1e9) < yl + .35 or r.offRollAt then return; end;
+	-- a boss attack is predicted soon: keep the roll for it
+	local pr = dangerMem.predict;
+	if pr and pr.at - m < 1.2 and pr.at - m > -.5 then return; end;
 	-- keep the roll for dodging while an attack is coming
 	if next(Cl) then return; end;
 	for _, mob in pairs(el) do
@@ -4109,9 +4283,35 @@ local function attackRoll(m)
 	r.offRollAt = m + .06;
 	r.offRollWhy = string.format("%s, %.1f st%s", tostring(best.name), dist, r.rollPerk and (", " .. r.rollPerk) or "");
 end;
+-- move before a predicted boss attack lands
+local function prePosition(m)
+	local pr = dangerMem.predict;
+	if not pr or not pr.info or pr.at - m > .9 or pr.at - m < -.3 or pr.done then return; end;
+	local G = sQ();
+	local boss = dangerMem.boss(G);
+	if not G or not boss or not boss.x then return; end;
+	local dx, dz = boss.x - G.X, boss.z - G.Z;
+	local dist = math.sqrt(dx * dx + dz * dz);
+	if dist < .1 then return; end;
+	local info = pr.info;
+	local a = brain.attacks[pr.sig];
+	local holeOk = info.hole and not (type(a) == "table" and a.noHole);
+	if holeOk and dist > info.hole * .6 and dist < (info.r or 0) + 4 then
+		-- ring attack coming: get into the small safe circle by the boss
+		r.forceDir = { x = dx / dist, z = dz / dist, untilT = m + .35 };
+		pr.done = true;
+		f(string.format("pre-move into safe ring (%s)", tostring(pr.sig)));
+	elseif not info.hole and info.onBoss and (info.r or 0) >= 4 and dist < (info.r or 0) + 1.5 then
+		-- big circle on the boss coming: step out before it shows
+		r.forceDir = { x = -dx / dist, z = -dz / dist, untilT = m + .35 };
+		pr.done = true;
+		f(string.format("pre-move out of %s (r %.1f)", tostring(pr.sig), info.r or 0));
+	end;
+end;
 local function mh(m)
 	NQ(m);
 	IQ(m);
+	pcall(prePosition, m);
 	pcall(attackRoll, m);
 	if not next(Cl) then
 		JQ = nil;
@@ -4131,13 +4331,15 @@ local function mh(m)
 	local N = bl + (r.pingLead or 0);
 	for S, w in pairs(Cl) do
 		if not w.rolled then
-			local S = (w.hitAt and m >= w.hitAt - N) or (not w.hitAt and w.p >= .9);
+			local S = (w.hitAt and m >= w.hitAt - N - (w.zone and w.zone.sl or 0)) or (not w.hitAt and w.p >= .9);
 			if S and ((not w.hitAt or m <= w.hitAt + .1)) then
 				local N = w.hitAt and math.max(w.hitAt - m, 0) or 0;
 				if ul(w.zone, G.X + Q * N, G.Z + e * N, Vl) and (inp.active() and m - ((r.lastRoll or -1000000000.0)) >= yl) then
 					if eQ(m) then
 						w.rolled = true;
 						r.lastRoll = m;
+						r.lastRollSig = w.zone and w.zone.sig;
+						r.lastRollHitIn = w.hitAt and (w.hitAt - m) or nil;
 						f(string.format("roll zone=%.1f,%.1f hitIn=%.2f", w.zone.x, w.zone.z, ((w.hitAt or m)) - m));
 					end;
 				end;
@@ -6133,10 +6335,43 @@ local brainTick = (function()
 		local dd = brain.dodge;
 		dd.hits = (tonumber(dd.hits) or 0) + 1;
 		local inZone = false;
-		for _, z in ipairs(Fl) do
-			if not z.mob and ul(z, pos.X, pos.Z, Vl + 1) then inZone = true; break; end;
-		end;
 		local rolledRecently = now - (r.lastRoll or -1e9) < .7;
+		local sigs, seenSig = {}, {};
+		for _, z in ipairs(Fl) do
+			if not z.mob and ul(z, pos.X, pos.Z, Vl + 1) then
+				inZone = true;
+				if z.sig and not seenSig[z.sig] then
+					seenSig[z.sig] = true;
+					sigs[#sigs + 1] = z.sig;
+					-- this attack type got you: keep more distance from it and roll earlier next time
+					local a = type(brain.attacks[z.sig]) == "table" and brain.attacks[z.sig] or { hits = 0, deaths = 0, extra = 0, lead = 0 };
+					a.hits = (tonumber(a.hits) or 0) + 1;
+					a.extra = math.min(3, (tonumber(a.extra) or 0) + (rolledRecently and .08 or .25));
+					-- PERFECT DODGE timing: the roll's invincibility (i-frames) has to cover the moment it lands
+					local since = now - (r.lastRoll or -1e9);
+					local iw = tonumber(brain.dodge.iframe) or .35;
+					if since < .7 then
+						if since > iw then
+							a.lead = math.max(-.15, (tonumber(a.lead) or 0) - .03); -- rolled too early: roll later
+							a.early = (tonumber(a.early) or 0) + 1;
+						else
+							a.lead = math.min(.3, (tonumber(a.lead) or 0) + .02); -- still hit inside the roll: roll earlier
+							a.late = (tonumber(a.late) or 0) + 1;
+						end;
+					else
+						a.lead = math.min(.3, (tonumber(a.lead) or 0) + .04); -- didn't roll in time at all
+					end;
+					if z.hole and math.sqrt((pos.X - z.x) ^ 2 + (pos.Z - z.z) ^ 2) < z.hole then
+						-- hit while standing in the "safe" inner circle: it isn't safe for this attack
+						a.holeHits = (tonumber(a.holeHits) or 0) + 1;
+						if a.holeHits >= 2 then a.noHole = true; end;
+					end;
+					a.last = os.time();
+					brain.attacks[z.sig] = a;
+					z.sx, z.sl, z.noHole = a.extra, a.lead, a.noHole or nil;
+				end;
+			end;
+		end;
 		if inZone then
 			dd.extra = math.min(2.5, (tonumber(dd.extra) or 0) + (rolledRecently and .05 or .15));
 			if rolledRecently then
@@ -6157,6 +6392,25 @@ local brainTick = (function()
 			run.mobHits = (run.mobHits or 0) + 1;
 			hs.lastMobHit = now;
 		end;
+		-- nothing explains this damage: it's the floor (lava strips etc.). Remember what you were standing on.
+		if not inZone and not best then
+			local seenF = {};
+			for _, part in ipairs(dangerMem.partsNear(pos, 0, true)) do
+				local sig = dangerMem.sigOf(part);
+				if sig and not seenF[sig] then
+					seenF[sig] = true;
+					local fr = type(brain.floorHaz[sig]) == "table" and brain.floorHaz[sig] or { hits = 0, safe = 0 };
+					fr.hits = (tonumber(fr.hits) or 0) + 1;
+					fr.last = os.time();
+					brain.floorHaz[sig] = fr;
+					sigs[#sigs + 1] = "floor:" .. sig;
+					if fr.hits == 2 then notify("Learned a dangerous floor: " .. sig:match("^[^|]*") .. ". Avoiding it from now on.", "Delve danger"); end;
+				end;
+			end;
+			pcall(navBlock, pos.X, pos.Z, now, 20);
+			dangerMem.refreshAt = -1e9;
+		end;
+		hs.lastHitSigs, hs.lastHitAt, hs.lastHitMob = sigs, now, best and best.name or nil;
 		if best and bd and bd > vl and bd < 16 then
 			local key = tostring(best.name);
 			local cur = tonumber(brain.mobReach[key]) or vl;
@@ -6166,6 +6420,74 @@ local brainTick = (function()
 		markBrain();
 		if r.sync then r.sync(); end;
 		f(string.format("hit -%.0f inZone=%s rolled=%s margin+%.2f", loss, tostring(inZone), tostring(rolledRecently), dd.extra));
+	end;
+	-- a death teaches much more than a hit: whatever hit you last gets a big push
+	r.learnDeath = function()
+		if CFG.dodgeLearn == false then return; end;
+		local now = d();
+		-- read who killed you a moment later, and blame that boss's last attack too
+		task.delay(1, function()
+			pcall(function()
+				local function tx(o) return (tostring(o.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")); end;
+				local pg = l:FindFirstChild("PlayerGui");
+				for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+					if o:IsA("TextLabel") and o.Visible and tx(o):upper() == "YOU DIED TO" then
+						local best, by;
+						for _, s2 in ipairs(o.Parent:GetDescendants()) do
+							if s2:IsA("TextLabel") and s2 ~= o and s2.Visible and s2.AbsolutePosition.Y > o.AbsolutePosition.Y
+								and tx(s2):match("%a") and not tx(s2):upper():find("DEPTH") and not tx(s2):find("%$")
+								and (not by or s2.AbsolutePosition.Y < by) then
+								best, by = s2, s2.AbsolutePosition.Y;
+							end;
+						end;
+						local killer = best and tx(best):upper() or nil;
+						if killer then
+							brain.deaths = type(brain.deaths) == "table" and brain.deaths or {};
+							brain.deaths[killer] = (tonumber(brain.deaths[killer]) or 0) + 1;
+							run.killer = killer;
+							local live = dangerMem.live;
+							if live and live.sig and now - live.at < 6 and type(brain.attacks[live.sig]) == "table" then
+								local a = brain.attacks[live.sig];
+								a.extra = math.min(4, (tonumber(a.extra) or 0) + .3);
+								a.lead = math.min(.35, (tonumber(a.lead) or 0) + .03);
+							end;
+							markBrain();
+							notify(string.format("Killed by %s (%d time%s). Its attacks get more room next time.", killer,
+								brain.deaths[killer], brain.deaths[killer] == 1 and "" or "s"), "Delve danger");
+						end;
+						break;
+					end;
+				end;
+			end);
+		end);
+		if not hs.lastHitAt or now - hs.lastHitAt > 4 then return; end;
+		local what = {};
+		for _, sig in ipairs(hs.lastHitSigs or {}) do
+			local fsig = sig:match("^floor:(.+)$");
+			if fsig and type(brain.floorHaz[fsig]) == "table" then
+				local fr = brain.floorHaz[fsig];
+				fr.hits = math.max(2, (tonumber(fr.hits) or 0) + 2);
+				fr.deaths = (tonumber(fr.deaths) or 0) + 1;
+				what[#what + 1] = "floor " .. fsig:match("^[^|]*");
+			elseif type(brain.attacks[sig]) == "table" then
+				local a = brain.attacks[sig];
+				a.deaths = (tonumber(a.deaths) or 0) + 1;
+				a.extra = math.min(4, (tonumber(a.extra) or 0) + .5);
+				a.lead = math.min(.35, (tonumber(a.lead) or 0) + .05);
+				what[#what + 1] = sig:gsub("^%a+:", "");
+			end;
+		end;
+		if hs.lastHitMob then
+			local key = tostring(hs.lastHitMob);
+			brain.mobReach[key] = math.min(16, (tonumber(brain.mobReach[key]) or vl) + 1);
+			what[#what + 1] = key;
+		end;
+		local dd = brain.dodge;
+		dd.extra = math.min(2.5, (tonumber(dd.extra) or 0) + .1);
+		markBrain();
+		saveBrain(true);
+		notify("Died to " .. (#what > 0 and table.concat(what, ", ") or "something unseen")
+			.. ". Next time: more distance from it and earlier rolls.", "Delve danger");
 	end;
 	r.stopBrain = function()
 		if hs.conn then pcall(function() hs.conn:Disconnect(); end); hs.conn = nil; end;
@@ -6201,7 +6523,10 @@ local brainTick = (function()
 						pcall(learnFromHit, old - hp, d());
 					end;
 				end);
-				hs.dconn = hum.Died:Connect(function() run.died = true; end);
+				hs.dconn = hum.Died:Connect(function()
+					run.died = true;
+					pcall(r.learnDeath);
+				end);
 			end;
 		end;
 		-- a roll that wasn't followed by a hit = successful dodge: relax the margin a little
@@ -6209,6 +6534,17 @@ local brainTick = (function()
 		if lr and lr ~= hs.rollSeen and now - lr > 1 then
 			hs.rollSeen = lr;
 			if run.hits == (hs.hitsAtRoll or run.hits) then
+				local a = r.lastRollSig and brain.attacks[r.lastRollSig];
+				if type(a) == "table" then
+					a.extra = math.max(0, (tonumber(a.extra) or 0) - .03);
+					a.perfect = (tonumber(a.perfect) or 0) + 1;
+				end;
+				-- a clean roll through an attack that landed mid-roll: the i-frames last at least that long
+				local hitIn = r.lastRollHitIn;
+				if hitIn and hitIn > 0 and hitIn < .8 then
+					brain.dodge.iframe = math.min(.6, math.max((tonumber(brain.dodge.iframe) or .35) * .98, hitIn + .05));
+				end;
+				r.lastRollHitIn = nil;
 				local dd = brain.dodge;
 				dd.dodges = (tonumber(dd.dodges) or 0) + 1;
 				dd.extra = math.max(0, (tonumber(dd.extra) or 0) - .02);
@@ -6217,6 +6553,20 @@ local brainTick = (function()
 			end;
 		end;
 		if lr and lr ~= hs.rollMark then hs.rollMark, hs.hitsAtRoll = lr, run.hits; end;
+		if run.active then
+			local pos = sQ();
+			pcall(dangerMem.refresh, pos, now);
+			if pos and now - (hs.floorCheckAt or 0) > 1 and next(brain.floorHaz) then
+				hs.floorCheckAt = now;
+				if not hs.lastHitAt or now - hs.lastHitAt > 2.5 then
+					for _, part in ipairs(dangerMem.partsNear(pos, 0, true)) do
+						local sig = dangerMem.sigOf(part);
+						local fr = sig and brain.floorHaz[sig];
+						if type(fr) == "table" then fr.safe = (tonumber(fr.safe) or 0) + 1; end;
+					end;
+				end;
+			end;
+		end;
 		pcall(relicAPI.runTick, now);
 		pcall(indexAPI.tick, now);
 		-- settings autosave (cheap: only writes when something changed)
@@ -6748,7 +7098,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.7 | Brain",
+		Title = "Delve v4.9 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -6915,6 +7265,35 @@ end;
 				Title = "Scan Index + Equipment now",
 				Callback = function()
 					task.spawn(indexAPI.scan, "manual");
+				end,
+			});
+			tab:Button({
+				Title = "Show danger learned (attacks, floors, bosses)",
+				Callback = function()
+					local out = {};
+					local list = {};
+					for sig, a in pairs(brain.attacks or {}) do
+						if type(a) == "table" then list[#list + 1] = { sig = sig, a = a }; end;
+					end;
+					table.sort(list, function(x, y) return (tonumber(x.a.hits) or 0) > (tonumber(y.a.hits) or 0); end);
+					for k = 1, math.min(6, #list) do
+						local a = list[k].a;
+						out[#out + 1] = string.format("%s: %d hits, %d deaths, %d perfect dodges, +%.1f st, roll %+.2fs%s", (list[k].sig:gsub("^%a+:", "")),
+							tonumber(a.hits) or 0, tonumber(a.deaths) or 0, tonumber(a.perfect) or 0, tonumber(a.extra) or 0, tonumber(a.lead) or 0, a.noHole and ", no safe ring" or "");
+					end;
+					for sig, fr in pairs(brain.floorHaz or {}) do
+						if type(fr) == "table" and (tonumber(fr.hits) or 0) >= 2 then
+							out[#out + 1] = string.format("Floor %s: %d hits (avoided)", sig:match("^[^|]*"), tonumber(fr.hits) or 0);
+						end;
+					end;
+					for boss, pt in pairs(brain.patterns or {}) do
+						if type(pt) == "table" then
+							local ns = 0;
+							for _ in pairs(pt.sigs or {}) do ns = ns + 1; end;
+							out[#out + 1] = string.format("Boss %s: %d attacks seen, %d kinds", boss, tonumber(pt.n) or 0, ns);
+						end;
+					end;
+					notify(#out > 0 and table.concat(out, "\n") or "Nothing learned yet. It learns from every hit and death.", "Delve danger");
 				end,
 			});
 			tab:Button({
