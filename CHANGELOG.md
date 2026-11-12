@@ -1,6 +1,9 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.9 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.9.1 | Brain`).
+
+## v5.9.1: Fix ":4369 attempt to perform arithmetic (add) on number and boolean"
+- Since v5.5 the wind-up dodge read the mob's wind-up time from a line that ended with a boss-fight check, so outside boss fights the "time" was `true` instead of a number and `windupAt + true` errored. While the error repeated, the early (wind-up) dodge never ran, which also fits the hits that only got a roll afterwards. The time and the boss check are now separate.
 
 ## v5.9: Equipment set switching removed
 - Removed everything that changed equipment sets through the T menu: set switching in and between runs, selling ores with set 3, and the per-set race check. The Gear tab and its settings are gone. Switching through the menu wasn't reliable (swap cooldowns, no swaps mid-run), so this waits until the game adds hotkeys for sets.

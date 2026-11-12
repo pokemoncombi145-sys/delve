@@ -4363,8 +4363,10 @@ local function IQ(m)
 	if Q.windupLearn ~= false and r.windups then
 		local lead = bl + (r.pingLead or 0);
 		for _, mob in pairs(el) do
-			local dur = mob.owned and mob.phase == "windup" and mob.windupAt and mob.x and r.windups[mob.name]
-				and not (r.bossFight and tostring(mob.name) ~= r.bossFight);
+			local dur = mob.owned and mob.phase == "windup" and mob.windupAt and mob.x and tonumber(r.windups[mob.name]) or nil;
+			-- (the boss-fight condition used to sit at the end of the line above, which turned dur into
+			-- true/false instead of the windup time and crashed "windupAt + dur")
+			if dur and r.bossFight and tostring(mob.name) ~= r.bossFight then dur = nil; end;
 			if dur and mob.rolledForW ~= mob.windupAt then
 				local hitAt = mob.windupAt + dur;
 				if m >= hitAt - lead and m <= hitAt + .12 then
@@ -7791,7 +7793,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.9 | Brain",
+		Title = "Delve v5.9.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
