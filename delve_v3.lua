@@ -4520,9 +4520,29 @@ local indexAPI = (function()
 	brain.lifetime = type(brain.lifetime) == "table" and brain.lifetime or {};
 	brain.gear = type(brain.gear) == "table" and brain.gear or {};
 	if (tonumber(brain.cleanV) or 0) == 2 then
-		-- v3.9 sources all started with a hidden template row (FIELD STONE): rebuild the source table
+		-- v3.9 put a hidden template row (FIELD STONE, GRASSLANDS, 1 in 1.4) first in every item's sources.
+		-- Remove it (except for STONE, which really drops from Field Stone) and keep everything else,
+		-- so items that were already studied are not clicked again.
 		brain.cleanV = 3;
 		brain.sources = {};
+		for key, rec in pairs(brain.index) do
+			if type(rec) == "table" and type(rec.sources) == "table" then
+				local first = rec.sources[1];
+				if key ~= "STONE" and type(first) == "table" and tostring(first.name):upper() == "FIELD STONE"
+					and tonumber(first.odds) == 1.4 then
+					table.remove(rec.sources, 1);
+				end;
+				if rec.studied then rec.sv = 3; end;
+				for _, sv in ipairs(rec.sources) do
+					if type(sv) == "table" and sv.name then
+						local sk = tostring(sv.name):upper() .. (sv.zone and (" | " .. tostring(sv.zone):upper()) or "");
+						local srec = type(brain.sources[sk]) == "table" and brain.sources[sk] or { name = sv.name, zone = sv.zone, drops = {} };
+						srec.drops[key] = sv.odds;
+						brain.sources[sk] = srec;
+					end;
+				end;
+			end;
+		end;
 	end;
 	if (tonumber(brain.cleanV) or 0) < 2 then
 		-- v3.6 read the Stats panels badly and logged index-screen labels as drops: start those fresh
@@ -4962,7 +4982,12 @@ local indexAPI = (function()
 		dump(win, "index");
 		readTotals(win, grid);
 		local tiles, order = {}, {};
-		scrollThrough(grid, function() collectTiles(grid, tiles, order); end, .3);
+		collectTiles(grid, tiles, order);
+		local expected = brain.indexTotals and tonumber(brain.indexTotals.found) or 1;
+		if #order < expected then
+			-- some tiles only load while scrolling: go through the whole list
+			scrollThrough(grid, function() collectTiles(grid, tiles, order); end, .3);
+		end;
 		for _, b in ipairs(order) do
 			local e = tiles[b];
 			local key = e.found and e.name:upper() or string.format("??? %s 1 IN %s", tostring(e.zone or "?"), tostring(e.odds));
@@ -4971,7 +4996,13 @@ local indexAPI = (function()
 			rec.found = e.found or rec.found == true;
 			brain.index[key] = rec;
 		end;
-		local studied = 0;
+		local studied, skipped = 0, 0;
+		for _, b2 in ipairs(order) do
+			local e2 = tiles[b2];
+			local r2 = e2.found and brain.index[e2.name:upper()];
+			if type(r2) == "table" and r2.studied and r2.sv == 3 then skipped = skipped + 1; end;
+		end;
+		r.indexSkipped = skipped;
 		if study then
 			for _, b in ipairs(order) do
 				local e = tiles[b];
@@ -5167,9 +5198,9 @@ local indexAPI = (function()
 		if summary.waiting then return; end; -- Roblox not focused yet: try again later
 		done = true;
 		local t = brain.indexTotals;
-		notify(string.format("Scan done%s. Index %s, %d items read, %d studied. %d stats read.%s Scanning stops now.",
+		notify(string.format("Scan done%s. Index %s, %d items read, %d new studied, %d already known (skipped). %d stats read.%s Scanning stops now.",
 			reason and (" (" .. reason .. ")") or "", t and (t.found .. "/" .. t.total) or "?",
-			summary.entries or 0, summary.studied or 0, summary.stats or 0,
+			summary.entries or 0, summary.studied or 0, r.indexSkipped or 0, summary.stats or 0,
 			summary.failed and (" Couldn't open:" .. summary.failed .. ".") or ""), "Delve index");
 	end;
 	-- ---------------------------------------------------------------- gear memory (cheap, no GUI)
@@ -5912,7 +5943,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.0.1 | Brain",
+		Title = "Delve v4.0.2 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.0.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.0.2 | Brain`).
+
+## v4.0.2: Skip items already scanned
+- Items studied before are never clicked again. v4.0 would have re-studied all 177 once to clear the FIELD STONE bug; instead the bad row is now removed from the saved data in place (from 176 items; STONE keeps it because Field Stone really drops it), and those items count as done.
+- The Index grid is read in one pass when all tiles are already loaded. It only scrolls through the list if tiles are missing, so a launch with nothing new finishes in seconds.
+- The "Scan done" pop-up shows how many items were new and how many were skipped.
 
 ## v4.0.1
 - The first scan after launch now starts after **10 s** instead of 20 s.
