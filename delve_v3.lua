@@ -3079,28 +3079,172 @@ local relicAPI = (function()
 	end;
 
 	-- ---------------------------------------------------------------- run tracking
+	-- Sources, most accurate first:
+	--   1. the "TRIP COMPLETE - DELVE 50M" results screen (depth, cash value, rocks, XP, materials)
+	--   2. leaderstats (the player list shows "180 M" depth / "4 W" wave as a stat value)
+	--   3. HUD text ("DEPTH 180 M", "WAVE 4 - ORE") as a fallback
 	local hud = { scanAt = -1e9 };
 	local function parseMoney(s)
-		local str = tostring(s):upper():gsub("[,%$%s]", "");
+		local str = tostring(s or ""):upper():gsub("[,%$%s%+]", "");
 		local num, suf = str:match("^([%d%.]+)(%a*)");
 		local v = tonumber(num);
 		if not v then return nil; end;
 		local mult = { K = 1e3, M = 1e6, B = 1e9, T = 1e12, QD = 1e15, QN = 1e18 };
 		return v * (mult[suf] or 1);
 	end;
-	local function cashNow()
+	local function parseNum(s)
+		local v = tostring(s or ""):gsub("[^%d%.%-]", "");
+		return tonumber(v);
+	end;
+	local function leaderRead()
+		local out = {};
 		local ls = l:FindFirstChild("leaderstats");
-		if not ls then return nil; end;
+		if not ls then return out; end;
 		for _, v in ipairs(ls:GetChildren()) do
-			local n = v.Name:upper();
-			if v:IsA("ValueBase") and (n:find("CASH") or n:find("MONEY") or n:find("COIN")) then
+			if v:IsA("ValueBase") then
 				local ok, val = pcall(function() return v.Value; end);
-				if ok then return type(val) == "number" and val or parseMoney(val); end;
+				if ok then
+					local sv = trim(tostring(val)):upper();
+					local n = v.Name:upper();
+					local dm, wm = sv:match("^(%d+)%s*M$"), sv:match("^(%d+)%s*W$");
+					if dm and not sv:find("%$") then
+						out.depth = tonumber(dm);
+					elseif wm then
+						out.wave = tonumber(wm);
+					elseif n:find("DEPTH") and tonumber(val) then
+						out.depth = tonumber(val);
+					elseif n:find("WAVE") and tonumber(val) then
+						out.wave = tonumber(val);
+					end;
+					if n:find("CASH") or n:find("MONEY") or n:find("COIN") then
+						out.cash = type(val) == "number" and val or parseMoney(val);
+					end;
+					if n:find("LEVEL") or n == "LVL" then out.level = tonumber(val) or parseNum(val); end;
+				end;
+			end;
+		end;
+		return out;
+	end;
+	local function cashNow() return leaderRead().cash; end;
+	-- exact cash from the HUD ("$9,129,811,875"); the player list only shows "$9.13B"
+	local cashLbl = { label = nil, scanAt = -1e9 };
+	local function exactCash(now)
+		local lbl = cashLbl.label;
+		if not (lbl and lbl.Parent and txt(lbl):match("^%s*%$[%d,]+%s*$")) then
+			if (now or d()) - cashLbl.scanAt < 3 then return nil; end;
+			cashLbl.scanAt = now or d();
+			cashLbl.label = nil;
+			local pg = l:FindFirstChild("PlayerGui");
+			local best;
+			for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+				if o:IsA("TextLabel") then
+					local t = txt(o);
+					if t:match("^%s*%$[%d,]+%s*$") and t:find(",") then
+						local v = parseNum(t);
+						if v and (not best or v > best) then best, cashLbl.label = v, o; end;
+					end;
+				end;
+			end;
+			lbl = cashLbl.label;
+			if not lbl then return nil; end;
+		end;
+		return parseNum(txt(lbl));
+	end;
+	-- results screen ------------------------------------------------------------
+	local resLbl = { label = nil, scanAt = -1e9 };
+	local RESULT_WORDS = { "TRIP COMPLETE", "RUN COMPLETE", "RUN OVER", "YOU DIED" };
+	local function resultsTitle(now)
+		local lbl = resLbl.label;
+		if lbl and lbl.Parent and shown(lbl) then return lbl; end;
+		if now - resLbl.scanAt < .75 then return nil; end;
+		resLbl.scanAt = now;
+		resLbl.label = nil;
+		local pg = l:FindFirstChild("PlayerGui");
+		for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+			if o:IsA("TextLabel") then
+				local u = txt(o):upper();
+				for _, w in ipairs(RESULT_WORDS) do
+					if u:find(w, 1, true) and shown(o) then
+						resLbl.label = o;
+						return o;
+					end;
+				end;
 			end;
 		end;
 		return nil;
 	end;
+	local function readResults(now)
+		local title = resultsTitle(now);
+		if not title then return nil; end;
+		local gui = title:FindFirstAncestorWhichIsA("LayerCollector");
+		if not gui then return nil; end;
+		local labels = {};
+		for _, o in ipairs(gui:GetDescendants()) do
+			if (o:IsA("TextLabel") or o:IsA("TextButton")) and o.Visible then
+				local t = trim(txt(o)):upper();
+				if t ~= "" then
+					local p, sz = o.AbsolutePosition, o.AbsoluteSize;
+					labels[#labels + 1] = { t = t, x = p.X, y = p.Y + sz.Y / 2, h = sz.Y };
+				end;
+			end;
+		end;
+		local function valueFor(key)
+			for _, L in ipairs(labels) do
+				local a = L.t:find(key, 1, true);
+				if a then
+					local inline = L.t:sub(a + #key):match("^%s*[:%-]?%s*([%+%-]?%$?[%d,%.]+%a*)");
+					if inline then return inline; end;
+					local best, bd;
+					for _, M in ipairs(labels) do
+						if M ~= L and M.t:find("%d") then
+							local dy, dx = M.y - L.y, M.x - L.x;
+							local dist;
+							if math.abs(dy) < math.max(14, L.h * .6) and dx > 0 then
+								dist = dx;
+							elseif dy > 0 and dy < 150 and math.abs(dx) < 300 then
+								dist = 2000 + dy;
+							end;
+							if dist and (not bd or dist < bd) then best, bd = M, dist; end;
+						end;
+					end;
+					return best and best.t or nil;
+				end;
+			end;
+			return nil;
+		end;
+		local tt = trim(txt(title)):upper();
+		local res = { title = trim(txt(title)) };
+		res.depth = tonumber(tt:match("(%d+)%s*M%s*$")) or tonumber(tt:match("DELVE%s*(%d+)"));
+		res.wave = tonumber(tt:match("WAVE%s*(%d+)"));
+		if tt:find("DELVE", 1, true) then res.mode = "delve"; end;
+		-- the coloured "DELVE 50M" part can be its own label
+		for _, L in ipairs(labels) do
+			if not res.depth then
+				local dv = L.t:match("DELVE%s*(%d+)%s*M") or L.t:match("^(%d+)%s*M$");
+				if dv then res.depth, res.mode = tonumber(dv), "delve"; end;
+			end;
+			if not res.wave then
+				local wv = L.t:match("WAVE%s*(%d+)");
+				if wv then res.wave = tonumber(wv); end;
+			end;
+		end;
+		res.died = tt:find("DIED", 1, true) ~= nil;
+		res.cashValue = parseMoney(valueFor("CASH VALUE") or valueFor("CASH EARNED") or valueFor("EARNED"));
+		res.rocks = parseNum(valueFor("ROCKS MINED") or valueFor("ORES MINED"));
+		res.xp = parseNum(valueFor("XP GAINED") or valueFor("XP"));
+		res.level = parseNum(valueFor("LEVEL"));
+		res.materials = parseNum(valueFor("BROUGHT BACK") or valueFor("MATERIALS"));
+		local sig = {};
+		for _, L in ipairs(labels) do sig[#sig + 1] = L.t; end;
+		res.sig = table.concat(sig, "|");
+		return res;
+	end;
+	r.readResults = function() return readResults(d()); end;
+
 	local function readHud(now)
+		local ls = leaderRead();
+		if ls.depth and ls.depth > run.depth then run.depth = ls.depth; end;
+		if ls.wave and ls.wave > run.wave then run.wave = ls.wave; end;
 		if now - hud.scanAt > 3 then
 			hud.scanAt = now;
 			local pg = l:FindFirstChild("PlayerGui");
@@ -3117,14 +3261,14 @@ local relicAPI = (function()
 				end;
 			end;
 		end;
-		if hud.depth and hud.depth.Parent then
+		if not ls.depth and hud.depth and hud.depth.Parent then
 			local v = tonumber(trim(txt(hud.depth)):upper():match("^DEPTH%s*(%d+)"));
 			if v and v > run.depth then run.depth = v; end;
 		end;
 		if hud.wave and hud.wave.Parent then
 			local wt = txt(hud.wave):upper();
 			local v = tonumber(wt:match("WAVE%s*(%d+)"));
-			if v and v > run.wave then run.wave = v; end;
+			if not ls.wave and v and v > run.wave then run.wave = v; end;
 			-- "WAVE 4 - ORE" -> stage "ORE"
 			run.stage = trim(wt:match("WAVE%s*%d+%s*[%-:]%s*(.+)$") or "");
 		end;
@@ -3137,19 +3281,29 @@ local relicAPI = (function()
 		run.combatT, run.mineT = 0, 0;
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
 		run.cash0 = cashNow();
+		run.cashExact0 = exactCash(now);
+		run.level0 = leaderRead().level;
 		run.id = l:GetAttribute("RunId");
 		run.plateSeen = now;
 	end;
-	local function runFinish(now)
-		if not run.active then return; end;
-		run.active = false;
-		local dur = now - run.startAt;
-		if dur < 20 then return; end;
-		local cash1 = cashNow();
-		local gain = (run.cash0 and cash1) and (cash1 - run.cash0) or 0;
-		local mode = run.depth > 0 and "delve" or "waves";
-		local score = run.depth + run.wave * 15 + (gain > 1 and math.log10(gain) * 8 or 0)
-			- (run.died and 30 or 0) - run.hits * .5 + math.min(dur, 900) / 30;
+	local function finalizeRun(snap, res, dur)
+		local depth = (res and res.depth) or snap.depth;
+		local wave = math.max(snap.wave, (res and res.wave) or 0);
+		local mode = (res and res.mode) or ((depth > 0 or snap.isDelve) and "delve" or "waves");
+		local died = snap.died or (res and res.died) or false;
+		local cashExact1 = exactCash(d());
+		local gain;
+		if snap.cashExact0 and cashExact1 then
+			gain = cashExact1 - snap.cashExact0;
+		else
+			local c1 = cashNow();
+			gain = (snap.cash0 and c1) and (c1 - snap.cash0) or 0;
+		end;
+		local tripValue = res and res.cashValue or nil;
+		local value = math.max(gain or 0, tripValue or 0);
+		local score = depth + wave * 15 + (value > 1 and math.log10(value) * 8 or 0)
+			+ math.min(40, ((res and res.rocks) or 0) * .05)
+			- (died and 30 or 0) - snap.hits * .5 + math.min(dur, 900) / 30;
 		local st = brain.runs[mode];
 		if type(st) ~= "table" then st = { n = 0, mean = 0, m2 = 0 }; brain.runs[mode] = st; end;
 		local std = st.n >= 3 and math.sqrt(st.m2 / (st.n - 1)) or 10;
@@ -3163,7 +3317,7 @@ local relicAPI = (function()
 		if Q.relicLearn ~= false then
 			brain.catMode[mode] = type(brain.catMode[mode]) == "table" and brain.catMode[mode] or {};
 			local cm = brain.catMode[mode];
-			for idx, pick in ipairs(run.relics) do
+			for idx, pick in ipairs(snap.relics) do
 				local rec = relicRec(pick.key);
 				rec.n = (tonumber(rec.n) or 0) + 1;
 				rec.zsum = (tonumber(rec.zsum) or 0) + zc;
@@ -3175,8 +3329,8 @@ local relicAPI = (function()
 					brain.cat[cat] = math.max(.4, math.min(2.5, (tonumber(brain.cat[cat]) or 1) + .04 * zc));
 					cm[cat] = math.max(.4, math.min(2.5, (tonumber(cm[cat]) or tonumber(brain.cat[cat]) or 1) + .06 * zc));
 				end;
-				for j = idx + 1, #run.relics do
-					local other = run.relics[j];
+				for j = idx + 1, #snap.relics do
+					local other = snap.relics[j];
 					if other.key ~= pick.key then
 						local pk = pairKey(pick.key, other.key);
 						local pr = type(brain.pairs[pk]) == "table" and brain.pairs[pk] or { n = 0, zsum = 0 };
@@ -3188,14 +3342,19 @@ local relicAPI = (function()
 		end;
 		-- full run history (one JSON line per run) so the brain keeps a long memory
 		local names = {};
-		for _, pick in ipairs(run.relics) do
+		for _, pick in ipairs(snap.relics) do
 			local cx = brain.codex[pick.key];
 			names[#names + 1] = type(cx) == "table" and cx.name or pick.key;
 		end;
+		local lv1 = leaderRead().level;
 		local record = {
 			t = os.time(), mode = mode, score = math.floor(score * 10 + .5) / 10, z = math.floor(zc * 100 + .5) / 100,
-			depth = run.depth, wave = run.wave, cash = gain, died = run.died, hits = run.hits,
-			seconds = math.floor(dur), relics = names,
+			depth = depth, maxDepth = math.max(depth, snap.depth), wave = wave, cash = gain, tripValue = tripValue,
+			rocks = res and res.rocks, xp = res and res.xp, materials = res and res.materials,
+			level = (res and res.level) or lv1, levelUp = (snap.level0 and lv1) and (lv1 - snap.level0) or nil,
+			died = died, hits = snap.hits, seconds = math.floor(dur), relics = names,
+			title = res and res.title, source = res and "results screen" or "live tracking",
+			combatPct = (snap.combatT + snap.mineT) > 0 and math.floor(snap.combatT / (snap.combatT + snap.mineT) * 100 + .5) or nil,
 		};
 		pcall(function()
 			local line = Http:JSONEncode(record) .. "\n";
@@ -3208,15 +3367,42 @@ local relicAPI = (function()
 			end;
 		end);
 		brain.runCount = (tonumber(brain.runCount) or 0) + 1;
+		markBrain();
+		saveBrain(true);
 		if r.sendRunWebhook then
 			local info = record;
 			info.relicCount = #names;
-			task.delay(tonumber(Q.webhookDelay) or 1.5, function() pcall(r.sendRunWebhook, info); end);
+			-- the results screen is up right now: post (and screenshot) immediately
+			task.delay(res and 0 or (tonumber(Q.webhookDelay) or 1.5), function() pcall(r.sendRunWebhook, info); end);
 		end;
-		markBrain();
-		saveBrain(true);
-		notify(string.format("Run scored %.0f (%s run, %+.2f vs your average). Learned from %d relic pick%s.",
-			score, mode, zc, #run.relics, #run.relics == 1 and "" or "s"), "Delve brain");
+		notify(string.format("Run scored %.0f (%s, %dm, %+.2f vs your average). Learned from %d relic pick%s.",
+			score, mode, math.floor(depth), zc, #snap.relics, #snap.relics == 1 and "" or "s"), "Delve brain");
+	end;
+	local function runFinish(now)
+		if not run.active then return; end;
+		run.active = false;
+		local dur = now - run.startAt;
+		readHud(now);
+		local snap = {
+			relics = run.relics, depth = run.depth, wave = run.wave, died = run.died, hits = run.hits,
+			cash0 = run.cash0, cashExact0 = run.cashExact0, level0 = run.level0, isDelve = run.isDelve,
+			combatT = run.combatT, mineT = run.mineT,
+		};
+		if dur < 20 then return; end;
+		task.spawn(function()
+			-- wait for the results screen, then until its numbers stop counting up
+			local t0 = d();
+			local res, prev;
+			while d() - t0 < 7 do
+				res = readResults(d());
+				if res and prev and res.sig == prev.sig then break; end;
+				prev = res;
+				task.wait(res and .4 or .25);
+			end;
+			res = res or prev;
+			local ok, err = pcall(finalizeRun, snap, res, dur);
+			if not ok then notify("Run finish error: " .. tostring(err), "Delve brain"); end;
+		end);
 	end;
 	local runCheckAt = -1e9;
 	local function runTick(now)
@@ -3229,7 +3415,7 @@ local relicAPI = (function()
 			if plate then
 				run.plateSeen = now;
 			end;
-			if endRoom or (not plate and now - (run.plateSeen or now) > 4) then
+			if endRoom or resultsTitle(now) or (not plate and now - (run.plateSeen or now) > 4) then
 				runFinish(now);
 			elseif id ~= nil and run.id ~= nil and id ~= run.id then
 				runFinish(now);
@@ -3237,7 +3423,7 @@ local relicAPI = (function()
 			else
 				readHud(now);
 			end;
-		elseif plate and not endRoom then
+		elseif plate and not endRoom and not resultsTitle(now) then
 			runStart(now);
 		end;
 	end;
@@ -4131,26 +4317,48 @@ r.sendRunWebhook = function(info, isTest)
 	local relicText = type(info.relics) == "table" and table.concat(info.relics, ", ") or "";
 	if relicText == "" then relicText = "none"; end;
 	if #relicText > 1000 then relicText = relicText:sub(1, 997) .. "..."; end;
-	local fields = {
-		{ name = "Mode", value = tostring(info.mode or "?"), inline = true },
-		{ name = "Score", value = string.format("%.1f (%+.2f vs avg)", tonumber(info.score) or 0, tonumber(info.z) or 0), inline = true },
-		{ name = "Time", value = string.format("%dm %02ds", math.floor(secs / 60), secs % 60), inline = true },
-		{ name = "Depth", value = tostring(info.depth or 0) .. " m", inline = true },
-		{ name = "Wave", value = tostring(info.wave or 0), inline = true },
-		{ name = "Cash gained", value = money(info.cash), inline = true },
-		{ name = "Outcome", value = (info.died and "Died" or "Survived") .. string.format(", %d hits taken", tonumber(info.hits) or 0), inline = true },
-		{ name = "Brain", value = string.format("%d runs learned, %d relics known", tonumber(brain.runCount) or 0, (function()
-			local n = 0;
-			for _ in pairs(brain.codex) do n = n + 1; end;
-			return n;
-		end)()), inline = true },
-		{ name = "Relics taken", value = relicText, inline = false },
-	};
+	local function num(v)
+		v = tonumber(v);
+		if not v then return "?"; end;
+		local s2 = tostring(math.floor(v + .5));
+		local out = s2:reverse():gsub("(%d%d%d)", "%1,"):reverse();
+		return (out:gsub("^,", ""):gsub("^%-,", "-"));
+	end;
+	local known = 0;
+	for _ in pairs(brain.codex) do known = known + 1; end;
+	local depthText = tostring(math.floor(tonumber(info.depth) or 0)) .. " m";
+	if tonumber(info.maxDepth) and tonumber(info.maxDepth) > (tonumber(info.depth) or 0) then
+		depthText = depthText .. string.format(" (max %d m)", info.maxDepth);
+	end;
+	local fields = {};
+	local function add(name, value, inline)
+		fields[#fields + 1] = { name = name, value = tostring(value), inline = inline ~= false };
+	end;
+	if info.mode == "delve" then add("Depth", depthText); else add("Wave", tostring(info.wave or 0)); end;
+	add("Trip cash value", info.tripValue and money(info.tripValue) or "?");
+	add("Cash change", money(info.cash));
+	add("Rocks mined", num(info.rocks));
+	add("XP gained", info.xp and ("+" .. num(info.xp)) or "?");
+	add("Materials", info.materials and ("+" .. num(info.materials)) or "?");
+	add("Level", tostring(info.level or "?") .. ((tonumber(info.levelUp) or 0) > 0 and string.format(" (+%d)", info.levelUp) or ""));
+	add("Time", string.format("%dm %02ds", math.floor(secs / 60), secs % 60));
+	add("Outcome", (info.died and "Died" or "Survived") .. string.format(", %d hits", tonumber(info.hits) or 0));
+	add("Run score", string.format("%.1f (%+.2f vs avg)", tonumber(info.score) or 0, tonumber(info.z) or 0));
+	add("Fighting", info.combatPct and (tostring(info.combatPct) .. "% of the time") or "?");
+	add("Brain", string.format("%d runs, %d relics known", tonumber(brain.runCount) or 0, known));
+	add("Relics taken (" .. tostring(type(info.relics) == "table" and #info.relics or 0) .. ")", relicText, false);
+	local title = isTest and "Webhook test" or "Run Complete";
+	if not isTest and info.mode == "delve" then
+		title = string.format("Run Complete - Delve %dm", math.floor(tonumber(info.depth) or 0));
+	elseif not isTest and (tonumber(info.wave) or 0) > 0 then
+		title = string.format("Run Complete - Wave %d", info.wave);
+	end;
 	local embed = {
-		title = isTest and "Webhook test" or "Run Complete",
-		color = info.died and 15158332 or 3066993,
+		title = title,
+		description = info.title and ("> " .. tostring(info.title)) or nil,
+		color = isTest and 3447003 or (info.died and 15158332 or 3066993),
 		fields = fields,
-		footer = { text = "Delve v3 brain | " .. tostring(l.Name) },
+		footer = { text = "Delve v3 brain | " .. tostring(l.Name) .. " | " .. tostring(info.source or "live tracking") },
 	};
 	pcall(function() embed.timestamp = DateTime.now():ToIsoDate(); end);
 	-- is the screenshot helper running? (it refreshes this file every few seconds)
