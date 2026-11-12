@@ -5040,7 +5040,13 @@ function bossStudy.tick(list, pos, now)
 	local tg = bossStudy.tgt;
 	for _, mob in ipairs(list) do
 		if mob.addr == xQ and mob ~= boss and tonumber(mob.hp) then
-			if not tg or tg.addr ~= mob.addr then tg = { addr = mob.addr, hist = {} }; bossStudy.tgt = tg; end;
+			if not tg or tg.addr ~= mob.addr then
+				-- new target: its "no hits yet" clock starts now (it used to carry over from the last target,
+				-- so almost every target switch was logged as "hits not landing")
+				tg = { addr = mob.addr, hist = {} };
+				bossStudy.tgt = tg;
+				r.noHitSince = now;
+			end;
 			local dd = math.sqrt((mob.x - pos.X) ^ 2 + (mob.z - pos.Z) ^ 2);
 			tg.hist[#tg.hist + 1] = { t = now, hp = tonumber(mob.hp), on = dd <= (tonumber(CFG.fightDist) or 8) + 4 };
 			while #tg.hist > 0 and now - tg.hist[1].t > 4 do table.remove(tg.hist, 1); end;
@@ -5059,7 +5065,7 @@ function bossStudy.tick(list, pos, now)
 				brain.swordHit[tostring(brain.player and brain.player.sword or "?")] = r.liveHitMax;
 			elseif WQ == "combat" and dd <= (tonumber(CFG.fightDist) or 8) + 2 and now - (r.noHitSince or now) > 2.5 then
 				-- swinging but nothing lands: get closer
-				r.orbitShrink = math.min(4, (tonumber(r.orbitShrink) or 0) + .5);
+				r.orbitShrink = math.min(2.5, (tonumber(r.orbitShrink) or 0) + .5);
 				r.noHitSince = now;
 				if r.why then r.why("combat", string.format("hits not landing at %.1f st: moving %.1f st closer", dd, r.orbitShrink)); end;
 			end;
@@ -5289,6 +5295,10 @@ local function lh(m)
 	end;
 	local S = ol();
 	pcall(bossStudy.tick, S, G, m);
+	-- the "move closer" adjustment wears off when not fighting
+	if WQ ~= "combat" and (tonumber(r.orbitShrink) or 0) > 0 then
+		r.orbitShrink = math.max(0, r.orbitShrink - .01);
+	end;
 	r.mobCount = #S;
 	if #S > 0 and Q.combat and wantFight(S, G, m) then
 		WQ = "combat";
@@ -7599,7 +7609,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.4 | Brain",
+		Title = "Delve v5.4.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

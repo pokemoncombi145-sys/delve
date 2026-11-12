@@ -1,6 +1,17 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.4 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.4.1 | Brain`).
+
+## v5.4.1: Stage 1 check-up (2 runs on v5.4)
+**What the v5.4 logs showed**
+- Floor mapping fixed: "floor mapped" about once per floor (64 lines) instead of 13,126; only 1 stuck event outside the boss fight, against 16 in a row before.
+- Attacks are now learned separately: 28 distinct attack types seen in the Worldheart fight instead of 1.
+- Learned values are sane: i-frames 0.35 s, roll timing within 0.05 s, sword reach 11.9 st (was 119).
+- Boss-add learning now reaches verdicts (killing a Void Shade didn't help Worldheart damage).
+- New best depth: 12,660 m.
+
+**Fixed**
+- "Hits not landing, moving closer" fired on almost every new target (its timer carried over from the previous target), so the fighting distance was pinned 4 studs short. The timer now restarts per target, the adjustment is capped at 2.5 studs, and it wears off when not fighting.
 
 ## v5.4: Learning audit, stage 1 (fix the learning data)
 Based on an audit of 30 runs, the brain file, ~15,000 reasoning-log lines and the dodge log. No new features; this makes the existing learning trustworthy.
