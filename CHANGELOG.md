@@ -1,6 +1,18 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.8.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.8.3 | Brain`).
+
+## v5.8.3: Fixes from the first v5.8.2 session (not yet verified in gameplay)
+**What the logs showed:** after the race check, set 3 and set 1 failed ("timed out") so the damage set stayed on while mining; both in-run switch attempts found the set swap on cooldown; all 9 attack rolls targeted mobs 25-28 st away (learned roll distance at its 20 st cap); 4 of 5 hits were followed 20-80 ms later by a roll; and normal mobs (Ghoul, Rockback, Mummy, Yeti) were treated as bosses, saving 340 m and 880 m as boss floors.
+
+| Change | Why |
+|---|---|
+| Only real bosses (the game's boss flag, the HUD or the stage name) count as a boss. A mob with 5x the others' health is still fought ("big mob") but isn't a boss. Boss floors learned with the old rule are cleared (brain backed up first). | The loose rule switched sets, marked normal floors as boss floors, disabled attack rolls and blocked wind-up dodges against every other mob. |
+| No strike roll or zone roll within 0.3 s after you were hit by it. Wind-up dodges are no longer blocked by a false "boss". | Rolling after the damage landed only wasted the roll and its invincibility. |
+| Roll distance measured 0.3 s after the roll (was 0.45 s, which included walking), capped at 12 st and re-learned. Attack rolls only target mobs within about 12 st. | Rolls toward mobs 25-28 st away pulled it off the ores. |
+| In the hub, a set switch waits up to 20 s for the game's swap cooldown (was 8 s). Switching sets during runs is paused, with a new Gear tab toggle "Switch sets during runs (experimental)" to try it. | The race check swapped sets back to back and timed out; in-run swaps were always on cooldown. |
+
+**How to check:** no "strike roll" right after a "hit" in `dodge_log.txt`; no attack roll above 12 st; "set 3 completed" in the race check; only real bosses (e.g. Worldheart) in "boss" lines. To test in-run swaps: during a run press "Switch to set 1" in the Gear tab; if the log says "set swap on cooldown", the game blocks it mid-run.
 
 ## v5.8.2: Two gaps in the v5.8.1 safety fixes (from code review; not yet verified in gameplay)
 - **Queued attack roll at a boss start.** A roll queued just before a boss appeared could still fire, because the queued roll ran before the boss check. Now a boss fight cancels any queued attack roll (and its lean toward the target) first, and right before spending a queued roll it re-checks for an incoming attack, a mob windup and a predicted boss attack; if any is present the roll is cancelled and kept for defence.

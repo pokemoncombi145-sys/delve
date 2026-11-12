@@ -121,6 +121,7 @@ local m = {
 		relicExplore = true,
 		autoStage = false,
 		autoLoadouts = true,
+		inRunSets = false,
 		bossSet = true,
 		autoSell = true,
 		sellEveryRuns = 5,
@@ -393,16 +394,23 @@ do
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
 	if okRead and type(raw) == "string" and #raw > 2 then
-		local migrating = (tonumber(brain.learnV) or 0) < 2 or (tonumber(brain.cleanV) or 0) < 3;
+		local migrating = (tonumber(brain.learnV) or 0) < 3 or (tonumber(brain.cleanV) or 0) < 3;
 		if migrating or os.time() - (tonumber(brain.lastBackupAt) or 0) > 21600 then
 			if r.brainBackup(migrating and "before-migration" or "auto", raw) then brain.lastBackupAt = os.time(); end;
 		end;
+	end;
+	if (tonumber(brain.learnV) or 0) == 2 then
+		-- v5.8.3: boss floors and roll distance were learned with a wrong "boss" rule / measurement
+		brain.learnV = 3;
+		brain.bossFloors = {};
+		brain.rollDist = nil;
 	end;
 	if (tonumber(brain.learnV) or 0) < 2 then
 		-- v5.4 audit: every attack shared one bucket ("Hazards/Part") so its numbers sat at their caps,
 		-- category weights were all at the 2.5 cap, the run baseline mixed abandoned 40 s runs with real
 		-- ones, and a sword reach of 119 studs was learned from proc damage. Start those fresh.
-		brain.learnV = 2;
+		brain.learnV = 3;
+		brain.bossFloors, brain.rollDist = {}, nil;
 		brain.attacks, brain.patterns, brain.swordHit, brain.runs = {}, {}, {}, {};
 		brain.cat, brain.catMode = {}, {};
 		brain.dodge.iframe = .35;
@@ -4345,7 +4353,9 @@ local function IQ(m)
 	for Q, e in pairs(el) do
 		-- in a boss fight, don't spend the roll on small mobs' swings: the boss's attacks are the ones that kill
 		if e.owned and (e.strikeAt and (e.rolledFor ~= e.strikeAt and m - e.strikeAt < .15))
-			and not (r.bossFight and tostring(e.name) ~= r.bossFight) then
+			and not (r.bossFight and tostring(e.name) ~= r.bossFight)
+			-- the strike already hit you: rolling now only wastes the roll
+			and not (r.lastHitAt and m - r.lastHitAt < .3) then
 			e.rolledFor = e.strikeAt;
 			for Q, N in ipairs(Fl) do
 				if ul(N, G.X, G.Z, Vl) then
@@ -4389,11 +4399,12 @@ local function attackRoll(m)
 	local G = sQ();
 	-- measure how far a roll actually goes
 	local rf = r.rollFrom;
-	if rf and G and m - rf.t >= .45 then
+	-- measured 0.3 s after the roll (later than that it also counted walking, so it maxed out at 20 st)
+	if rf and G and m - rf.t >= .3 then
 		r.rollFrom = nil;
 		local dist = math.sqrt((G.X - rf.x) ^ 2 + (G.Z - rf.z) ^ 2);
 		if dist > 1 and dist < 40 then
-			brain.rollDist = math.max(2, math.min(20, (tonumber(brain.rollDist) or dist) * .8 + dist * .2));
+			brain.rollDist = math.max(2, math.min(12, (tonumber(brain.rollDist) or dist) * .8 + dist * .2));
 		end;
 	end;
 	-- boss fights: keep every roll for defence. Cancel a queued attack roll too (and its lean toward the target).
@@ -4444,7 +4455,8 @@ local function attackRoll(m)
 	if not best then return; end;
 	local dist = math.sqrt(bd);
 	local rd = tonumber(brain.rollDist) or 6;
-	if dist > rd + 8 then return; end;
+	-- only mobs a roll can actually reach (about 12 st at most), not ones across the room
+	if dist > math.min(12, rd + 4) then return; end;
 	-- without a roll perk ("Always"), only use it to close the gap
 	if not r.rollPerk and dist < (tonumber(CFG.fightDist) or 8) + 2 then return; end;
 	local dx, dz = best.x - G.X, best.z - G.Z;
@@ -4519,7 +4531,8 @@ local function mh(m)
 			local S = (w.hitAt and m >= w.hitAt - N - (w.zone and w.zone.sl or 0)) or (not w.hitAt and w.p >= .9);
 			if S and ((not w.hitAt or m <= w.hitAt + .1)) then
 				local N = w.hitAt and math.max(w.hitAt - m, 0) or 0;
-				if ul(w.zone, G.X + Q * N, G.Z + e * N, Vl) and (inp.active() and m - ((r.lastRoll or -1000000000.0)) >= yl) then
+				local justHit = r.lastHitAt and m - r.lastHitAt < .3 and N < .05;
+				if not justHit and ul(w.zone, G.X + Q * N, G.Z + e * N, Vl) and (inp.active() and m - ((r.lastRoll or -1000000000.0)) >= yl) then
 					if eQ(m) then
 						w.rolled = true;
 						r.lastRoll = m;
@@ -5297,9 +5310,12 @@ local function wantFight(list, pos, now)
 		local mx = tonumber(mob.max) or 0;
 		if mx > 0 then minMax, maxMax = math.min(minMax, mx), math.max(maxMax, mx); end;
 	end;
-	if #list >= 2 and maxMax > 0 and maxMax >= minMax * 5 then boss = true; end;
+	-- only real bosses (the game's boss flag, the HUD or the stage name) count as a boss. A mob with 5x the
+	-- health of the others is still worth fighting, but it's not a boss: calling it one switched sets, marked
+	-- normal floors (340 m, 880 m) as boss floors and blocked early dodges against everything else.
 	run.bossNow = boss;
 	if boss then r.fightWhy = "boss"; return true; end;
+	if #list >= 2 and maxMax > 0 and maxMax >= minMax * 5 then r.fightWhy = "big mob"; return true; end;
 	if stage:find("MOB") or stage:find("ENEM") or stage:find("FIGHT") or stage:find("HORDE") or stage:find("SLAY") or stage:find("KILL")
 		or stage:find("ELITE") or stage:find("DEFEAT") or stage:find("CLEAR") then
 		r.fightWhy = "mob stage";
@@ -7086,7 +7102,8 @@ local indexAPI = (function()
 		end;
 		r.loadoutBusy = true;
 		local t0 = d();
-		local deadline = t0 + 8;
+		-- in a run: 8 s. In the hub (race check, selling): 20 s, enough to wait out the game's set-swap cooldown
+		local deadline = t0 + (guarded and 8 or 20);
 		lo.note("attempted", n, reason);
 		local openedHere = false;
 		local ok, res, failWhy = pcall(function()
@@ -7370,6 +7387,15 @@ local indexAPI = (function()
 		if relicAPI.hasDraft() then return; end;
 		if run.active then
 			lo.hubDone = false;
+			-- paused: both in-run attempts found the set swap on cooldown, so the game may not allow it mid-run.
+			-- Turn on "Switch sets during runs" in the Gear tab to try it again.
+			if CFG.inRunSets ~= true then
+				if not lo.pausedNoted and r.why then
+					lo.pausedNoted = true;
+					r.why("gear", "switching sets during runs is paused (Gear tab to turn it on)");
+				end;
+				return;
+			end;
 			-- damage set on boss fights and when the mobs on this floor are hurting you; mining set otherwise
 			if now - lo.hitsT > 30 then lo.hitsAt, lo.hitsT = run.hits, now; end;
 			if run.hits - lo.hitsAt >= 4 then lo.hardUntil = now + 60; lo.hitsAt, lo.hitsT = run.hits, now; end;
@@ -7711,6 +7737,7 @@ local brainTick = (function()
 				hs.conn = hum.HealthChanged:Connect(function(hp)
 					local old = hs.hp or hp;
 					hs.hp = hp;
+					if hp < old - .5 then r.lastHitAt = d(); end;
 					if hp < old - .5 and CFG.on then
 						pcall(learnFromHit, old - hp, d());
 					end;
@@ -8017,6 +8044,7 @@ end;
 			icon = "shirt",
 			items = {
 				{ k = "autoLoadouts", t = "toggle", text = "Switch sets: 1 mining, 2 damage" },
+				{ k = "inRunSets", t = "toggle", text = "Switch sets during runs (experimental)" },
 				{ k = "bossSet", t = "toggle", text = "Damage set (2) on boss fights" },
 				{ k = "autoSell", t = "toggle", text = "Sell ores with set 3" },
 				{ k = "sellEveryRuns", t = "slider", text = "Sell every", min = 1, max = 30, step = 1, suffix = " runs" },
@@ -8308,7 +8336,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.8.2 | Brain",
+		Title = "Delve v5.8.3 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
