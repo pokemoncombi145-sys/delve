@@ -2691,6 +2691,23 @@ local relicAPI = (function()
 	end;
 
 	local function parseCard(c)
+		local root = c.root;
+		local titleL, bonusL, statL, archL = root:FindFirstChild("Title"), root:FindFirstChild("Bonus"), root:FindFirstChild("Stat"), root:FindFirstChild("Archetype");
+		if titleL and titleL:IsA("TextLabel") and (bonusL or statL) then
+			c.name = trim(txt(titleL));
+			c.desc = {};
+			for _, L in ipairs({ bonusL, statL }) do
+				if L and L:IsA("TextLabel") and trim(txt(L)) ~= "" then c.desc[#c.desc + 1] = trim(txt(L)); end;
+			end;
+			local at = archL and trim(txt(archL)):upper() or "";
+			local sn, sp, sN = at:match("^(.-)%s*SET%s+(%d+)%s*/%s*(%d+)");
+			if sn then c.setName, c.setP, c.setN = trim(sn), tonumber(sp), tonumber(sN); end;
+			local note = root:FindFirstChild("Note");
+			c.taken = note and trim(txt(note)):upper():find("TAKEN") ~= nil or false;
+			c.key = c.name:upper();
+			c.button = root:FindFirstChild("Hit") or root:FindFirstChild("Action");
+			return c;
+		end;
 		local labels = {};
 		for _, o in ipairs(c.root:GetDescendants()) do
 			if (o:IsA("TextLabel") or o:IsA("TextButton")) and o.Visible then
@@ -3031,73 +3048,57 @@ local relicAPI = (function()
 			draft.choice = choice;
 		end;
 		if not choice then return false; end;
-		-- the real mouse can only be used while Roblox is focused and the menu is closed;
-		-- otherwise click the card's button directly (works tabbed out, no focus needed)
-		local canMouse = Q.background ~= true and inp.focused() and not iQ();
-		local left = timerLeft();
-		local urgent = left ~= nil and left <= 3;
-		local delay = math.min(tonumber(Q.relicDelay) or .4, .4);
-		if not urgent and (now - draft.openedAt < delay or now - draft.stableSince < .2) then
+		-- RelicDraft > Panel > Main > CardN { Hit (whole card), Action "TAKE" (shown once selected) }
+		-- Pick instantly: click Hit, then TAKE as soon as it shows. Direct events need no focus;
+		-- from the 3rd try on, a virtual mouse click is used too (also works while tabbed out).
+		local card = choice.root;
+		local hit = card:FindFirstChild("Hit") or choice.button or card;
+		local action = card:FindFirstChild("Action");
+		local retry = draft.attempts == 0 and 0 or .35;
+		if now - draft.ourClickAt < retry then return false; end;
+		if draft.attempts >= 14 then
+			if not draft.gaveUp then
+				draft.gaveUp = true;
+				notify("Couldn't take the relic after 14 tries. Pick it yourself; I'll still learn from it.", "Delve relic");
+			end;
 			return false;
 		end;
-		local target = clickTarget(choice);
-		local mx, my, vx, vy = guiPoint(target);
-		if MQ.phase == "move" and not canMouse then
-			MQ.phase = "idle";
-		end;
-		if MQ.phase == "idle" then
-			-- give the previous click a moment to close the draft before trying again
-			local wait = draft.method == "mouse" and .9 or .45;
-			if urgent then wait = .25; end;
-			if draft.clicks > 0 and now - draft.ourClickAt < wait then return false; end;
-			if draft.attempts >= 12 then
-				if not draft.gaveUp then
-					draft.gaveUp = true;
-					notify("Couldn't click the relic after 12 tries. Pick it yourself; I'll still learn from it.", "Delve relic");
-				end;
-				return false;
-			end;
-			draft.attempts = draft.attempts + 1;
-			local methods = canMouse and { "signal", "mouse", "vim", "signal", "mouse" } or { "signal", "vim", "signal" };
-			local method = methods[(draft.attempts - 1) % #methods + 1];
-			if method == "vim" and not VIMr then method = "signal"; end;
-			draft.method = method;
-			if method == "signal" then
-				draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
-				-- every event the card can listen to: its button, the card itself, and the label's parent
-				local fired = false;
-				for _, t2 in ipairs({ choice.button, choice.root, choice.tierLabel and choice.tierLabel.Parent }) do
-					if t2 then
-						if r.fireAll then fired = (r.fireAll(t2)) or fired; end;
-						fired = inp.clickGui(t2) or fired;
-					end;
-				end;
-				return false;
-			elseif method == "vim" then
-				draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
+		draft.attempts = draft.attempts + 1;
+		draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
+		local useVim = draft.attempts >= 3 and VIMr ~= nil;
+		local useMouse = draft.attempts >= 6 and Q.background ~= true and inp.focused();
+		local function press(obj)
+			if not obj then return; end;
+			if r.fireAll then pcall(r.fireAll, obj); end;
+			pcall(inp.clickGui, obj);
+			if useVim then
+				local _, _, vx, vy = guiPoint(obj);
+				pcall(VIMr.SendMouseMoveEvent, VIMr, vx, vy, game);
 				pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, true, game, 0);
-				task.delay(.05, function() pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, false, game, 0); end);
-				return false;
+				pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, false, game, 0);
 			end;
-			MQ.bx, MQ.by = mx, my;
-			MQ.phase, MQ.t = "move", now;
-		end;
-		if MQ.phase == "move" then
-			DQ(MQ.bx, MQ.by, now);
-			local there = math.abs(KQ.X - MQ.bx) <= 6 and math.abs(KQ.Y - MQ.by) <= 6;
-			if there and now - MQ.t >= .08 then
-				draft.ourClickAt = now;
+			if useMouse then
+				local _, _, vx, vy = guiPoint(obj);
+				inp.mouseMove(math.floor(vx + .5), math.floor(vy + .5));
 				inp.mouseDown();
-				MQ.phase, MQ.t = "down", now;
-			elseif now - MQ.t > 1 then
-				MQ.phase = "idle";
+				inp.mouseUp();
 			end;
-		elseif MQ.phase == "down" and now - MQ.t >= .06 then
-			inp.mouseUp();
-			draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
-			MQ.phase, MQ.t = "idle", now;
 		end;
-		return true;
+		press(hit);
+		draft.method = useMouse and "mouse" or (useVim and "virtual mouse" or "events");
+		task.spawn(function()
+			-- TAKE appears after the card is selected: press it the moment it does
+			for _ = 1, 15 do
+				if not draft or draft.picked then return; end;
+				if action and action.Parent and action.Visible then break; end;
+				task.wait(.02);
+			end;
+			if action and action.Parent and (action.Visible or draft.attempts >= 2) then
+				press(action);
+				if draft then draft.ourClickAt = d(); end;
+			end;
+		end);
+		return false;
 	end;
 
 	-- ---------------------------------------------------------------- run tracking
@@ -4518,6 +4519,11 @@ local indexAPI = (function()
 	brain.you = type(brain.you) == "table" and brain.you or {};
 	brain.lifetime = type(brain.lifetime) == "table" and brain.lifetime or {};
 	brain.gear = type(brain.gear) == "table" and brain.gear or {};
+	if (tonumber(brain.cleanV) or 0) == 2 then
+		-- v3.9 sources all started with a hidden template row (FIELD STONE): rebuild the source table
+		brain.cleanV = 3;
+		brain.sources = {};
+	end;
 	if (tonumber(brain.cleanV) or 0) < 2 then
 		-- v3.6 read the Stats panels badly and logged index-screen labels as drops: start those fresh
 		brain.cleanV = 2;
@@ -4686,7 +4692,7 @@ local indexAPI = (function()
 		end;
 		local vx, vy = centerOf(btn or obj);
 		local focusedNow = inp.focused();
-		if VIMx and (focusedNow or Q.background == true) then
+		if VIMx then
 			pcall(VIMx.SendMouseMoveEvent, VIMx, vx, vy, game);
 			task.wait(.05);
 			pcall(VIMx.SendMouseButtonEvent, VIMx, vx, vy, 0, true, game, 0);
@@ -4710,11 +4716,20 @@ local indexAPI = (function()
 		return #tabLabels("RACES") > 0 or #tabLabels("BACKPACK") > 0;
 	end;
 	local function pressT()
-		if not (Q.background == true or inp.focused()) then return false; end;
-		inp.key(84, true);
-		task.wait(.06);
-		inp.key(84, false);
-		return true;
+		if Q.background == true or inp.focused() then
+			inp.key(84, true);
+			task.wait(.06);
+			inp.key(84, false);
+			return true;
+		end;
+		-- tabbed out: send T straight to the game (never to whatever window you're using)
+		local ok = false;
+		if VIMx then
+			ok = pcall(VIMx.SendKeyEvent, VIMx, true, Enum.KeyCode.T, false, game);
+			task.wait(.06);
+			pcall(VIMx.SendKeyEvent, VIMx, false, Enum.KeyCode.T, false, game);
+		end;
+		return ok;
 	end;
 	-- click a bottom tab and wait until that window's title is showing
 	local function openTab(name)
@@ -4863,52 +4878,68 @@ local indexAPI = (function()
 		if not header then return false; end;
 		local key = tostring(entry.name):upper();
 		local rec = type(brain.index[key]) == "table" and brain.index[key] or {};
-		-- header info: "COMMON ORE", "1 IN 6", "MINED 5,246 TIMES"
-		local panel = sizedAncestor(header.o, 200, 200) or win;
-		for _, L in ipairs(labelsIn(panel)) do
-			if not L.o:IsDescendantOf(grid) then
-				if L.t:match("^%u+%s+%u+$") and TIERS[L.t:match("^(%u+)")] then rec.tier = L.raw; end;
-				local mined = L.t:match("MINED%s+([%d,]+)");
-				if mined then rec.mined = numOf(mined); end;
+		-- Description > Info { Title, RarityLine "COMMON ORE", TierLine "1 IN 2", FigureLine "MINED 9,631 TIMES",
+		--   Flavour, Attributes, Stat (composition %), Sources (ScrollingFrame) > Row { Source, Area, Odds } }
+		local info = header.o.Parent;
+		local function field(n)
+			local f = info and info:FindFirstChild(n);
+			return f and f:IsA("TextLabel") and trim(txt(f)) or nil;
+		end;
+		rec.tier = field("RarityLine") or rec.tier;
+		local fig = field("FigureLine");
+		if fig then
+			rec.figure = fig;
+			rec.mined = numOf(fig:upper():match("([%d,]+)")) or rec.mined;
+		end;
+		local flavour = field("Flavour");
+		if flavour and flavour ~= "" then rec.flavour = flavour; end;
+		-- extra lines (attributes / composition) when the game shows them
+		local extra = {};
+		for _, f in ipairs(info and info:GetChildren() or {}) do
+			if f:IsA("Frame") and f.Visible and (f.Name == "Attributes" or f.Name == "Stat") then
+				local text = joined(f);
+				if text ~= "" then extra[#extra + 1] = text; end;
 			end;
 		end;
-		-- sources list: scroll it to the end and read every row
-		local list;
-		for _, sf in ipairs(scrollers(win)) do
-			if sf ~= grid and not sf:IsDescendantOf(grid) then list = sf; break; end;
+		if #extra > 0 then rec.extra = extra; end;
+		local list = info and info:FindFirstChild("Sources");
+		if not (list and list:IsA("ScrollingFrame")) then
+			for _, sf in ipairs(scrollers(win)) do
+				if sf ~= grid and not sf:IsDescendantOf(grid) then list = sf; break; end;
+			end;
 		end;
 		local sources, seen = {}, {};
 		local function readRows()
-			local root = list or panel;
-			for _, row in ipairs(root:GetDescendants()) do
-				if row:IsA("GuiObject") and not isText(row) and row.AbsoluteSize.Y <= 80 then
-					local text, ls = joined(row);
-					local odds = oddsIn(text);
-					local direct = 0;
-					for _, c in ipairs(row:GetChildren()) do if isText(c) then direct = direct + 1; end; end;
-					if odds and direct >= 2 then
-						local nameL, zoneL;
+			if not list then return; end;
+			for _, row in ipairs(list:GetChildren()) do
+				-- skip the hidden "SourceRow" template (that was the bogus FIELD STONE in every item)
+				if row:IsA("GuiObject") and row.Visible and row.Name ~= "SourceRow" then
+					local srcL, areaL, oddsL = row:FindFirstChild("Source"), row:FindFirstChild("Area"), row:FindFirstChild("Odds");
+					local name = srcL and trim(txt(srcL));
+					local oddsText = oddsL and trim(txt(oddsL)) or "";
+					if not name then
+						local text, ls = joined(row);
 						for _, L in ipairs(ls) do
-							if L.t:match("%a") and not L.t:find("1%s+IN") then
-								if not nameL then nameL = L; elseif not zoneL then zoneL = L; end;
-							end;
+							if L.t:match("%a") and not L.t:find("1%s+IN") then name = L.raw; break; end;
 						end;
-						if nameL and nameL.t ~= key and not seen[nameL.t] then
-							seen[nameL.t] = true;
-							sources[#sources + 1] = { name = nameL.raw, zone = zoneL and zoneL.raw, odds = odds };
-						end;
+						oddsText = text;
+					end;
+					local odds = oddsIn(oddsText);
+					local hi = tonumber((tostring(oddsText):upper():match("%-%s*1%s+IN%s+([%d,%.]+)") or ""):gsub(",", ""));
+					if name and name ~= "" and odds and not seen[name:upper() .. (areaL and txt(areaL) or "")] then
+						seen[name:upper() .. (areaL and txt(areaL) or "")] = true;
+						sources[#sources + 1] = { name = name, zone = areaL and trim(txt(areaL)) or nil, odds = odds, oddsBest = hi, oddsText = oddsText };
 					end;
 				end;
 			end;
 		end;
-		if list then scrollThrough(list, readRows, .25); else readRows(); end;
-		rec.name, rec.odds, rec.zone, rec.found = entry.name, entry.odds, entry.zone or rec.zone, true;
-		rec.sources, rec.studied = sources, os.time();
+		if list then scrollThrough(list, readRows, .25); end;
+		rec.name, rec.odds, rec.zone, rec.found = entry.name, entry.odds or oddsIn(field("TierLine")), entry.zone or rec.zone, true;
+		rec.sources, rec.studied, rec.sv = sources, os.time(), 3;
 		brain.index[key] = rec;
 		for _, sv in ipairs(sources) do
-			local sk = sv.name:upper();
-			local srec = type(brain.sources[sk]) == "table" and brain.sources[sk] or { name = sv.name, drops = {} };
-			srec.zone = sv.zone or srec.zone;
+			local sk = sv.name:upper() .. (sv.zone and (" | " .. sv.zone:upper()) or "");
+			local srec = type(brain.sources[sk]) == "table" and brain.sources[sk] or { name = sv.name, zone = sv.zone, drops = {} };
 			srec.drops = type(srec.drops) == "table" and srec.drops or {};
 			srec.drops[key] = sv.odds;
 			brain.sources[sk] = srec;
@@ -4945,7 +4976,7 @@ local indexAPI = (function()
 			for _, b in ipairs(order) do
 				local e = tiles[b];
 				local rec = brain.index[e.found and e.name:upper() or ""];
-				if e.found and not (type(rec) == "table" and rec.studied) then
+				if e.found and not (type(rec) == "table" and rec.studied and rec.sv == 3) then
 					if run.active or relicAPI.hasDraft() or not findWindow("INDEX") then break; end;
 					-- bring the item into view, click it, give the details time to load
 					local offset = e.tile.AbsolutePosition.Y - grid.AbsolutePosition.Y + grid.CanvasPosition.Y;
@@ -5084,7 +5115,17 @@ local indexAPI = (function()
 					return;
 				end;
 				opened = true;
-				if not waitFor(menuOpen, 3) then summary.noMenu = true; return; end;
+				if not waitFor(menuOpen, 2) then
+					-- backup: click the backpack button on the hotbar (the slot labelled T)
+					local pg = pgui();
+					for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+						if isText(o) and trim(txt(o)):upper() == "T" and shown(o) and not menuOpen() then
+							local slot = o:FindFirstAncestorWhichIsA("GuiButton") or o.Parent;
+							if slot then clickVerified(slot, menuOpen, "backpack button"); end;
+						end;
+					end;
+				end;
+				if not waitFor(menuOpen, 2) then summary.noMenu = true; return; end;
 			end;
 			task.wait(.5);
 			dumpMenu();
@@ -5871,7 +5912,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v3.9 | Brain",
+		Title = "Delve v4.0 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

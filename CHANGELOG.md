@@ -1,6 +1,19 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v3.9 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.0 | Brain`).
+
+## v4.0: Instant relic picks, works tabbed out, clean Index sources
+**Fixed**
+- **Relics weren't taken.** The relic layout file shows each card has two buttons: `Hit` (the whole card) and `Action` (a **TAKE** button that stays hidden until the card is selected). v3.9 clicked the hidden TAKE button. It now clicks `Hit`, then presses TAKE the moment it appears.
+- **"FIELD STONE 1 in 1.4" listed under every Index item.** That was a hidden template row (`SourceRow`) in the sources list. Only the real `Row`s are read now (`Source`, `Area`, `Odds`), including ranges like "1 IN 2 - 1 IN 1". The source table is rebuilt and every item is studied again once.
+
+**Changed**
+- **Relic picks are instant.** No delay and no waiting for the cards to stop moving. If the draft is still open, it retries every 0.35 s and adds a virtual mouse click from the 3rd try. The real mouse is only used from the 6th try, and only while Roblox is focused.
+- **Works while Roblox isn't focused.** Relic picks, menu tabs and Index items use direct click events and the virtual mouse, which go straight to the game. When tabbed out, the T menu is opened with a virtual key press sent to Roblox only (never to the window you're using). If that doesn't work, it clicks the backpack button on the hotbar.
+- **Card reading uses the real fields:** Title, Tier, Bonus, Stat, Archetype ("ECHO SET 0/5") and Note.
+- **More Index detail saved:** rarity line, mined count, flavour text, attributes and composition lines when shown.
+
+**Confirmed from the v3.9 run:** all 177 found Index items were studied, with sources for each (for example Drake Gold 1 in 260: Dragon's Hoard 1 in 40, Ash Rock 1 in 1000, The Elder Dragon 1 in 6.8…), plus all 12 zones, 27 Your Stats and 46 Lifetime stats.
 
 ## v3.9: Reads every Index item, real relic clicks
 **Fixed**
