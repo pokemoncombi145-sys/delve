@@ -1,6 +1,16 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.6.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.7 | Brain`).
+
+## v4.7: Smarter relic priorities
+- **Reads ACTIVE BUFFS** (right side of the screen) during runs: sets in progress ("1/4 STORM", "1/5 FROST") and the effects you already have.
+- **Relic order of importance:**
+  1. **Second chance** (revive, cheat death, survive a fatal hit, extra life…): big bonus when you don't have one yet, small one if you already do.
+  2. **Weapon power, mine power, swing / attack speed:** 1.6x weight.
+  3. **Survivability and more time** (max health, damage taken, heals, shields, rows of time, slower collapse): 1.35x weight.
+- **Builds your sets:** a relic from a set already on the right side gets a bonus that grows with progress, plus a large bonus when it completes the set.
+- Everything learned from past runs (how each relic, combo and effect did) still adds on top.
+- Fixed: hidden leftover text on relic cards (e.g. a hidden "+30%") was counted as an effect, and set labels like "ASSASSIN 2/2" weren't read.
 
 ## v4.6.1: Tool switching fixed
 - **Fixed: it stopped switching between pickaxe and sword** (stood at ores holding the sword, at mobs holding the pickaxe). The v4.5 attack-roll code reused the name of the tool-switch function, so the tool switch never ran. Renamed; switching works again.

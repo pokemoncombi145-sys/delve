@@ -2756,11 +2756,16 @@ local relicAPI = (function()
 			c.name = trim(txt(titleL));
 			c.desc = {};
 			for _, L in ipairs({ bonusL, statL }) do
-				if L and L:IsA("TextLabel") and trim(txt(L)) ~= "" then c.desc[#c.desc + 1] = trim(txt(L)); end;
+				-- hidden labels hold leftovers from other cards: skip them
+				if L and L:IsA("TextLabel") and L.Visible and trim(txt(L)) ~= "" then c.desc[#c.desc + 1] = trim(txt(L)); end;
 			end;
-			local at = archL and trim(txt(archL)):upper() or "";
-			local sn, sp, sN = at:match("^(.-)%s*SET%s+(%d+)%s*/%s*(%d+)");
-			if sn then c.setName, c.setP, c.setN = trim(sn), tonumber(sp), tonumber(sN); end;
+			c.setName, c.setP, c.setN = nil, nil, nil;
+			if archL and archL.Visible then
+				local at = trim(txt(archL)):upper();
+				local sn, sp, sN = at:match("^(.-)%s*SET%s+(%d+)%s*/%s*(%d+)");
+				if not sn then sn, sp, sN = at:match("^(.-)%s+(%d+)%s*/%s*(%d+)$"); end;
+				if sn and trim(sn) ~= "" then c.setName, c.setP, c.setN = trim(sn), tonumber(sp), tonumber(sN); end;
+			end;
 			local note = root:FindFirstChild("Note");
 			local nu = note and trim(txt(note)):upper() or "";
 			c.taken = nu:find("TAKEN") ~= nil or nu:find("SOLD") ~= nil or nu:find("OWNED") ~= nil or nu:find("BOUGHT") ~= nil;
@@ -2883,6 +2888,24 @@ local relicAPI = (function()
 		if n < 2 then return nil, n; end;
 		return math.max(-2, math.min(2, (tonumber(m.zsum) or 0) / n)), n;
 	end;
+	-- what matters most in a delve, in order:
+	--   1. a second chance (revive / survive a fatal hit) when you don't have one yet: saves the run
+	--   2. weapon power, mine power, swing / attack speed (the build)
+	--   3. survivability and more time on the floor
+	-- plus finishing sets already started (read from ACTIVE BUFFS), and everything learned from past runs.
+	r.prio = {
+		life = { "SECOND CHANCE", "SECOND LIFE", "EXTRA LIFE", "REVIVE", "RESURRECT", "CHEAT DEATH", "FATAL", "INSTEAD OF DYING",
+			"WOULD DIE", "ON DEATH", "WHEN YOU DIE", "LAST STAND", "UNDYING", "PHOENIX", "SAVE THE RUN", "SAVES THE RUN", "SURVIVE A" },
+		power = { "WEAPON POWER", "MINE POWER", "MINING POWER", "SWING SPEED", "ATTACK SPEED", "MINE SPEED", "MINING SPEED",
+			"STRIKE TWICE", "STRIKES TWICE", "SWINGS", "SWING" },
+		time = { "ROWS OF TIME", "OF TIME", "EXTRA TIME", "MORE TIME", "TIMER", "SECONDS", "COLLAPSE", "LONGER" },
+		has = function(u, list)
+			for _, w in ipairs(list) do
+				if u:find(w, 1, true) then return true; end;
+			end;
+			return false;
+		end,
+	};
 	local function scoreCard(c)
 		local parts = {};
 		if c.taken then return -1e6, { "taken" }, {}; end;
@@ -2902,16 +2925,39 @@ local relicAPI = (function()
 					parts[#parts + 1] = string.format("effect learned %+.0f", adj);
 				end;
 			end;
+			local uc = " " .. cl:upper() .. " ";
 			if v ~= 0 then
 				local w = catWeight(cat);
-				total = total + v * w;
+				local pm, tag = 1, cat or "other";
+				if r.prio.has(uc, r.prio.power) then
+					pm, tag = 1.6, "power/speed";
+				elseif cat == "survival" or r.prio.has(uc, r.prio.time) then
+					pm, tag = 1.35, "survival/time";
+				end;
+				total = total + v * w * pm;
 				if cat then cats[cat] = true; end;
 				effects[#effects + 1] = { cat = cat or "other", v = v, text = trim(cl) };
-				parts[#parts + 1] = string.format("%s %+.0f", cat or "other", v * w);
+				parts[#parts + 1] = string.format("%s %+.0f", tag, v * w * pm);
 			end;
+			if r.prio.has(uc, r.prio.life) and not uc:find("ENEM", 1, true) then c.life = true; end;
 		end;
 		c.effects = effects;
-		if c.setN and c.setN > 0 and c.setP then
+		if c.life then
+			-- 1st priority: a second chance, unless you already carry one
+			local lb = (run.hasLife or run.hasLifeBuff) and 60 or 300;
+			total = total + lb;
+			cats.survival = true;
+			parts[#parts + 1] = string.format("second chance %+d", lb);
+		end;
+		-- sets already in progress on the right side of the screen
+		local prog = c.setName and type(run.buffSets) == "table" and run.buffSets[c.setName:upper()];
+		if prog and prog.need and prog.need > 0 then
+			local after = math.min(prog.need, (prog.have or 0) + 1);
+			local sb2 = 20 + 50 * (after / prog.need);
+			if after >= prog.need and (prog.have or 0) < prog.need then sb2 = sb2 + 80; end;
+			total = total + sb2;
+			parts[#parts + 1] = string.format("builds %s %d/%d %+.0f", c.setName, after, prog.need, sb2);
+		elseif c.setN and c.setN > 0 and c.setP then
 			local sb = 10 + 30 * (c.setP / c.setN);
 			if c.setP == c.setN - 1 then sb = sb + 60; end;
 			local hist = brain.sets[tostring(c.setName)];
@@ -3033,6 +3079,7 @@ local relicAPI = (function()
 			rec.picks = (tonumber(rec.picks) or 0) + 1;
 			if draft.userPicked then rec.user = (tonumber(rec.user) or 0) + 1; end;
 			run.relics[#run.relics + 1] = { key = picked.key, cats = picked.cats or {} };
+			if picked.life then run.hasLife = true; end;
 			if picked.setName then
 				brain.sets[picked.setName] = (tonumber(brain.sets[picked.setName]) or 0) + 1;
 			end;
@@ -3514,6 +3561,7 @@ local relicAPI = (function()
 						if u:find("WAVE%s*%d") then hud.wave = o; end;
 						if u == "DELVE" then hud.delve = o; end;
 						if u:find("BOSS") and #u <= 40 then hud.boss = o; end;
+						if u == "ACTIVE BUFFS" then hud.buffs = o; end;
 					end;
 				end;
 			end;
@@ -3530,6 +3578,30 @@ local relicAPI = (function()
 			run.stage = trim(wt:match("WAVE%s*%d+%s*[%-:]%s*(.+)$") or "");
 		end;
 		if hud.delve and hud.delve.Parent and shown(hud.delve) then run.isDelve = true; end;
+		-- ACTIVE BUFFS: "1/4 STORM" = a set in progress, other lines = effects you already have
+		if hud.buffs and hud.buffs.Parent and now - (hud.buffsAt or -1e9) > 2 then
+			hud.buffsAt = now;
+			local sets, lines = {}, {};
+			for _, o in ipairs(hud.buffs.Parent:GetDescendants()) do
+				if o:IsA("TextLabel") and o ~= hud.buffs and o.Visible then
+					local u = trim(txt(o)):upper();
+					if u ~= "" then
+						local have, need, nm = u:match("^(%d+)%s*/%s*(%d+)%s+(.+)$");
+						if have then
+							sets[trim(nm)] = { have = tonumber(have), need = tonumber(need) };
+						else
+							lines[#lines + 1] = u;
+						end;
+					end;
+				end;
+			end;
+			run.buffSets, run.buffLines = sets, lines;
+			local life = false;
+			for _, u in ipairs(lines) do
+				if r.prio and r.prio.has(" " .. u .. " ", r.prio.life) then life = true; end;
+			end;
+			run.hasLifeBuff = life;
+		end;
 		-- floor timer: under the danger time it stops chasing mobs (unless the floor needs them dead)
 		run.timeLeft = nil;
 		if hud.timer and hud.timer.Parent and shown(hud.timer) then
@@ -3595,6 +3667,7 @@ local relicAPI = (function()
 		run.combatT, run.mineT = 0, 0;
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
 		run.timeLeft, run.inDanger, run.dangerCount, run.objective, run.rareSeen = nil, false, 0, "", {};
+		run.buffSets, run.buffLines, run.hasLifeBuff, run.hasLife = {}, {}, false, false;
 		run.cash0 = cashNow();
 		run.cashExact0 = exactCash(now);
 		run.level0 = leaderRead().level;
@@ -6675,7 +6748,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.6.1 | Brain",
+		Title = "Delve v4.7 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
