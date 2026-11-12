@@ -1,6 +1,9 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.7.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.8 | Brain`).
+
+## v5.8: Scan notices
+- Everything that takes a while now pops up "... in progress" when it starts and "... finished in 12.3 s" (or "1m 05s") with a short result when it ends: the Index/Stats/Equipment/Races scan, the per-load race check ("2 of 3 sets confirmed"), selling ores ("Sold +$1,733,355,148") and the mining stats scan you start yourself. Durations are also written to the reasoning log. Quiet automatic re-reads during runs stay quiet.
 
 ## v5.7.1: Race details captured once
 - During the race check, a race's perks are read only the first time it's worn; races already captured are skipped (logged as "perks already known").

@@ -241,6 +241,17 @@ r.why = function(kind, text)
 		elseif type(writefile) == "function" then writefile("DelveReasoning.txt", line .. "\n"); end;
 	end);
 end;
+-- scan notices: tell the user when something that takes a while starts and how long it took
+r.scanStart = function(label)
+	notify(tostring(label) .. " in progress…", "Delve scan");
+	return (type(os) == "table" and os.clock or tick)();
+end;
+r.scanEnd = function(label, t0, detail)
+	local secs = (type(os) == "table" and os.clock or tick)() - (t0 or 0);
+	local took = secs >= 60 and string.format("%dm %02ds", math.floor(secs / 60), math.floor(secs % 60)) or string.format("%.1f s", secs);
+	notify(string.format("%s finished in %s.%s", tostring(label), took, detail and (" " .. tostring(detail)) or ""), "Delve scan");
+	if r.why then r.why("scan", string.format("%s took %s", tostring(label), took)); end;
+end;
 r.saveSettings = function(force)
 	if type(writefile) ~= "function" then return; end;
 	local copy = {};
@@ -2430,6 +2441,7 @@ local function zQ()
 	if Q.autoStats == false then
 		return;
 	end;
+	local statT0 = not qQ and r.scanStart("Mining stats scan") or nil;
 	lQ = d();
 	r.statsFound = false;
 	local ok, objects = pcall(getgc, true);
@@ -2460,9 +2472,9 @@ local function zQ()
 		dQ();
 	end;
 	if r.statsFound and not qQ then
-		notify(string.format("radius %.2f  reach %.2f", Q.radius, Q.reach), "delve stats", 4);
+		if statT0 then r.scanEnd("Mining stats scan", statT0, string.format("Radius %.2f, reach %.2f.", Q.radius, Q.reach)); end;
 	elseif not qQ then
-		notify("No unambiguous mining stats found. Current radius and reach kept.", "delve stats", 4);
+		r.scanEnd("Mining stats scan", statT0, "No clear mining stats found; radius and reach kept.");
 	end;
 end;
 local xQ = nil;
@@ -6443,6 +6455,7 @@ local indexAPI = (function()
 		if busy then return; end;
 		busy = true;
 		r.scanning = true;
+		r.scanT0 = r.scanStart("Index, Stats and Equipment scan");
 		if r.win and r.win.Close then pcall(r.win.Close); end;
 		task.wait(.3);
 		local summary = {};
@@ -6513,10 +6526,10 @@ local indexAPI = (function()
 		done = true;
 		brain.runsAtScan = tonumber(brain.runCount) or 0;
 		local t = brain.indexTotals;
-		notify(string.format("Scan done%s. Index %s, %d items read, %d new studied, %d already known (skipped). %d stats read.%s Scanning stops now.",
-			reason and (" (" .. reason .. ")") or "", t and (t.found .. "/" .. t.total) or "?",
+		r.scanEnd("Index, Stats and Equipment scan", r.scanT0, string.format("%sIndex %s, %d items read, %d new studied, %d already known (skipped). %d stats read.%s",
+			reason and ("(" .. reason .. ") ") or "", t and (t.found .. "/" .. t.total) or "?",
 			summary.entries or 0, summary.studied or 0, r.indexSkipped or 0, summary.stats or 0,
-			summary.failed and (" Couldn't open:" .. summary.failed .. ".") or ""), "Delve index");
+			summary.failed and (" Couldn't open:" .. summary.failed .. ".") or ""));
 	end;
 	-- ---------------------------------------------------------------- gear memory (cheap, no GUI)
 	local gear = {};
@@ -7108,6 +7121,7 @@ local indexAPI = (function()
 	-- sell ores with set 3, then back to set 1
 	function lo.sell(reason)
 		if run.active or inRun() or r.loadoutBusy then return false; end;
+		local sellT0 = r.scanStart("Selling ores (set 3)");
 		lo.switch(3, "selling");
 		r.loadoutBusy, r.scanning = true, true;
 		local gained;
@@ -7199,6 +7213,7 @@ local indexAPI = (function()
 			notify("Sell error: " .. tostring(err), "Delve gear");
 		end;
 		lo.switch(1, "back to mining after selling");
+		r.scanEnd("Selling ores", sellT0, gained and ("Sold " .. tostring(gained) .. ".") or "Nothing sold.");
 		return gained ~= nil;
 	end;
 	-- when to use which set
@@ -7229,10 +7244,13 @@ local indexAPI = (function()
 			task.spawn(function()
 				if CFG.autoRace ~= false then
 					-- once per load: each set wears the race picked for it (the game keeps the race with the set)
+					local t0 = r.scanStart("Race check for sets 1-3");
+					local okN = 0;
 					for n = 1, 3 do
 						local race = lo.raceOf(n);
-						if race and lo.switch(n, "race check") then lo.setRace(race, "set " .. n); end;
+						if race and lo.switch(n, "race check") and lo.setRace(race, "set " .. n) then okN = okN + 1; end;
 					end;
+					r.scanEnd("Race check", t0, string.format("%d of 3 sets confirmed.", okN));
 				end;
 				lo.switch(1, "ready to run");
 				lo.raceChecked = true;
@@ -8130,7 +8148,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.7.1 | Brain",
+		Title = "Delve v5.8 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
