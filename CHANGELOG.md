@@ -1,6 +1,16 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.0 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.1 | Brain`).
+
+## v5.1: Pillars and chests (from the v5.0 logs)
+**What the logs showed:** every "detour" around a pillar was 1 tile long (it aimed a few studs ahead instead of at the chest/ore), so it walked straight back into the same pillar up to 8 times in a row. The mining-stat re-read also fired every 2-3 s because buff counters like "BLOODRUSH 3/10" kept changing, which caused the "Delve stats" pop-up spam.
+
+**Fixed**
+- **Pillars are mapped per floor.** When a floor loads it finds the tall solid parts standing on it (pillars, posts, stalls) and blocks their tiles for the whole floor. Chests, ores, rocks and mobs are never blocked.
+- **Walking to chests and ores routes around pillars.** If a blocked tile is on the straight line, it follows a path over the floor tiles to the actual chest or ore.
+- **If it still gets stuck,** it finds the exact part in the way, blocks it for the rest of the floor and routes to the real target (not a point a few studs ahead).
+- **Chests after a fight:** chest walking uses the same pillar-aware route, so it reaches the chest after the boss/mobs die.
+- Mining range is re-read only when a range/radius/reach buff actually changes, and the "Delve stats" pop-up no longer shows for those automatic re-reads.
 
 ## v5.0: Boss study, reasoning log, unsticking, live ranges
 **Boss study (live)**

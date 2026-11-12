@@ -2427,7 +2427,7 @@ local function zQ()
 	if dQ then
 		dQ();
 	end;
-	if r.statsFound then
+	if r.statsFound and not qQ then
 		notify(string.format("radius %.2f  reach %.2f", Q.radius, Q.reach), "delve stats", 4);
 	elseif not qQ then
 		notify("No unambiguous mining stats found. Current radius and reach kept.", "delve stats", 4);
@@ -3802,7 +3802,12 @@ local relicAPI = (function()
 				end;
 			end;
 			run.buffSets, run.buffLines = sets, lines;
-			local bsig = table.concat(lines, "|");
+			-- only lines about range/radius/reach (counters like "BLOODRUSH 3/10" change all the time)
+			local rl = {};
+			for _, u in ipairs(lines) do
+				if u:find("RANGE", 1, true) or u:find("RADIUS", 1, true) or u:find("REACH", 1, true) then rl[#rl + 1] = u; end;
+			end;
+			local bsig = table.concat(rl, "|");
 			if run.buffSig and bsig ~= run.buffSig and r.readStats and CFG.autoStats ~= false then
 				pcall(r.readStats, true);
 				if r.why then r.why("mine", "buffs changed: re-reading mining range and radius from the game"); end;
@@ -4469,6 +4474,8 @@ local function navBuild()
 		end;
 	end;
 	nav.map, nav.open = map, open;
+	-- new floor: find the pillars on it right away
+	task.defer(function() pcall(nav.scanPillars); end);
 	return true;
 end;
 local function navCellAt(x, z)
@@ -4519,6 +4526,80 @@ function nav.pop(h)
 		end;
 	end;
 	return top[1], top[2];
+end;
+-- PILLARS: tall solid parts standing on the floor. Their tiles are blocked for the whole floor,
+-- so walking (to ores, chests, mobs) routes around them instead of pushing into them.
+function nav.floorY()
+	local ch = l.Character;
+	local hrp = ch and ch:FindFirstChild("HumanoidRootPart");
+	local hum = ch and ch:FindFirstChildOfClass("Humanoid");
+	if not hrp then return nil, nil; end;
+	return hrp.Position.Y - (hum and hum.HipHeight or 2) - hrp.Size.Y / 2, hrp;
+end;
+function nav.isObstacle(part, floorY)
+	if not part:IsA("BasePart") or not part.CanCollide or part.Transparency >= .95 then return false; end;
+	local sz, pos = part.Size, part.Position;
+	local foot = math.max(sz.X, sz.Z);
+	if foot < .8 or foot > 14 then return false; end;
+	if pos.Y + sz.Y / 2 < floorY + 5.5 or pos.Y - sz.Y / 2 > floorY + 2.5 then return false; end;
+	local a = part.Parent;
+	for _ = 1, 4 do
+		if not a or a == workspace then break; end;
+		if a:FindFirstChildOfClass("Humanoid") then return false; end;
+		local n = a.Name:upper();
+		if n:find("CHEST", 1, true) or n:find("ORE", 1, true) or n:find("ROCK", 1, true) or n:find("DROP", 1, true) or n:find("LOOT", 1, true) then
+			return false;
+		end;
+		a = a.Parent;
+	end;
+	return true;
+end;
+function nav.blockPart(part, untilT)
+	local pos, sz = part.Position, part.Size;
+	local h = math.max(sz.X, sz.Z) / 2 + 1 + nav.cell * .25;
+	local n = 0;
+	for key, t in pairs(nav.map or {}) do
+		if math.abs(t.wx - pos.X) < h and math.abs(t.wz - pos.Z) < h then
+			nav.blocked[key] = math.max(nav.blocked[key] or 0, untilT);
+			n = n + 1;
+		end;
+	end;
+	return n;
+end;
+function nav.scanPillars()
+	if not navBuild() then return 0; end;
+	local floorY, hrp = nav.floorY();
+	if not floorY then return 0; end;
+	local minx, maxx, minz, maxz = math.huge, -math.huge, math.huge, -math.huge;
+	for _, t in pairs(nav.map) do
+		minx, maxx = math.min(minx, t.wx), math.max(maxx, t.wx);
+		minz, maxz = math.min(minz, t.wz), math.max(maxz, t.wz);
+	end;
+	if minx == math.huge then return 0; end;
+	local op = OverlapParams.new();
+	op.FilterType = Enum.RaycastFilterType.Exclude;
+	op.FilterDescendantsInstances = { l.Character };
+	local parts = workspace:GetPartBoundsInBox(CFrame.new((minx + maxx) / 2, floorY + 6, (minz + maxz) / 2),
+		Vector3.new(maxx - minx + 8, 10, maxz - minz + 8), op);
+	local found = 0;
+	for _, part in ipairs(parts) do
+		if nav.isObstacle(part, floorY) and nav.blockPart(part, math.huge) > 0 then found = found + 1; end;
+	end;
+	if found > 0 and r.why then r.why("move", string.format("floor mapped: %d pillars/obstacles blocked off", found)); end;
+	return found;
+end;
+-- right where it got stuck
+function nav.blockNear(x, z, untilT)
+	local floorY = nav.floorY();
+	if not floorY or not navBuild() then return 0; end;
+	local op = OverlapParams.new();
+	op.FilterType = Enum.RaycastFilterType.Exclude;
+	op.FilterDescendantsInstances = { l.Character };
+	local found = 0;
+	for _, part in ipairs(workspace:GetPartBoundsInRadius(Vector3.new(x, floorY + 3, z), 3.5, op)) do
+		if nav.isObstacle(part, floorY) and nav.blockPart(part, untilT) > 0 then found = found + 1; end;
+	end;
+	return found;
 end;
 -- shortest walk over the floor tiles from A to B, going around tiles marked blocked (pillars, walls)
 local function navRoute(px, pz, gx, gz, now)
@@ -4572,6 +4653,33 @@ local function navRoute(px, pz, gx, gz, now)
 	return path;
 end;
 r.navRoute = navRoute;
+r.steerDir = function(pos, tx, tz)
+	local now = d();
+	local dx, dz = tx - pos.X, tz - pos.Z;
+	r.steerGoal = { x = tx, z = tz, t = now };
+	local len = math.sqrt(dx * dx + dz * dz);
+	if len < 1.5 or not navBuild() then return dx, dz; end;
+	local hit = false;
+	local step = nav.cell * .5;
+	for k = step, len, step do
+		local cx, cz = navCellAt(pos.X + dx / len * k, pos.Z + dz / len * k);
+		if cx and (nav.blocked[cx * 4096 + cz] or 0) > now then hit = true; break; end;
+	end;
+	if not hit then r.steerPath = nil; return dx, dz; end;
+	local sp = r.steerPath;
+	if not sp or math.abs(sp.tx - tx) > 1 or math.abs(sp.tz - tz) > 1 or now - sp.at > 1.5 then
+		sp = { tx = tx, tz = tz, at = now, path = navRoute(pos.X, pos.Z, tx, tz, now), i = 1 };
+		r.steerPath = sp;
+	end;
+	if not sp.path then return dx, dz; end;
+	local wp = sp.path[sp.i];
+	while wp and (wp.x - pos.X) ^ 2 + (wp.z - pos.Z) ^ 2 < 2.25 do
+		sp.i = sp.i + 1;
+		wp = sp.path[sp.i];
+	end;
+	if not wp then return dx, dz; end;
+	return wp.x - pos.X, wp.z - pos.Z;
+end;
 local function navEscape(px, pz, zones, now)
 	if CFG.smartEscape == false or not navBuild() then return nil; end;
 	local map, open, cell = nav.map, nav.open, nav.cell;
@@ -5038,15 +5146,20 @@ local function lh(m)
 				r.lastStuck = { x = G.X, z = G.Z, t = m };
 				local secs = math.min(30, 8 * r.stuckStreak);
 				local ax, az = G.X + dir[1] * nav.cell * .8, G.Z + dir[2] * nav.cell * .8;
-				navBlock(ax, az, m, secs);
-				if r.stuckStreak >= 2 then
+				-- find the actual thing in the way (pillar) and block all of it for the rest of the floor
+				local okN, nObs = pcall(nav.blockNear, G.X + dir[1] * 2, G.Z + dir[2] * 2, math.huge);
+				if not (okN and (nObs or 0) > 0) then navBlock(ax, az, m, secs); end;
+				if r.stuckStreak >= 2 and not (okN and (nObs or 0) > 0) then
 					-- also the tiles beside it: the obstacle is wider than one tile
 					navBlock(ax - dir[2] * nav.cell, az + dir[1] * nav.cell, m, secs);
 					navBlock(ax + dir[2] * nav.cell, az - dir[1] * nav.cell, m, secs);
 				end;
-				local goal = { x = G.X + dir[1] * 18, z = G.Z + dir[2] * 18 };
+				-- route to where it was actually going (chest / ore), not just "a bit ahead"
+				local sg = r.steerGoal;
+				local goal = (sg and m - sg.t < 2) and { x = sg.x, z = sg.z } or { x = G.X + dir[1] * 18, z = G.Z + dir[2] * 18 };
+				r.steerPath = nil;
 				local okR, path = pcall(navRoute, G.X, G.Z, goal.x, goal.z, m);
-				if okR and path and #path >= 1 then
+				if okR and path and #path >= 2 then
 					r.detour = { path = path, i = 1, untilT = m + 4 };
 					f(string.format("stuck (x%d): detour of %d tiles around the obstacle", r.stuckStreak, #path));
 					if r.why then r.why("move", string.format("stuck on an obstacle (x%d), walking around it", r.stuckStreak)); end;
@@ -5222,14 +5335,16 @@ local function lh(m)
 			local Q, e = m.x - G.X, m.z - G.Z;
 			if Q * Q + e * e > 1 then
 				r.chestWalk = true;
-				SQ(Q, e);
+				local okS, sx, sz = pcall(r.steerDir, G, m.x, m.z);
+				if okS and sx then SQ(sx, sz); else SQ(Q, e); end;
 				return;
 			end;
 		end;
 	end;
 	r.chestWalk = false;
 	if WQ == "mine" and ((Q.walk and u)) then
-		SQ(u.X - G.X, u.Z - G.Z);
+		local okS, sx, sz = pcall(r.steerDir, G, u.X, u.Z);
+		if okS and sx then SQ(sx, sz); else SQ(u.X - G.X, u.Z - G.Z); end;
 		return;
 	end;
 	SQ(nil);
@@ -7365,7 +7480,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.0 | Brain",
+		Title = "Delve v5.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
