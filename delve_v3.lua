@@ -119,6 +119,11 @@ local m = {
 		-- brain / learning
 		relicLearn = true,
 		relicExplore = true,
+		autoStage = false,
+		stage = "Delve",
+		stageOther = "",
+		startClosed = true,
+		niceToasts = true,
 		mechNotify = true,
 		dangerTime = 10,
 		forkPath = "Smart",
@@ -141,7 +146,8 @@ local m = {
 		webhookUrl = "",
 		webhookDelay = 1.5,
 		dropWebhook = true,
-		rareDropOdds = 500,
+		rareDropOdds = 100000,
+		attackRoll = "Auto",
 		autoIndexScan = true,
 		scanEveryRuns = 10,
 		rareTopPct = 3,
@@ -202,7 +208,7 @@ do
 					end;
 				elseif m[k] ~= nil and k ~= "feat" and type(v) == type(m[k]) then
 					Q[k] = v;
-				elseif k == "v3Migrated" or k == "bgMigrated" then
+				elseif k == "v3Migrated" or k == "bgMigrated" or k == "rareMigrated" then
 					Q[k] = v;
 				end;
 			end;
@@ -229,6 +235,14 @@ end;
 if not Q.v3Migrated then
 	Q.v3Migrated = true;
 	Q.cardPick = true;
+end;
+-- learning and safety features are built in now (no longer settings): always on
+for _, k in ipairs({ "relicLearn", "dodgeLearn", "smartEscape", "cornerAvoid", "windupLearn", "pingComp", "autoCombatStats" }) do
+	Q[k] = true;
+end;
+if not Q.rareMigrated then
+	Q.rareMigrated = true;
+	Q.rareDropOdds = 100000;
 end;
 if not Q.bgMigrated then
 	Q.bgMigrated = true;
@@ -2156,6 +2170,9 @@ local function NQ(m, G)
 	end;
 end;
 local function SQ(m, G)
+	-- an attack roll is lined up: face the target for a moment so the roll goes into it
+	local fd = r.forceDir;
+	if fd and d() < fd.untilT then m, G = fd.x, fd.z; end;
 	if not m then
 		Pl();
 		return;
@@ -2963,7 +2980,7 @@ local relicAPI = (function()
 		cx.cats = cl;
 		cx.lastScore = math.floor((c.score or 0) + .5);
 		cx.mode = runMode();
-		if isNew and Q.relicCodexNotify ~= false then
+		if isNew and Q.mechNotify ~= false then
 			notify(string.format("New relic learned: %s [%s] -> %s", tostring(c.name), tostring(c.tier),
 				#cl > 0 and table.concat(cl, ", ") or "special effect"), "Delve codex");
 		end;
@@ -3954,9 +3971,72 @@ local function IQ(m)
 		end;
 	end;
 end;
+-- ATTACK ROLLS: when nothing is about to hit you, spend the roll going INTO the target.
+-- Auto = only when your race has a roll perk (read from the Races tab, e.g. Onibi Step: the roll
+-- drops spirit flames that hunt mobs). The roll distance is learned from real rolls.
+local function OQ(m)
+	local G = sQ();
+	-- measure how far a roll actually goes
+	local rf = r.rollFrom;
+	if rf and G and m - rf.t >= .45 then
+		r.rollFrom = nil;
+		local dist = math.sqrt((G.X - rf.x) ^ 2 + (G.Z - rf.z) ^ 2);
+		if dist > 1 and dist < 40 then
+			brain.rollDist = math.max(2, math.min(20, (tonumber(brain.rollDist) or dist) * .8 + dist * .2));
+		end;
+	end;
+	-- phase 2: direction is set, roll now
+	if r.offRollAt and m >= r.offRollAt then
+		r.offRollAt = nil;
+		if inp.active() and m - (r.lastRoll or -1e9) >= yl and eQ(m) then
+			r.lastRoll = m;
+			r.attackRolls = (r.attackRolls or 0) + 1;
+			if G then r.rollFrom = { x = G.X, z = G.Z, t = m }; end;
+			f(string.format("attack roll (%s)", tostring(r.offRollWhy)));
+		end;
+		return;
+	end;
+	local mode = CFG.attackRoll or "Auto";
+	if mode == "Off" or (mode == "Auto" and not r.rollPerk) or WQ ~= "combat" or not G or not inp.active() then return; end;
+	if CFG.autoRoll == false or m - (r.lastRoll or -1e9) < yl + .35 or r.offRollAt then return; end;
+	-- keep the roll for dodging while an attack is coming
+	if next(Cl) then return; end;
+	for _, mob in pairs(el) do
+		if mob.owned and mob.phase == "windup" then return; end;
+	end;
+	local best, bd;
+	for _, mob in ipairs(ol()) do
+		local dd = (mob.x - G.X) ^ 2 + (mob.z - G.Z) ^ 2;
+		if not bd or dd < bd then best, bd = mob, dd; end;
+	end;
+	if not best then return; end;
+	local dist = math.sqrt(bd);
+	local rd = tonumber(brain.rollDist) or 6;
+	if dist > rd + 8 then return; end;
+	-- without a roll perk ("Always"), only use it to close the gap
+	if not r.rollPerk and dist < (tonumber(CFG.fightDist) or 8) + 2 then return; end;
+	local dx, dz = best.x - G.X, best.z - G.Z;
+	if dist < 2.5 then dx, dz = -dz, dx; end; -- already on top of it: roll around it, not through it
+	local len = math.sqrt(dx * dx + dz * dz);
+	if len < .01 then return; end;
+	dx, dz = dx / len, dz / len;
+	-- never roll off the map or into a hazard
+	local ex, ez = G.X + dx * rd, G.Z + dz * rd;
+	if r.navOpenAt then
+		local okO, open = pcall(r.navOpenAt, ex, ez);
+		if okO and (tonumber(open) or 99) < 2 then return; end;
+	end;
+	for _, zone in ipairs(Fl) do
+		if ul(zone, ex, ez, Vl) then return; end;
+	end;
+	r.forceDir = { x = dx, z = dz, untilT = m + .3 };
+	r.offRollAt = m + .06;
+	r.offRollWhy = string.format("%s, %.1f st%s", tostring(best.name), dist, r.rollPerk and (", " .. r.rollPerk) or "");
+end;
 local function mh(m)
 	NQ(m);
 	IQ(m);
+	pcall(OQ, m);
 	if not next(Cl) then
 		JQ = nil;
 		return;
@@ -5427,6 +5507,77 @@ local indexAPI = (function()
 	end;
 	-- ---------------------------------------------------------------- the scan
 	local busy, done = false, false;
+	local function scanRace()
+		local function perksLabel()
+			local pg = pgui();
+			for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+				if isText(o) and shown(o) and trim(txt(o)):upper() == "RACE PERKS" then return o; end;
+			end;
+			return nil;
+		end;
+		if not perksLabel() then
+			local tab = tabLabels("RACES")[1];
+			if not tab then return nil; end;
+			clickVerified(tab, function() return perksLabel() ~= nil; end, "RACES tab");
+		end;
+		local pl = perksLabel();
+		if not pl then return nil; end;
+		local win = sizedAncestor(pl, 300, 300) or pl.Parent;
+		if not r.raceDumped then r.raceDumped = true; pcall(dump, win, "races"); end;
+		local race = { perks = {}, at = os.time() };
+		for _, o in ipairs(win:GetDescendants()) do
+			if isText(o) and shown(o) and trim(txt(o)):upper():find("WORN", 1, true) then
+				for _, s2 in ipairs(o.Parent:GetChildren()) do
+					if isText(s2) and s2 ~= o and trim(txt(s2)):match("%a") then race.name = trim(txt(s2)); break; end;
+				end;
+			end;
+		end;
+		local list;
+		for _, sf in ipairs(scrollers(win)) do
+			if sf.AbsolutePosition.Y >= pl.AbsolutePosition.Y - 5 then list = sf; break; end;
+		end;
+		local seen = {};
+		local function add(nm, desc)
+			nm = trim(nm or "");
+			if nm ~= "" and desc ~= "" and not seen[nm:upper()] then
+				seen[nm:upper()] = true;
+				race.perks[#race.perks + 1] = { name = nm, desc = desc };
+			end;
+		end;
+		local function readPerks()
+			local root = list or win;
+			local loose = {};
+			for _, row in ipairs(root:GetChildren()) do
+				if row:IsA("GuiObject") and row.Visible then
+					if isText(row) then
+						if trim(txt(row)) ~= "" then loose[#loose + 1] = row; end;
+					else
+						local ls = {};
+						for _, o in ipairs(row:GetDescendants()) do
+							if isText(o) and o.Visible and trim(txt(o)) ~= "" then ls[#ls + 1] = o; end;
+						end;
+						table.sort(ls, function(x, y) return x.AbsolutePosition.Y < y.AbsolutePosition.Y; end);
+						if #ls >= 2 then
+							local desc = {};
+							for k = 2, #ls do desc[#desc + 1] = trim(txt(ls[k])); end;
+							add(txt(ls[1]), table.concat(desc, " "));
+						end;
+					end;
+				end;
+			end;
+			-- name and description as separate labels straight in the list
+			table.sort(loose, function(x, y) return x.AbsolutePosition.Y < y.AbsolutePosition.Y; end);
+			for k = 1, #loose - 1, 2 do add(txt(loose[k]), trim(txt(loose[k + 1]))); end;
+		end;
+		if list then scrollThrough(list, readPerks, .25); else readPerks(); end;
+		race.rollPerk = nil;
+		for _, pk in ipairs(race.perks) do
+			if pk.desc:upper():find("ROLL") then race.rollPerk = pk.name; end;
+		end;
+		brain.race = race;
+		r.rollPerk = race.rollPerk;
+		return #race.perks;
+	end;
 	local function scan(reason)
 		if busy then return; end;
 		busy = true;
@@ -5476,6 +5627,12 @@ local indexAPI = (function()
 				scanEquipment(win);
 			else
 				summary.failed = (summary.failed or "") .. " Equipment";
+			end;
+			local okR, nPerks = pcall(scanRace);
+			if okR and nPerks then
+				summary.perks = nPerks;
+			else
+				summary.failed = (summary.failed or "") .. " Races";
 			end;
 			if opened then
 				pressT();
@@ -5559,7 +5716,8 @@ local indexAPI = (function()
 		local rank, total = rarityRank(odds);
 		local topPct = tonumber(CFG.rareTopPct) or 3;
 		local inTop = rank and total >= 20 and topPct > 0 and rank <= math.max(1, math.ceil(total * topPct / 100));
-		local rare = (odds or 0) >= (tonumber(CFG.rareDropOdds) or 500) or tierRank >= 4 or isNew or inTop or fromChat == true;
+		-- only really rare drops (1 in 100,000 or rarer by default) are announced
+		local rare = (odds or 0) >= (tonumber(CFG.rareDropOdds) or 100000);
 		if not rare then return; end;
 		pcall(function()
 			if type(appendfile) == "function" then
@@ -5672,6 +5830,157 @@ local indexAPI = (function()
 		if addConn then pcall(function() addConn:Disconnect(); end); addConn = nil; end;
 		if chatConn then pcall(function() chatConn:Disconnect(); end); chatConn = nil; end;
 	end;
+	-- ---------------------------------------------------------------- AUTO FARM (stage launcher)
+	-- Hub: GO MINE! -> window "GO MINE" with a horizontal list of stage cards (GRASSLANDS ... THE ABYSS)
+	-- and the DELVE panel on the right. Pick the card (scrolling the list left/right to it), then
+	-- CLICK TO DESCEND; for Delve, click the Delve panel.
+	local launch = { at = -1e9, fails = 0, findAt = -1e9 };
+	local function goMineButton()
+		local lb = launch.label;
+		if lb and lb.Parent and shown(lb) then return lb; end;
+		local now = d();
+		if now - launch.findAt < 8 then return nil; end;
+		launch.findAt, launch.label = now, nil;
+		local pg = pgui();
+		for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+			if isText(o) and trim(txt(o)):upper() == "GO MINE!" and shown(o) then
+				launch.label = o;
+				return o;
+			end;
+		end;
+		return nil;
+	end;
+	local function labelIn(root, text, exact)
+		for _, o in ipairs(root:GetDescendants()) do
+			if isText(o) and shown(o) then
+				local u = trim(txt(o)):upper();
+				if (exact and u == text) or (not exact and u:find(text, 1, true)) then return o; end;
+			end;
+		end;
+		return nil;
+	end;
+	local function bestButton(root)
+		if not root then return nil; end;
+		local best, area = nil, 0;
+		local all = root:GetDescendants();
+		all[#all + 1] = root;
+		for _, o in ipairs(all) do
+			if o:IsA("GuiButton") and shown(o) then
+				local a = o.AbsoluteSize.X * o.AbsoluteSize.Y;
+				if a > area then best, area = o, a; end;
+			end;
+		end;
+		return best;
+	end;
+	local function stageWanted()
+		local other = trim(tostring(CFG.stageOther or ""));
+		return (other ~= "" and other or tostring(CFG.stage or "Delve")):upper();
+	end;
+	local function inRun()
+		return run.active or workspace:FindFirstChild("StrataPlate") ~= nil or workspace:FindFirstChild("RunEndRoom") ~= nil;
+	end;
+	local function launchStage()
+		if launch.busy then return; end;
+		launch.busy, r.launching = true, true;
+		local ok, err = pcall(function()
+			local want = stageWanted();
+			local function started()
+				return workspace:FindFirstChild("StrataPlate") ~= nil or run.active or not findWindow("GO MINE");
+			end;
+			local win = findWindow("GO MINE");
+			if not win then
+				local btn = goMineButton();
+				if not btn then return; end;
+				clickVerified(btn, function() return findWindow("GO MINE"); end, "GO MINE!");
+				win = waitFor(function() return findWindow("GO MINE"); end, 2);
+			end;
+			if not win then launch.fails = launch.fails + 1; return; end;
+			if not r.goMineDumped then r.goMineDumped = true; pcall(dump, win, "gomine"); end;
+			task.wait(.4);
+			if want == "DELVE" then
+				local tag = labelIn(win, "ENDLESS DESCENT", true) or labelIn(win, "YOUR DEEPEST", true);
+				local panel = tag and (sizedAncestor(tag, 200, 250) or tag.Parent);
+				if not panel then
+					launch.fails = launch.fails + 1;
+					notify("Couldn't find the Delve panel in GO MINE. Layout saved to DelveGuiDump_gomine.txt.", "Auto farm");
+					return;
+				end;
+				notify("Starting Delve.", "Auto farm");
+				if clickVerified(bestButton(panel) or panel, started, "Delve panel") then launch.fails = 0; else launch.fails = launch.fails + 1; end;
+				return;
+			end;
+			-- the stage list scrolls sideways
+			local list;
+			for _, sf in ipairs(scrollers(win)) do
+				if sf.AbsoluteCanvasSize.X > sf.AbsoluteSize.X + 4 then list = sf; break; end;
+			end;
+			local function findCard()
+				for _, o in ipairs((list or win):GetDescendants()) do
+					if isText(o) and trim(txt(o)):upper() == want then
+						local card = o.Parent;
+						while card and card.Parent and card.Parent ~= list and card:IsA("GuiObject")
+							and not (card.AbsoluteSize.X >= 120 and card.AbsoluteSize.Y >= 90) do
+							card = card.Parent;
+						end;
+						return card;
+					end;
+				end;
+				return nil;
+			end;
+			local card = findCard();
+			if list then
+				local maxX = math.max(0, list.AbsoluteCanvasSize.X - list.AbsoluteSize.X);
+				local stepX = math.max(80, list.AbsoluteSize.X * .6);
+				local x = 0;
+				while not card and x <= maxX + stepX do
+					list.CanvasPosition = Vector2.new(math.min(x, maxX), list.CanvasPosition.Y);
+					task.wait(.3);
+					card = findCard();
+					x = x + stepX;
+				end;
+				if card then
+					local rel = card.AbsolutePosition.X - list.AbsolutePosition.X + list.CanvasPosition.X;
+					local target = math.clamp(rel - (list.AbsoluteSize.X - card.AbsoluteSize.X) / 2, 0, maxX);
+					list.CanvasPosition = Vector2.new(target, list.CanvasPosition.Y);
+					task.wait(.35);
+				end;
+			end;
+			if not card then
+				launch.fails = launch.fails + 1;
+				notify("Couldn't find the stage '" .. want .. "' in GO MINE. Check the name in the Farm tab.", "Auto farm");
+				return;
+			end;
+			local function selected()
+				if labelIn(card, "SELECTED", true) then return true; end;
+				for _, o in ipairs(win:GetDescendants()) do
+					if isText(o) and shown(o) and not (list and o:IsDescendantOf(list)) and trim(txt(o)):upper() == want then return true; end;
+				end;
+				return false;
+			end;
+			if not selected() then clickVerified(bestButton(card) or card, selected, want .. " card"); end;
+			if not selected() then launch.fails = launch.fails + 1; return; end;
+			task.wait(.3);
+			local lock = labelIn(win, "TO ENTER", false);
+			if lock then
+				launch.lockedUntil = d() + 300;
+				notify(string.format("%s is locked (%s). Trying again in 5 minutes.", want, trim(txt(lock))), "Auto farm");
+				return;
+			end;
+			local go = labelIn(win, "CLICK TO DESCEND", true);
+			if not go then launch.fails = launch.fails + 1; return; end;
+			local area = sizedAncestor(go, 300, 200) or go.Parent;
+			notify("Starting " .. want .. ".", "Auto farm");
+			if clickVerified(bestButton(area) or go, started, "Click to descend") then launch.fails = 0; else launch.fails = launch.fails + 1; end;
+		end);
+		if not ok then notify("Auto farm error: " .. tostring(err), "Auto farm"); end;
+		if workspace:FindFirstChild("StrataPlate") or run.active or not findWindow("GO MINE") then
+			-- the farm turns itself on once the run has loaded
+			if not CFG.on then r.autoStart = true; end;
+		end;
+		launch.busy, r.launching = false, false;
+	end;
+	r.launchStage = function() launch.at, launch.fails, launch.lockedUntil = d(), 0, nil; task.spawn(launchStage); end;
+	if type(brain.race) == "table" then r.rollPerk = brain.race.rollPerk; end;
 	local tickAt, queueAt, startedAt = -1e9, -1e9, nil;
 	local function tick(now)
 		-- process newly appeared labels: drop pop-ups, and hand relic / results labels to the run tracker
@@ -5698,10 +6007,17 @@ local indexAPI = (function()
 		local every = math.max(1, math.floor(tonumber(CFG.scanEveryRuns) or 10));
 		local runsSince = (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtScan) or 0);
 		local due = brain.indexScannedAt == nil or runsSince >= every;
-		if due and not busy and CFG.autoIndexScan ~= false and now - startedAt > 10
+		if due and not busy and not r.launching and CFG.autoIndexScan ~= false and now - startedAt > 10
 			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10 then
 			r.scanTryAt = now;
 			task.spawn(scan, brain.indexScannedAt == nil and "first scan" or string.format("after %d runs", runsSince));
+		end;
+		-- in the hub with Auto Farm on: open GO MINE and start the chosen stage
+		if CFG.autoStage == true and not busy and not launch.busy and now - startedAt > 10 and not inRun()
+			and not relicAPI.hasDraft() and now - launch.at > math.min(60, 8 + launch.fails * 6)
+			and now > (launch.lockedUntil or 0) and goMineButton() then
+			launch.at = now;
+			task.spawn(launchStage);
 		end;
 	end;
 	local function report()
@@ -6060,126 +6376,104 @@ end;
 
 (function()
 	-- Settings shared by the controls and the runtime
+	local STAGES = { "Delve", "Grasslands", "Sun Flats", "Frostbite", "Mycelia", "Pirates Cove", "Infernia", "The Abyss" };
 	local spec = {
 		{
-			name = "General",
-			side = "L",
+			name = "Farm",
+			main = true,
 			items = {
-				{ k = "antiAfk", t = "toggle", text = "Anti-AFK" },
-				{ k = "autoReplay", t = "toggle", text = "Auto Replay", f = "st_autoreplay" },
-				{ k = "dodgeLog", t = "toggle", text = "Log dodges to file" },
-				{ k = "replayDelay", t = "slider", text = "Replay delay", min = .5, max = 10, step = .5, suffix = " s", f = "st_replaydelay" },
-				{ k = "chestRange", t = "slider", text = "Chest range", min = 20, max = 300, step = 10, suffix = " st", f = "st_chestrange" },
+				{ k = "autoStage", t = "toggle", text = "Auto Farm: start a stage from the hub" },
+				{ k = "stage", t = "combo", text = "Stage", items = STAGES },
+				{ k = "stageOther", t = "input", text = "Other stage (overrides the list)", placeholder = "Type a stage name, e.g. THE ABYSS" },
+				{ k = "autoReplay", t = "toggle", text = "Play again when a run ends" },
+				{ k = "replayDelay", t = "slider", text = "Play again after", min = .5, max = 10, step = .5, suffix = " s" },
+				{ k = "autoStartFarm", t = "toggle", text = "Turn the farm back on after a restart" },
 			},
 		},
 		{
 			name = "Mining",
-			side = "L",
+			icon = "pickaxe",
 			rescan = true,
-			items = {
-				{ k = "autoStats", t = "toggle", text = "Auto-detect mining stats" },
-				{ k = "mineRange", t = "slider", text = "Rock search range", min = 10, max = 400, step = 10, suffix = " st" },
-				{ k = "reach", t = "slider", text = "Mining reach", min = .3, max = 20, step = .01, suffix = " st" },
-				{ k = "radius", t = "slider", text = "Mining radius", min = .1, max = 10, step = .01, suffix = " st" },
-				{ k = "centerOre", t = "toggle", text = "Center aim on ore" },
-				{ k = "radiusScale", t = "slider", text = "Mining radius scale", min = .4, max = 1, step = .05, suffix = "x" },
-				{ k = "reachScale", t = "slider", text = "Reach safety scale", min = .5, max = 1.5, step = .05, suffix = "x" },
-				{ k = "minTier", t = "slider", text = "Min rock tier", min = 1, max = 10, step = 1, suffix = "" },
-				{ k = "skipAfter", t = "slider", text = "Skip stuck rock after", min = 3, max = 30, step = 1, suffix = " s" },
-			},
-		},
-		{
-			name = "Features",
-			side = "L",
 			items = {
 				{ k = "mine", t = "feat", text = "Mine rocks" },
 				{ k = "walk", t = "feat", text = "Walk to rocks" },
-				{ k = "combat", t = "feat", text = "Fight mobs" },
-				{ k = "chase", t = "feat", text = "Chase and orbit target" },
-				{ k = "dodge", t = "feat", text = "Dodge attacks" },
-				{ k = "autoRoll", t = "feat", text = "Auto roll" },
 				{ k = "chests", t = "feat", text = "Collect chests" },
+				{ k = "centerFarm", t = "toggle", text = "Mine from the chest / arena center" },
+				{ k = "centerCleanup", t = "toggle", text = "Center: walk to ores out of reach" },
+				{ k = "autoStats", t = "toggle", text = "Read mining reach and radius from the game" },
+				{ k = "reach", t = "slider", text = "Mining reach", min = .3, max = 20, step = .01, suffix = " st" },
+				{ k = "radius", t = "slider", text = "Mining radius", min = .1, max = 10, step = .01, suffix = " st" },
+				{ k = "mineRange", t = "slider", text = "Rock search range", min = 10, max = 400, step = 10, suffix = " st" },
+				{ k = "chestRange", t = "slider", text = "Chest range", min = 20, max = 300, step = 10, suffix = " st" },
+				{ k = "minTier", t = "slider", text = "Min rock tier", min = 1, max = 10, step = 1, suffix = "" },
+				{ k = "skipAfter", t = "slider", text = "Skip a stuck rock after", min = 3, max = 30, step = 1, suffix = " s" },
 			},
 		},
 		{
-			name = "Combat & dodging",
-			side = "R",
+			name = "Combat",
+			icon = "sword",
 			items = {
-				{ k = "autoCombatStats", t = "toggle", text = "Auto-detect sword range" },
-				{ k = "fightDist", t = "slider", text = "Orbit distance", min = 2, max = 30, step = 1, suffix = " st", f = "st_fight" },
-				{ k = "keepAway", t = "slider", text = "Keep away from attacks", min = 1, max = 12, step = .5, suffix = " st", f = "st_keepaway" },
-				{ k = "hitMargin", t = "slider", text = "Hit margin (body size)", min = .5, max = 3, step = .1, suffix = " st", f = "st_hitmargin" },
-				{ k = "meleeReach", t = "slider", text = "Melee reach", min = 2, max = 12, step = .5, suffix = " st", f = "st_meleereach" },
-				{ k = "rollLead", t = "slider", text = "Roll before hit (higher = earlier)", min = .05, max = .6, step = .05, suffix = " s", f = "st_rolllead" },
-				{ k = "rollCooldown", t = "slider", text = "Roll cooldown", min = .3, max = 2, step = .05, suffix = " s" },
-				{ k = "pingComp", t = "toggle", text = "Ping compensation" },
-				{ k = "windupLearn", t = "toggle", text = "Learn mob windups (roll before strike)" },
-			},
-		},
-		{
-			name = "Brain",
-			side = "R",
-			items = {
-				{ k = "cardPick", t = "toggle", text = "Auto-pick relic cards" },
-				{ k = "relicLearn", t = "toggle", text = "Learn relics from my runs and picks" },
-				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd relic (to learn)" },
-				{ k = "traderBuy", t = "toggle", text = "Buy from traders (else walk on by)" },
-				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
-				{ k = "traderMinScore", t = "slider", text = "Trader: only buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
-				{ k = "relicNotify", t = "toggle", text = "Announce relic choice" },
-				{ k = "mechNotify", t = "toggle", text = "Announce new mechanics found" },
-				{ k = "relicDelay", t = "slider", text = "Relic pick delay", min = .2, max = 5, step = .1, suffix = " s" },
-				{ k = "relicCodexNotify", t = "toggle", text = "Announce newly discovered relics" },
-				{ k = "autoIndexScan", t = "toggle", text = "Auto-scan Index + Stats + Equipment (T menu)" },
-				{ k = "scanEveryRuns", t = "slider", text = "Scan every this many runs", min = 1, max = 50, step = 1, suffix = " runs" },
-				{ k = "rareTopPct", t = "slider", text = "Also rare: top % rarest in your Index", min = 0, max = 25, step = 1, suffix = " %" },
-				{ k = "dodgeLearn", t = "toggle", text = "Learn from hits (margins, mob reach, roll timing)" },
-				{ k = "smartEscape", t = "toggle", text = "Pathfind out of attacks (tile map)" },
-				{ k = "cornerAvoid", t = "toggle", text = "Avoid corners and map edges" },
-				{ k = "edgeSafe", t = "slider", text = "Preferred distance from edge", min = 0, max = 20, step = 1, suffix = " st" },
-			},
-		},
-		{
-			name = "Targeting",
-			side = "L",
-			items = {
+				{ k = "combat", t = "feat", text = "Fight mobs" },
+				{ k = "chase", t = "feat", text = "Chase and circle the target" },
+				{ k = "dodge", t = "feat", text = "Dodge attacks" },
+				{ k = "autoRoll", t = "feat", text = "Roll out of attacks" },
 				{ k = "mobPriority", t = "combo", text = "Mob priority", items = { "Smart", "Ores first", "Always fight" } },
-				{ k = "dangerTime", t = "slider", text = "Delve timer danger zone (ignore mobs below)", min = 0, max = 30, step = 1, suffix = " s" },
-				{ k = "lowHpPct", t = "slider", text = "Low HP: stop chasing below", min = 0, max = 90, step = 5, suffix = " %" },
+				{ k = "dangerTime", t = "slider", text = "Delve timer: ignore mobs below", min = 0, max = 30, step = 1, suffix = " s" },
+				{ k = "lowHpPct", t = "slider", text = "Stop chasing below HP", min = 0, max = 90, step = 5, suffix = " %" },
 				{ k = "crowdSize", t = "slider", text = "Fight when this many mobs are up", min = 2, max = 20, step = 1, suffix = "" },
-			},
-		},
-		{
-			name = "Webhook",
-			side = "R",
-			items = {
-				{ k = "webhookOn", t = "toggle", text = "Post to Discord when a run is done" },
-				{ k = "webhookUrl", t = "input", text = "Discord webhook URL" },
-				{ k = "webhookDelay", t = "slider", text = "Screenshot delay after run ends", min = 0, max = 10, step = .5, suffix = " s" },
-				{ k = "dropWebhook", t = "toggle", text = "Post rare drops and new index entries" },
-				{ k = "rareDropOdds", t = "slider", text = "Rare drop = 1 in at least", min = 50, max = 10000, step = 50, suffix = "" },
-			},
-		},
-		{
-			name = "Controls",
-			side = "R",
-			items = {
-				{ k = "autoEquip", t = "toggle", text = "Auto-equip tools" },
-				{ k = "pickSlot", t = "slider", text = "Pickaxe slot", min = 1, max = 9, step = 1, suffix = "" },
-				{ k = "weaponSlot", t = "slider", text = "Weapon slot", min = 1, max = 9, step = 1, suffix = "" },
+				{ k = "fightDist", t = "slider", text = "Circle distance", min = 2, max = 30, step = 1, suffix = " st" },
+				{ k = "attackRoll", t = "combo", text = "Attack rolls (Auto = if your race has a roll perk)", items = { "Auto", "Always", "Off" } },
 				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
 		},
 		{
-			name = "Background",
-			side = "R",
+			name = "Relics",
+			icon = "gem",
 			items = {
+				{ k = "cardPick", t = "toggle", text = "Pick relics and blessings" },
+				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd (to learn)" },
+				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
+				{ k = "traderBuy", t = "toggle", text = "Buy from traders" },
+				{ k = "traderMinScore", t = "slider", text = "Trader: buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
+			},
+		},
+		{
+			name = "Brain",
+			icon = "brain",
+			items = {
+				{ k = "autoIndexScan", t = "toggle", text = "Scan Index, Stats and Equipment (T menu)" },
+				{ k = "scanEveryRuns", t = "slider", text = "Scan every", min = 1, max = 50, step = 1, suffix = " runs" },
+			},
+		},
+		{
+			name = "Discord",
+			icon = "send",
+			items = {
+				{ k = "webhookOn", t = "toggle", text = "Post when a run is done" },
+				{ k = "webhookUrl", t = "input", text = "Webhook URL", placeholder = "https://discord.com/api/webhooks/..." },
+				{ k = "webhookDelay", t = "slider", text = "Screenshot delay", min = 0, max = 10, step = .5, suffix = " s" },
+				{ k = "dropWebhook", t = "toggle", text = "Post rare drops" },
+				{ k = "rareDropOdds", t = "slider", text = "Rare drop = 1 in at least", min = 1000, max = 1000000, step = 1000, suffix = "" },
+			},
+		},
+		{
+			name = "Settings",
+			icon = "settings",
+			items = {
+				{ k = "startClosed", t = "toggle", text = "Start with this window closed" },
+				{ k = "niceToasts", t = "toggle", text = "Game-style pop-ups" },
+				{ k = "relicNotify", t = "toggle", text = "Pop-ups: relic, trader and path choices" },
+				{ k = "mechNotify", t = "toggle", text = "Pop-ups: new relics and mechanics" },
 				{ k = "background", t = "toggle", text = "Background mode (work while tabbed out)" },
 				{ k = "silentAim", t = "toggle", text = "Silent aim (don't move my mouse)" },
 				{ k = "bgKeyMethod", t = "combo", text = "Background key method", items = { "Auto", "VirtualInputManager", "Input connections" } },
 				{ k = "bgMoveMethod", t = "combo", text = "Background walk method", items = { "Both", "Humanoid:Move", "Velocity" } },
 				{ k = "useLearned", t = "toggle", text = "Use learned equip remotes in background" },
-				{ k = "autoStartFarm", t = "toggle", text = "Turn the farm back on if it was on last time" },
+				{ k = "autoEquip", t = "toggle", text = "Auto-equip tools" },
+				{ k = "pickSlot", t = "slider", text = "Pickaxe slot", min = 1, max = 9, step = 1, suffix = "" },
+				{ k = "weaponSlot", t = "slider", text = "Weapon slot", min = 1, max = 9, step = 1, suffix = "" },
+				{ k = "antiAfk", t = "toggle", text = "Anti-AFK" },
+				{ k = "dodgeLog", t = "toggle", text = "Log dodges to file" },
 			},
 		},
 	};
@@ -6197,6 +6491,7 @@ end;
 				r.statsFound = false;
 				fQ(true);
 			end;
+			if key == "centerFarm" and not value then r.centerFarmChest = nil; r.strayTrip = false; end;
 			if key == "background" or key == "silentAim" then
 				if value then
 					inp.ensureSilent();
@@ -6247,14 +6542,133 @@ end;
 	assert(chunk, "WindUI compile failed: " .. tostring(compileError));
 	local WindUI = chunk();
 	assert(type(WindUI) == "table" and type(WindUI.CreateWindow) == "function", "WindUI did not return its window API");
-	if type(WindUI.Notify) == "function" then
-		uiNotify = function(message, title)
+	do
+		-- pop-ups styled like the game: its own pixel font, dark card, coloured title, stacked bottom-right
+		local TS = game:GetService("TweenService");
+		local holder, font, seq = nil, nil, 0;
+		local function gameFont()
+			if font then return font; end;
+			local pg = l:FindFirstChild("PlayerGui");
+			local counts, best, bestN, seen = {}, nil, 0, 0;
+			for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+				if o:IsA("TextLabel") and o.Text ~= "" then
+					seen = seen + 1;
+					if seen > 400 then break; end;
+					local okF, ff = pcall(function() return o.FontFace; end);
+					if okF and ff then
+						counts[ff.Family] = (counts[ff.Family] or 0) + 1;
+						if counts[ff.Family] > bestN then best, bestN = ff, counts[ff.Family]; end;
+					end;
+				end;
+			end;
+			if best and bestN >= 10 then
+				font = Font.new(best.Family, Enum.FontWeight.Regular);
+				return font;
+			end;
+			return Font.fromEnum(Enum.Font.Arcade);
+		end;
+		local function ensure()
+			if holder and holder.Parent and holder.Parent.Parent then return true; end;
+			local sg = Instance.new("ScreenGui");
+			sg.Name, sg.ResetOnSpawn, sg.IgnoreGuiInset, sg.DisplayOrder = "DelveToasts", false, true, 9999;
+			sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+			local parent = type(gethui) == "function" and gethui() or nil;
+			if not (parent and pcall(function() sg.Parent = parent; end)) then
+				if not pcall(function() sg.Parent = game:GetService("CoreGui"); end) then sg.Parent = l:WaitForChild("PlayerGui"); end;
+			end;
+			holder = Instance.new("Frame");
+			holder.BackgroundTransparency, holder.AnchorPoint = 1, Vector2.new(1, 1);
+			holder.Position, holder.Size = UDim2.new(1, -18, 1, -18), UDim2.fromOffset(360, 700);
+			holder.Parent = sg;
+			local lay = Instance.new("UIListLayout");
+			lay.VerticalAlignment, lay.HorizontalAlignment = Enum.VerticalAlignment.Bottom, Enum.HorizontalAlignment.Right;
+			lay.SortOrder, lay.Padding = Enum.SortOrder.LayoutOrder, UDim.new(0, 8);
+			lay.Parent = holder;
+			return true;
+		end;
+		local ACCENTS = {
+			{ "ERROR", Color3.fromRGB(255, 92, 92) }, { "DROP", Color3.fromRGB(255, 200, 70) }, { "TRADER", Color3.fromRGB(120, 225, 120) },
+			{ "PATH", Color3.fromRGB(80, 220, 205) }, { "RELIC", Color3.fromRGB(110, 170, 255) }, { "CODEX", Color3.fromRGB(205, 145, 255) },
+			{ "MECHANIC", Color3.fromRGB(205, 145, 255) }, { "WEBHOOK", Color3.fromRGB(120, 140, 230) }, { "FARM", Color3.fromRGB(120, 225, 120) },
+			{ "INDEX", Color3.fromRGB(255, 200, 70) }, { "GEAR", Color3.fromRGB(120, 225, 120) },
+		};
+		r.toast = function(message, title)
+			if not ensure() then return; end;
+			message = tostring(message);
+			local head = tostring(title or "Delve"):gsub("^Delve%s*", ""):upper();
+			if head == "" or head:find("^V%d") then head = "DELVE"; end;
+			local accent = Color3.fromRGB(255, 165, 60);
+			for _, a2 in ipairs(ACCENTS) do
+				if head:find(a2[1], 1, true) then accent = a2[2]; break; end;
+			end;
+			if message:find("[Ee]rror") or message:find("Couldn't") then accent = ACCENTS[1][2]; end;
+			seq = seq + 1;
+			local ff = gameFont();
+			local card = Instance.new("CanvasGroup");
+			card.LayoutOrder, card.Size, card.AutomaticSize = seq, UDim2.fromOffset(340, 0), Enum.AutomaticSize.Y;
+			card.BackgroundColor3, card.BackgroundTransparency, card.BorderSizePixel = Color3.fromRGB(16, 15, 22), .06, 0;
+			card.GroupTransparency, card.Active = 1, true;
+			local corner = Instance.new("UICorner");
+			corner.CornerRadius = UDim.new(0, 4);
+			corner.Parent = card;
+			local stroke = Instance.new("UIStroke");
+			stroke.Color, stroke.Thickness, stroke.Transparency = accent, 2, .25;
+			stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+			stroke.Parent = card;
+			local pad = Instance.new("UIPadding");
+			pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 9), UDim.new(0, 10);
+			pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 12), UDim.new(0, 12);
+			pad.Parent = card;
+			local lay = Instance.new("UIListLayout");
+			lay.SortOrder, lay.Padding = Enum.SortOrder.LayoutOrder, UDim.new(0, 5);
+			lay.Parent = card;
+			local function label(text, size, color, order)
+				local t = Instance.new("TextLabel");
+				t.BackgroundTransparency, t.LayoutOrder = 1, order;
+				t.Size, t.AutomaticSize = UDim2.new(1, 0, 0, 0), Enum.AutomaticSize.Y;
+				t.FontFace, t.TextSize, t.TextColor3 = ff, size, color;
+				t.TextWrapped, t.TextXAlignment, t.TextYAlignment = true, Enum.TextXAlignment.Left, Enum.TextYAlignment.Top;
+				t.TextStrokeTransparency, t.TextStrokeColor3 = .55, Color3.new(0, 0, 0);
+				t.Text = text;
+				t.Parent = card;
+				return t;
+			end;
+			label(head, 18, accent, 1);
+			local rule = Instance.new("Frame");
+			rule.LayoutOrder, rule.Size, rule.BorderSizePixel = 2, UDim2.new(1, 0, 0, 2), 0;
+			rule.BackgroundColor3, rule.BackgroundTransparency = accent, .55;
+			rule.Parent = card;
+			label(message, 15, Color3.fromRGB(232, 230, 238), 3);
+			card.Parent = holder;
+			-- keep the newest 5
+			local kids = {};
+			for _, c in ipairs(holder:GetChildren()) do
+				if c:IsA("CanvasGroup") then kids[#kids + 1] = c; end;
+			end;
+			table.sort(kids, function(x, y) return x.LayoutOrder < y.LayoutOrder; end);
+			for k = 1, #kids - 5 do kids[k]:Destroy(); end;
+			TS:Create(card, TweenInfo.new(.2, Enum.EasingStyle.Quad), { GroupTransparency = 0 }):Play();
+			local function close()
+				if not card.Parent then return; end;
+				local tw = TS:Create(card, TweenInfo.new(.35, Enum.EasingStyle.Quad), { GroupTransparency = 1 });
+				tw.Completed:Connect(function() card:Destroy(); end);
+				tw:Play();
+			end;
+			card.InputBegan:Connect(function(io)
+				if io.UserInputType == Enum.UserInputType.MouseButton1 or io.UserInputType == Enum.UserInputType.Touch then close(); end;
+			end);
+			task.delay(math.clamp(4.5 + #message / 45, 4.5, 12), close);
+		end;
+	end;
+	uiNotify = function(message, title)
+		if CFG.niceToasts ~= false and r.toast and pcall(r.toast, message, title) then return; end;
+		if type(WindUI.Notify) == "function" then
 			WindUI:Notify({ Title = title, Content = message, Duration = 6 });
 		end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.4 | Brain",
+		Title = "Delve v4.5 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -6284,11 +6698,7 @@ end;
 		r.stop();
 	end);
 
-	local main = window:Tab({ Title = "Farm", Icon = "pickaxe" });
-	main:Paragraph({
-		Title = "Delve",
-		Desc = "Enable the farm, then close this panel. Right Shift reopens it.",
-	});
+	local main = window:Tab({ Title = "Farm", Icon = "play" });
 	local farmToggle;
 	farmToggle = main:Toggle({
 		Title = "Farm enabled",
@@ -6305,45 +6715,13 @@ end;
 		end,
 	});
 	r.farmToggle = farmToggle;
-	main:Toggle({
-		Title = "Mine from chest / arena center",
-		Desc = "Walk to the chest or center tile, then aim at ores from that spot.",
-		Value = Q.centerFarm == true,
-		Callback = function(enabled)
-			Q.centerFarm = enabled == true;
-			if not Q.centerFarm then r.centerFarmChest = nil; r.strayTrip = false; end;
-		end,
-	});
-	main:Toggle({
-		Title = "Chase stray ores (center farm)",
-		Desc = "If ores are out of reach from the center, walk to them, then return.",
-		Value = Q.centerCleanup ~= false,
-		Callback = function(enabled)
-			Q.centerCleanup = enabled == true;
-		end,
-	});
-	main:Toggle({
-		Title = "Background mode (work while tabbed out)",
-		Desc = "Walks, rolls and aims without touching your keyboard or mouse, so Roblox can sit behind other windows. Don't minimize it.",
-		Value = Q.background == true,
-		Callback = function(enabled)
-			Q.background = enabled == true;
-			if enabled then inp.ensureSilent(); end;
-			Pl();
-			inp.clearAim();
-			if dQ then dQ(); end;
-		end,
-	});
-	main:Button({ Title = "Close settings", Callback = function() window:Close(); end });
-	main:Button({ Title = "Stop and unload", Callback = r.stop });
-
 	local synced = {};
 	local function current(item)
 		if item.t == "feat" then return Q.feat[item.k] ~= false; end;
 		return Q[item.k];
 	end;
 	for _, group in ipairs(spec) do
-		local tab = window:Tab({ Title = group.name });
+		local tab = group.main and main or window:Tab({ Title = group.name, Icon = group.icon });
 		for _, item in ipairs(group.items) do
 			local it = item;
 			local value = current(it);
@@ -6356,7 +6734,7 @@ end;
 				local okInput, inputWidget = pcall(function()
 					return tab:Input({
 						Title = it.text,
-						Placeholder = "https://discord.com/api/webhooks/...",
+						Placeholder = it.placeholder or "",
 						Value = tostring(value or ""),
 						Callback = changed,
 					});
@@ -6382,36 +6760,20 @@ end;
 			end;
 			synced[it.k] = { widget = widget, value = value, item = it };
 		end;
-		if group.rescan then tab:Button({ Title = "Scan mining stats", Callback = rescan }); end;
-		if group.name == "Background" then
+		if group.rescan then tab:Button({ Title = "Read mining stats now", Callback = rescan }); end;
+		if group.main then
+			tab:Button({ Title = "Start the stage now", Callback = function() if r.launchStage then r.launchStage(); end; end });
+			tab:Paragraph({
+				Title = "Auto Farm",
+				Desc = "From the hub it clicks GO MINE!, scrolls to your stage, selects it and descends. The farm turns on once the run loads. Right Shift or the Open Delve button shows this window.",
+			});
+			tab:Button({ Title = "Stop and unload", Callback = r.stop });
+		end;
+		if group.name == "Settings" then
 			tab:Button({
 				Title = "Test background support",
 				Callback = function()
 					notify(inp.report(), "Delve background");
-				end,
-			});
-			tab:Button({
-				Title = "Background status",
-				Callback = function()
-					notify(inp.status(), "Delve background");
-				end,
-			});
-			tab:Button({
-				Title = "Test walking (1s)",
-				Callback = function()
-					task.spawn(inp.testWalk);
-				end,
-			});
-			tab:Button({
-				Title = "Test pickaxe equip key",
-				Callback = function()
-					task.spawn(inp.testEquip, Il, "PickaxeOut", "Pickaxe");
-				end,
-			});
-			tab:Button({
-				Title = "Test weapon equip key",
-				Callback = function()
-					task.spawn(inp.testEquip, mQ, "WeaponDrawn", "Weapon");
 				end,
 			});
 			tab:Button({
@@ -6434,7 +6796,7 @@ end;
 				end,
 			});
 		end;
-		if group.name == "Webhook" then
+		if group.name == "Discord" then
 			tab:Button({
 				Title = "Send test post",
 				Callback = function()
@@ -6445,7 +6807,7 @@ end;
 			});
 			tab:Paragraph({
 				Title = "Screenshots",
-				Desc = "Run delve_webhook_helper.ps1 on your PC to attach a screenshot. Without it, runs are posted as text.",
+				Desc = "Double-click 'Start Delve Screenshots.bat' (Volt scripts folder) and leave it open to attach a screenshot. Without it, runs are posted as text.",
 			});
 		end;
 		if group.name == "Brain" then
@@ -6534,7 +6896,7 @@ end;
 				end,
 			});
 		end;
-		if group.name == "Combat & dodging" then
+		if group.name == "Combat" then
 			tab:Button({
 				Title = "Report sword range",
 				Callback = function()
@@ -6543,16 +6905,6 @@ end;
 						and string.format("Estimated sword range: %.2f studs. Orbit distance: %.2f studs.", r.range, YQ())
 						or string.format("No sword range detected. Manual orbit distance: %.2f studs.", YQ());
 					notify(message, "Delve combat");
-				end,
-			});
-			tab:Button({
-				Title = "Report learned mob windups",
-				Callback = function()
-					local parts = {};
-					for name, dur in pairs(r.windups or {}) do
-						parts[#parts + 1] = string.format("%s %.2fs", name, dur);
-					end;
-					notify(#parts > 0 and table.concat(parts, ", ") or "No windups learned yet. Fight a few mobs first.", "Delve windups");
 				end,
 			});
 		end;
@@ -6566,7 +6918,12 @@ end;
 			end;
 		end;
 	end;
-	window:Open();
+	if CFG.startClosed ~= false then
+		task.delay(.3, function() pcall(function() window:Close(); end); end);
+		notify("Loaded. Press Right Shift or Open Delve for settings.", "Delve");
+	else
+		window:Open();
+	end;
 end)();
 
 inp.ensureSilent();

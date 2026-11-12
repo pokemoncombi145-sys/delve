@@ -1,6 +1,30 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.4 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.5 | Brain`).
+
+## v4.5: Auto Farm, cleaner UI, game-style pop-ups, attack rolls
+**Auto Farm (Farm tab)**
+- **Auto Farm: start a stage from the hub.** Pick a stage (Delve, Grasslands, Sun Flats, Frostbite, Mycelia, Pirates Cove, Infernia, The Abyss) or type another name. In the hub it clicks **GO MINE!**, scrolls the stage list left or right to your stage, selects it and clicks **CLICK TO DESCEND** (for Delve it clicks the Delve panel). The farm switches on once the run loads.
+- Locked stages ("LEVEL 60 TO ENTER") are skipped for 5 minutes. **Start the stage now** button.
+- The first time, the GO MINE layout is saved to `DelveGuiDump_gomine.txt`.
+
+**Auto-execute**
+- New `delve_autoexec.lua` for Volt's `autoexec` folder: only runs in Delve, waits for the game to load plus 10 s, then loads the script.
+- The window now starts **closed** (Right Shift or **Open Delve** shows it). Setting: **Start with this window closed**.
+
+**Cleaner UI**
+- 10 tabs down to 7: **Farm, Mining, Combat, Relics, Brain, Discord, Settings**. Duplicate and tuning-only settings are gone; the learning and safety features they controlled are built in and always on (relic learning, dodge learning, tile pathfinding, corner avoidance, windup learning, ping compensation, sword range detection).
+- Removed rarely useful test buttons.
+
+**Pop-ups**
+- New game-style pop-ups bottom-right: the game's own pixel font, dark card, coloured title by type (drops gold, relics blue, traders/farm green, paths teal, discoveries purple, errors red). Up to 5 stacked, click to dismiss. Setting: **Game-style pop-ups**.
+
+**Combat: attack rolls**
+- Reads your race and perks from the **Races** tab during the T-menu scan (e.g. Shura: Onibi Step II, "your roll drops 3 spirit flames that hunt the nearest mobs").
+- When your race has a roll perk, it rolls **into** the target whenever nothing is about to hit you. The roll is kept for dodging while an attack zone or windup is up, and it never rolls off the map or into a hazard. The roll distance is learned from real rolls. Setting: **Attack rolls** (Auto / Always / Off; Always without a perk only uses it to close the gap).
+
+**Drops**
+- Only drops of **1 in 100,000 or rarer** are announced (pop-up and Discord). Adjustable: **Rare drop = 1 in at least**.
 
 ## v4.4: Learns new mechanics
 - **Mechanic discovery.** The brain now notices anything new the game shows and remembers it:
