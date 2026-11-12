@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.2 | Brain`).
+
+## v4.2: Second relic slides and traders
+- **Second slides.** Deeper runs show a new set of relics right after the first pick, in the same window. It used to count as the same draft (same card slots and tiers) and nothing was picked. Each card's name is now part of the check, so every new slide gets picked too.
+- **Traders** ("A TRADER IN THE DARK"). Trader cards (tier "TRADER", "RARE RELIC") are now recognised, with their price. It buys the best offer if it scores at least the **Trader: only buy if score is at least** setting (default 5), then the next worthwhile one, and presses **WALK ON BY** when nothing is left worth buying. A buy that doesn't go through after 6 tries (for example, not enough cash) is skipped.
+- New Brain/Relic settings: **Buy from traders (else walk on by)** and the trader minimum score.
+- Cards are read straight from the relic window's layout (`Panel > Main > CardN`), so it's faster and doesn't depend on tier words.
 
 ## v4.1: Scan every 10 runs
 - The Index / Stats / Equipment scan no longer runs on every launch. It runs **after every 10 finished runs** (mine or delve), between runs, and the very first time if it has never scanned.

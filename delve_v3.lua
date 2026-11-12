@@ -119,6 +119,8 @@ local m = {
 		-- brain / learning
 		relicLearn = true,
 		relicExplore = true,
+		traderBuy = true,
+		traderMinScore = 5,
 		relicDelay = .3,
 		relicNotify = true,
 		dodgeLearn = true,
@@ -2630,6 +2632,37 @@ local relicAPI = (function()
 	local function findCards()
 		local pg = l:FindFirstChild("PlayerGui");
 		if not pg then return nil; end;
+		local rdraft = pg:FindFirstChild("RelicDraft");
+		if rdraft and rdraft:IsA("LayerCollector") and rdraft.Enabled ~= false then
+			local panel = rdraft:FindFirstChild("Panel");
+			local main = panel and panel:FindFirstChild("Main");
+			local timer = rdraft:FindFirstChild("Timer", true);
+			local timerOk = not timer or (shown(timer) and trim(txt(timer)) ~= "");
+			if main and timerOk then
+				local function tierOf(raw)
+					local u = trim(raw or ""):upper();
+					if TIER_VALUE[u] then return u; end;
+					for _, w in ipairs({ "UNCOMMON", "COMMON", "LEGENDARY", "MYTHIC", "EXOTIC", "DIVINE", "SECRET", "EPIC", "RARE" }) do
+						if u:find(w, 1, true) then return w; end;
+					end;
+					return u ~= "" and u or "COMMON";
+				end;
+				local list = {};
+				for _, cd in ipairs(main:GetChildren()) do
+					if cd:IsA("GuiObject") and cd.Name:match("^Card%d+$") and shown(cd) then
+						local tl, ti = cd:FindFirstChild("Title"), cd:FindFirstChild("Tier");
+						if tl and tl:IsA("TextLabel") and trim(txt(tl)) ~= "" then
+							list[#list + 1] = { root = cd, tierLabel = ti or tl, tier = tierOf(ti and txt(ti)) };
+						end;
+					end;
+				end;
+				if #list > 0 then
+					table.sort(list, function(x, y) return x.root.AbsolutePosition.X < y.root.AbsolutePosition.X; end);
+					hintName = "RelicDraft";
+					return list;
+				end;
+			end;
+		end;
 		local tried = {};
 		local function try(sg)
 			if not sg or tried[sg] or not sg:IsA("LayerCollector") or sg.Enabled == false then return nil; end;
@@ -2704,7 +2737,15 @@ local relicAPI = (function()
 			local sn, sp, sN = at:match("^(.-)%s*SET%s+(%d+)%s*/%s*(%d+)");
 			if sn then c.setName, c.setP, c.setN = trim(sn), tonumber(sp), tonumber(sN); end;
 			local note = root:FindFirstChild("Note");
-			c.taken = note and trim(txt(note)):upper():find("TAKEN") ~= nil or false;
+			local nu = note and trim(txt(note)):upper() or "";
+			c.taken = nu:find("TAKEN") ~= nil or nu:find("SOLD") ~= nil or nu:find("OWNED") ~= nil or nu:find("BOUGHT") ~= nil;
+			c.price = nil;
+			for _, o in ipairs(root:GetDescendants()) do
+				if (o:IsA("TextLabel") or o:IsA("TextButton")) and o.Visible then
+					local pv = txt(o):match("%$%s*([%d,]+)");
+					if pv then c.price = tonumber((pv:gsub(",", ""))); break; end;
+				end;
+			end;
 			c.key = c.name:upper();
 			c.button = root:FindFirstChild("Hit") or root:FindFirstChild("Action");
 			return c;
@@ -2900,6 +2941,7 @@ local relicAPI = (function()
 			rec.offered = (tonumber(rec.offered) or 0) + 1;
 			rec.name = c.name;
 		end;
+		if picked and draft.trader and type(r.traderBought) == "table" then r.traderBought[picked.key] = true; end;
 		if picked then
 			local rec = relicRec(picked.key);
 			rec.picks = (tonumber(rec.picks) or 0) + 1;
@@ -2919,7 +2961,11 @@ local relicAPI = (function()
 	end;
 	local function sigOf(cards)
 		local s = {};
-		for _, c in ipairs(cards) do s[#s + 1] = c.tier .. ":" .. trim(txt(c.tierLabel)) .. ":" .. tostring(c.root); end;
+		for _, c in ipairs(cards) do
+			local tl, nl = c.root:FindFirstChild("Title"), c.root:FindFirstChild("Note");
+			s[#s + 1] = c.tier .. ":" .. trim(txt(c.tierLabel)) .. ":" .. (tl and trim(txt(tl)) or "") .. ":"
+				.. (nl and trim(txt(nl)) or "") .. ":" .. tostring(c.root);
+		end;
 		return table.concat(s, "|");
 	end;
 	local function posSig(cards)
@@ -2958,7 +3004,26 @@ local relicAPI = (function()
 		table.sort(scored, function(x, y) return x.score > y.score; end);
 		local choice = scored[1];
 		draft.explored = false;
-		if Q.relicExplore ~= false and #scored >= 2 and scored[2].score > -1e5 and scored[2].score >= scored[1].score - 25 then
+		-- trader ("A TRADER IN THE DARK"): same window, cards cost cash and there is a WALK ON BY button
+		local sg = cards[1].root:FindFirstAncestorWhichIsA("LayerCollector");
+		local walk = sg and sg:FindFirstChild("WalkOn", true);
+		local heading = sg and sg:FindFirstChild("OfferHeading", true);
+		local timerL = sg and sg:FindFirstChild("Timer", true);
+		draft.walkOn = walk;
+		draft.trader = (walk and shown(walk)) or (heading and shown(heading) and txt(heading):upper():find("TRADER") ~= nil)
+			or (timerL and txt(timerL):upper():find("TRADER") ~= nil) or false;
+		if draft.trader then
+			r.traderBought = (type(r.traderBought) == "table" and now - (r.traderVisitAt or -1e9) < 30) and r.traderBought or {};
+			r.traderVisitAt = now;
+			choice = nil;
+			if Q.traderBuy ~= false then
+				local minScore = tonumber(Q.traderMinScore) or 5;
+				for _, c in ipairs(scored) do
+					if not c.taken and not r.traderBought[c.key] and c.score >= minScore then choice = c; break; end;
+				end;
+			end;
+			draft.walk = choice == nil;
+		elseif Q.relicExplore ~= false and #scored >= 2 and scored[2].score > -1e5 and scored[2].score >= scored[1].score - 25 then
 			local rec2 = brain.relics[scored[2].key];
 			local n2 = type(rec2) == "table" and (tonumber(rec2.n) or 0) or 0;
 			if n2 < 3 and math.random() < .08 then
@@ -2972,7 +3037,10 @@ local relicAPI = (function()
 			lines[#lines + 1] = string.format("%s [%s] = %.0f  (%s)", c.name, c.tier, c.score, table.concat(c.parts, ", "));
 		end;
 		r.lastDraft = lines;
-		if Q.relicNotify ~= false and choice then
+		if Q.relicNotify ~= false and draft.trader then
+			notify(choice and string.format("Trader: buying %s%s (%.0f)", choice.name,
+				choice.price and (" for $" .. tostring(choice.price)) or "", choice.score) or "Trader: nothing worth buying, walking on by", "Delve trader");
+		elseif Q.relicNotify ~= false and choice then
 			notify(string.format("%s %s (%.0f)%s", Q.cardPick and "Picking" or "I'd pick", choice.name, choice.score,
 				draft.explored and " [exploring a close 2nd]" or ""), "Delve relic");
 		end;
@@ -3036,6 +3104,27 @@ local relicAPI = (function()
 		if not Q.cardPick or draft.picked then
 			if MQ.phase == "down" then inp.mouseUp(); end;
 			MQ.phase = "idle";
+			return false;
+		end;
+		if draft.trader and not draft.walk and draft.attempts >= 6 and draft.choice then
+			-- the buy isn't going through (probably can't afford it): skip it
+			if type(r.traderBought) == "table" then r.traderBought[draft.choice.key] = true; end;
+			draft.walk = true;
+		end;
+		if draft.trader and draft.walk then
+			local wb = draft.walkOn;
+			draft.walkTries = draft.walkTries or 0;
+			if wb and wb.Parent and draft.walkTries < 8 and now - (draft.walkAt or -1e9) > .4 then
+				draft.walkTries, draft.walkAt = draft.walkTries + 1, now;
+				if r.fireAll then pcall(r.fireAll, wb); end;
+				pcall(inp.clickGui, wb);
+				if draft.walkTries >= 2 and VIMr then
+					local _, _, vx, vy = guiPoint(wb);
+					pcall(VIMr.SendMouseMoveEvent, VIMr, vx, vy, game);
+					pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, true, game, 0);
+					pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, false, game, 0);
+				end;
+			end;
 			return false;
 		end;
 		-- always have something to click: best card, or any card that isn't already taken
@@ -5824,6 +5913,8 @@ end;
 				{ k = "cardPick", t = "toggle", text = "Auto-pick relic cards" },
 				{ k = "relicLearn", t = "toggle", text = "Learn relics from my runs and picks" },
 				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd relic (to learn)" },
+				{ k = "traderBuy", t = "toggle", text = "Buy from traders (else walk on by)" },
+				{ k = "traderMinScore", t = "slider", text = "Trader: only buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
 				{ k = "relicNotify", t = "toggle", text = "Announce relic choice" },
 				{ k = "relicDelay", t = "slider", text = "Relic pick delay", min = .2, max = 5, step = .1, suffix = " s" },
 				{ k = "relicCodexNotify", t = "toggle", text = "Announce newly discovered relics" },
@@ -5950,7 +6041,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.1 | Brain",
+		Title = "Delve v4.2 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
