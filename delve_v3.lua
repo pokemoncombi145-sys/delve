@@ -328,6 +328,32 @@ end;
 --   dodge         -> extra safety margin / roll timing learned from hits you took
 --   mobReach[mob] -> real attack reach learned per mob (bosses with big swings)
 -- ===================================================================================
+-- BRAIN BACKUPS: a copy of DelveBrain.json in DelveBackups/ before any migration or reset, and at most
+-- every 6 hours on load. Only the newest 8 are kept.
+r.brainBackup = function(tag, raw)
+	if type(writefile) ~= "function" then return false; end;
+	local ok = pcall(function()
+		if raw == nil then
+			if type(isfile) == "function" and not isfile("DelveBrain.json") then return; end;
+			raw = readfile("DelveBrain.json");
+		end;
+		if type(raw) ~= "string" or #raw < 3 then error("nothing to back up"); end;
+		if type(makefolder) == "function" and not (type(isfolder) == "function" and isfolder("DelveBackups")) then
+			pcall(makefolder, "DelveBackups");
+		end;
+		local safeTag = (tostring(tag or "backup"):gsub("[^%w%-]", "_"));
+		writefile(string.format("DelveBackups/DelveBrain_%s_%s.json", os.date("%Y%m%d-%H%M%S"), safeTag), raw);
+		if type(listfiles) == "function" and type(delfile) == "function" then
+			local files = {};
+			for _, f in ipairs(listfiles("DelveBackups")) do
+				if tostring(f):find("DelveBrain_", 1, true) then files[#files + 1] = tostring(f); end;
+			end;
+			table.sort(files); -- names start with the date, so oldest first
+			for k = 1, #files - 8 do pcall(delfile, files[k]); end;
+		end;
+	end);
+	return ok;
+end;
 local brain = {
 	file = "DelveBrain.json",
 	v = 3,
@@ -366,6 +392,12 @@ do
 		if type(brain[key]) ~= "table" then brain[key] = {}; end;
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
+	if okRead and type(raw) == "string" and #raw > 2 then
+		local migrating = (tonumber(brain.learnV) or 0) < 2 or (tonumber(brain.cleanV) or 0) < 3;
+		if migrating or os.time() - (tonumber(brain.lastBackupAt) or 0) > 21600 then
+			if r.brainBackup(migrating and "before-migration" or "auto", raw) then brain.lastBackupAt = os.time(); end;
+		end;
+	end;
 	if (tonumber(brain.learnV) or 0) < 2 then
 		-- v5.4 audit: every attack shared one bucket ("Hazards/Part") so its numbers sat at their caps,
 		-- category weights were all at the 2.5 cap, the run baseline mixed abandoned 40 s runs with real
@@ -4375,6 +4407,8 @@ local function attackRoll(m)
 		end;
 		return;
 	end;
+	-- boss fights: keep every roll for defence (the race's roll perk still fires on defensive rolls)
+	if r.bossFight then r.offRollAt = nil; return; end;
 	local mode = CFG.attackRoll or "Auto";
 	if mode == "Off" or (mode == "Auto" and not r.rollPerk) or WQ ~= "combat" or not G or not inp.active() then return; end;
 	if CFG.autoRoll == false or m - (r.lastRoll or -1e9) < yl + .35 or r.offRollAt then return; end;
@@ -6973,37 +7007,104 @@ local indexAPI = (function()
 		end;
 	end;
 	-- switch to set n (verified by the green highlight)
-	function lo.switch(n, reason)
+	-- is it safe to open the menu right now? (no attack coming, not near a hazard, no enemy in striking distance)
+	function lo.safeNow()
+		if next(Cl) then return false, "an attack is coming"; end;
+		local G = sQ();
+		if not G then return false, "no character"; end;
+		for _, z in ipairs(Fl) do
+			if ul(z, G.X, G.Z, 3) then return false, "standing at a hazard"; end;
+		end;
+		for _, mob in ipairs(ol()) do
+			local reach = math.max(10, (tonumber(brain.mobReach[tostring(mob.name)]) or 0) + 4);
+			if (mob.x - G.X) ^ 2 + (mob.z - G.Z) ^ 2 < reach * reach then
+				return false, tostring(mob.name) .. " within striking distance";
+			end;
+		end;
+		return true, nil;
+	end;
+	lo.stats = { attempted = 0, completed = 0, skipped = 0, failed = 0 };
+	r.gearStats = lo.stats;
+	function lo.note(kind, n, reason, detail, secs)
+		lo.stats[kind] = (lo.stats[kind] or 0) + 1;
+		if r.why then
+			r.why("gear", string.format("set %d %s (%s)%s%s", n, kind, tostring(reason),
+				detail and (": " .. tostring(detail)) or "", secs and string.format(" in %.1f s", secs) or ""));
+		end;
+	end;
+	-- last resort if T didn't close the menu: the menu's own background "dismiss" button
+	function lo.forceClose()
+		local sc = lo.screen();
+		local dis = sc and sc:FindFirstChild("Dismiss", true);
+		if dis and r.fireAll then pcall(r.fireAll, dis); end;
+		task.wait(.3);
+		if menuOpen() then pressT(); end;
+	end;
+	-- switch to set n (verified by the green highlight). guarded = in a run: re-checks safety before clicking.
+	-- Bounded to 8 s; always leaves the menu closed if it opened it; on failure the active set is "unknown"
+	-- and it backs off before trying again.
+	function lo.switch(n, reason, guarded)
 		if r.loadoutBusy then return false; end;
+		if guarded then
+			local safe, why = lo.safeNow();
+			if not safe then lo.note("skipped", n, reason, why); return false; end;
+		end;
 		r.loadoutBusy = true;
-		local ok, res = pcall(function()
+		local t0 = d();
+		local deadline = t0 + 8;
+		lo.note("attempted", n, reason);
+		local openedHere = false;
+		local ok, res, failWhy = pcall(function()
 			local okM, opened = lo.openMenu();
-			if not okM then return false; end;
+			openedHere = opened;
+			if not okM then return false, "menu didn't open"; end;
 			task.wait(.3);
 			local win = openTab("EQUIPMENT");
-			if not win then lo.closeMenu(opened); return false; end;
+			if not win then return false, "Equipment tab didn't open"; end;
 			task.wait(.3);
 			if lo.current() ~= n then
-				local b = lo.btn(n);
-				-- a swap cooldown is shown on the button: wait it out
-				local cd = b and b:FindFirstChild("Cooldown");
-				if cd then waitFor(function() return not cd.Visible; end, 4); end;
-				lo.click(b, function() return lo.current() == n; end, "set " .. n);
+				if guarded then
+					local safe, why = lo.safeNow();
+					if not safe then return false, "became unsafe: " .. tostring(why); end;
+				end;
+				if d() > deadline then return false, "timed out"; end;
+				local btn = lo.btn(n);
+				if not btn then return false, "set button not found"; end;
+				local cd = btn:FindFirstChild("Cooldown");
+				if cd and cd.Visible then
+					if guarded then return false, "set swap on cooldown"; end;
+					waitFor(function() return not cd.Visible; end, math.max(0, deadline - d()));
+				end;
+				lo.click(btn, function() return lo.current() == n; end, "set " .. n);
 			end;
-			local now = lo.current();
-			if now then lo.cur = now; pcall(lo.applyRace, now); end;
-			if now == n and r.why then r.why("gear", string.format("set %d on (%s)", n, tostring(reason))); end;
-			if now ~= n and r.why then
+			local now2 = lo.current();
+			lo.cur = now2; -- nil = can't tell which set is on
+			if now2 then pcall(lo.applyRace, now2); end;
+			if now2 ~= n then
 				local gs = {};
 				for k = 1, 3 do local bk = lo.btn(k); gs[#gs + 1] = bk and string.format("%d:%.2f", k, lo.greenOf(bk)) or (k .. ":?"); end;
-				r.why("gear", string.format("couldn't confirm set %d is on (green); greenness %s", n, table.concat(gs, " ")));
+				return false, (now2 and ("set " .. now2 .. " is still on") or "can't tell which set is on") .. "; greenness " .. table.concat(gs, " ");
 			end;
-			lo.closeMenu(opened);
-			return now == n;
+			return true;
 		end);
+		-- always put the menu back the way it was
+		if openedHere and menuOpen() then
+			lo.closeMenu(true);
+			if menuOpen() then lo.forceClose(); end;
+		end;
 		r.loadoutBusy = false;
 		lo.switchAt = d();
-		return ok and res;
+		local secs = d() - t0;
+		if ok and res then
+			lo.failStreak, lo.failUntil = 0, 0;
+			lo.note("completed", n, reason, nil, secs);
+			return true;
+		end;
+		lo.failStreak = (lo.failStreak or 0) + 1;
+		lo.failUntil = d() + math.min(120, 30 * lo.failStreak);
+		lo.note("failed", n, reason, ok and failWhy or ("error: " .. tostring(res)), secs);
+		if not ok then lo.cur = nil; end;
+		return false;
 	end;
 	-- race for a set (hub only): Races tab > slot > race page > WEAR on that race's row > CLOSE
 	function lo.raceRow(name)
@@ -7122,11 +7223,12 @@ local indexAPI = (function()
 	function lo.sell(reason)
 		if run.active or inRun() or r.loadoutBusy then return false; end;
 		local sellT0 = r.scanStart("Selling ores (set 3)");
-		lo.switch(3, "selling");
+		local switched = lo.switch(3, "selling");
 		r.loadoutBusy, r.scanning = true, true;
 		local gained;
 		local ok, err = pcall(function()
-			if lo.current() ~= 3 then
+			-- only sell when set 3 was confirmed green by the switch
+			if not switched then
 				if r.why then r.why("gear", "sell skipped: set 3 isn't confirmed green"); end;
 				return;
 			end;
@@ -7200,6 +7302,8 @@ local indexAPI = (function()
 			gained = waitFor(soldText, 3) or tt;
 			lo.closeMenu(opened);
 		end);
+		-- never leave the menu open after selling (also after an error)
+		if menuOpen() then lo.closeMenu(true); if menuOpen() then lo.forceClose(); end; end;
 		r.loadoutBusy, r.scanning = false, false;
 		brain.runsAtSell = tonumber(brain.runCount) or 0;
 		markBrain();
@@ -7225,12 +7329,24 @@ local indexAPI = (function()
 			-- damage set on boss fights and when the mobs on this floor are hurting you; mining set otherwise
 			if now - lo.hitsT > 30 then lo.hitsAt, lo.hitsT = run.hits, now; end;
 			if run.hits - lo.hitsAt >= 4 then lo.hardUntil = now + 60; lo.hitsAt, lo.hitsT = run.hits, now; end;
-			local boss = r.bossFight or run.bossNow;
+			-- floors where a boss showed up before: put set 2 on at the start of that floor (the safest moment)
+			if run.depth ~= lo.floorDepth then lo.floorDepth, lo.floorAt = run.depth, now; end;
+			brain.bossFloors = type(brain.bossFloors) == "table" and brain.bossFloors or {};
+			if r.bossFight and (run.depth or 0) > 0 then brain.bossFloors[tostring(run.depth)] = r.bossFight; end;
+			local bossFloor = brain.bossFloors[tostring(run.depth)];
+			local boss = r.bossFight or run.bossNow or bossFloor;
 			local want = (boss and CFG.bossSet ~= false) and 2 or (now < lo.hardUntil and 2 or 1);
-			local why = boss and "boss fight" or (now < lo.hardUntil and "mobs hitting hard" or "mining");
-			if want ~= lo.cur and now - lo.switchAt > 20 then
-				lo.switchAt = now;
-				task.spawn(lo.switch, want, why);
+			local why = boss and (r.bossFight and "boss fight" or "boss floor") or (now < lo.hardUntil and "mobs hitting hard" or "mining");
+			if want ~= lo.cur and now - lo.switchAt > 20 and now > (lo.failUntil or 0) then
+				local safe, unsafeWhy = lo.safeNow();
+				if safe then
+					lo.switchAt = now;
+					task.spawn(lo.switch, want, why .. (now - (lo.floorAt or now) < 8 and ", floor start" or ""), true);
+				elseif lo.skipKey ~= want .. unsafeWhy or now - (lo.skipAt or 0) > 10 then
+					-- not safe: don't force it; note it (at most every 10 s) and try again when it is
+					lo.skipKey, lo.skipAt = want .. unsafeWhy, now;
+					lo.note("skipped", want, why, unsafeWhy);
+				end;
 			end;
 			return;
 		end;
@@ -8148,7 +8264,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.8 | Brain",
+		Title = "Delve v5.8.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -8422,6 +8538,7 @@ end;
 			tab:Button({
 				Title = "Reset everything the brain learned",
 				Callback = function()
+					r.brainBackup("before-reset");
 					brain.relics, brain.cat, brain.sets, brain.runs, brain.mobReach = {}, {}, {}, {}, {};
 					brain.dodge = { extra = 0, leadAdj = 0, hits = 0, dodges = 0 };
 					if r.sync then r.sync(); end;

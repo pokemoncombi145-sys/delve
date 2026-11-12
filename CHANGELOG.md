@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.8 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.8.1 | Brain`).
+
+## v5.8.1: Priority 1 safety fixes (not yet verified in gameplay)
+- **Safe set switching in runs.** The T menu is only opened when no attack is incoming, you aren't standing at a hazard, and no enemy is within striking distance (10 st, or its learned reach + 4). Safety is checked again right before clicking. If it isn't safe, the switch is skipped (logged at most every 10 s) and retried when it is; it is never forced.
+- **Switch at floor starts.** Floors where a boss appeared are remembered (`bossFloors`), so set 2 goes on at the start of that floor next time instead of mid-fight.
+- **Bounded switch with recovery.** Each switch has an 8 s limit. The menu is always closed if the switch opened it (T, then the menu's own dismiss as a fallback), also after errors. A failed switch marks the active set as unknown and backs off 30 s (up to 120 s) before trying again. Selling only proceeds when set 3 was confirmed by the switch, and the menu is closed after selling even on error.
+- **Switch log.** Every switch is logged as attempted, completed (with duration), skipped (with the reason it wasn't safe) or failed (with why and the button colours). Counts are kept for the run reports.
+- **No attack rolls in boss fights.** Offensive rolls are off while a boss is up; defensive rolls are unchanged, and race roll perks (Onibi Step, Flame Dash…) still trigger on them.
+- **Brain backups.** `DelveBackups/DelveBrain_<date>_<reason>.json` before any migration or reset, and on load at most every 6 hours. The newest 8 are kept.
 
 ## v5.8: Scan notices
 - Everything that takes a while now pops up "... in progress" when it starts and "... finished in 12.3 s" (or "1m 05s") with a short result when it ends: the Index/Stats/Equipment/Races scan, the per-load race check ("2 of 3 sets confirmed"), selling ores ("Sold +$1,733,355,148") and the mining stats scan you start yourself. Durations are also written to the reasoning log. Quiet automatic re-reads during runs stay quiet.

@@ -4,7 +4,7 @@
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.8**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each update.
+Current version: **v5.8.1**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each update.
 
 ## Features
 - **Dodging.** Plans a path over the floor tiles out of attack zones, avoids corners, and learns from every hit you take.
@@ -24,6 +24,7 @@ Current version: **v5.8**. See [CHANGELOG.md](CHANGELOG.md) for what changed in 
 | `DelveMechanics.jsonl` | one line per new mechanic discovered |
 | `DelveReasoning.txt` | why it fought, mined or picked each relic |
 | `DelveDeaths.jsonl` | the last 5 seconds before each death |
+| `DelveBackups/` | the newest 8 copies of the brain file |
 
 ## Load automatically (Volt auto-execute)
 Put `delve_autoexec.lua` in `%LOCALAPPDATA%\Volt\autoexec`. Every time you join Delve it waits for the game to load, then 10 seconds, then loads the latest script from this repo. It does nothing in other games. Turn on **Auto Farm** in the Farm tab and it will start your stage from the hub on its own.
