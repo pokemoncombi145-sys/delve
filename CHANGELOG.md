@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.8.3 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.9 | Brain`).
+
+## v5.9: Equipment set switching removed
+- Removed everything that changed equipment sets through the T menu: set switching in and between runs, selling ores with set 3, and the per-set race check. The Gear tab and its settings are gone. Switching through the menu wasn't reliable (swap cooldowns, no swaps mid-run), so this waits until the game adds hotkeys for sets.
+- Kept: the Index/Stats/Equipment scan (which still reads your worn race and its perks), the click safety fixes from v5.8.2, and the v5.8.3 fixes (real bosses only, no rolls right after a hit, shorter attack rolls).
 
 ## v5.8.3: Fixes from the first v5.8.2 session (not yet verified in gameplay)
 **What the logs showed:** after the race check, set 3 and set 1 failed ("timed out") so the damage set stayed on while mining; both in-run switch attempts found the set swap on cooldown; all 9 attack rolls targeted mobs 25-28 st away (learned roll distance at its 20 st cap); 4 of 5 hits were followed 20-80 ms later by a roll; and normal mobs (Ghoul, Rockback, Mummy, Yeti) were treated as bosses, saving 340 m and 880 m as boss floors.
