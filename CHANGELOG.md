@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.6 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.7 | Brain`).
+
+## v5.7: Race per set, checked once
+- Gear tab: a **race dropdown for each set** (set 1 mining: Drakon, set 2 damage: Shura, set 3 selling: Drakon by default; "Don't change" skips a set). Shiny versions (e.g. "Shiny Dactyl") match too.
+- **Once per load, in the hub, before the first run:** it switches to each set, makes sure that set wears its race (Races > slot > WEAR, confirmed by "(WORN)"), reads the race's perks, then goes back to set 1. Auto Farm waits for this check before starting a run.
+- It **never opens Races during or between runs** after that. Selling no longer changes races (set 3 already has its race).
+- Attack rolls know each set's race: switching to set 2 mid-run turns on Shura's roll perk (Onibi Step); Drakon has Flame Dash, Olympian Radiant Dash. Perks read from the race page replace these defaults.
 
 ## v5.6: Equipment sets, auto-sell, races
 New **Gear** tab. Uses the game's own equipped-item sets (T menu > Equipment > Equipped Items **1 / 2 / 3**), checking the set's button turned green after each switch.

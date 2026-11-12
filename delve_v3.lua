@@ -125,8 +125,9 @@ local m = {
 		autoSell = true,
 		sellEveryRuns = 5,
 		autoRace = true,
-		raceSet1 = "DRAKON",
-		raceSet3 = "DRAKON",
+		setRace1 = "Drakon",
+		setRace2 = "Shura",
+		setRace3 = "Drakon",
 		stage = "Delve",
 		stageOther = "",
 		startClosed = true,
@@ -6845,7 +6846,27 @@ local indexAPI = (function()
 	--   1 = mining set, 2 = damage set (boss fights / hard mobs), 3 = sell set.
 	--   Every few runs, between runs: set 3 > Backpack > Sell items > Ores > Select all > Accept, then back to set 1.
 	--   Races (hub only): set 1 and 3 wear Drakon, set 2 wears Shura (editable). Never touches reroll or Robux buttons.
-	local lo = { cur = nil, switchAt = -1e9, hubDone = false, hitsAt = 0, hitsT = 0, hardUntil = 0 };
+	local lo = { cur = nil, switchAt = -1e9, hubDone = false, hitsAt = 0, hitsT = 0, hardUntil = 0, raceChecked = false };
+	lo.ROLL = { SHURA = "Onibi Step", DRAKON = "Flame Dash", OLYMPIAN = "Radiant Dash" };
+	function lo.raceOf(n)
+		local v = trim(tostring(CFG["setRace" .. n] or "")):upper();
+		if v == "" or v:find("DON'T", 1, true) then return nil; end;
+		return v;
+	end;
+	-- the race worn with the active set decides whether attack rolls have a roll perk to use
+	function lo.applyRace(n)
+		local race = lo.raceOf(n);
+		if not race then return; end;
+		local perk = lo.ROLL[race];
+		local perks = type(brain.racePerks) == "table" and brain.racePerks[race];
+		if type(perks) == "table" then
+			perk = nil;
+			for _, pk in ipairs(perks) do
+				if tostring(pk.desc):upper():find("ROLL") then perk = pk.name; end;
+			end;
+		end;
+		r.rollPerk = perk;
+	end;
 	local LO_BAD = { "REROLL", "BUY", "R$", "ROBUX", "FAST ROLL", "SPIN", "GIFT" };
 	function lo.unsafe(obj)
 		local b = obj:IsA("GuiButton") and obj or obj:FindFirstAncestorWhichIsA("GuiButton") or obj;
@@ -6933,7 +6954,7 @@ local indexAPI = (function()
 				lo.click(b, function() return lo.current() == n; end, "set " .. n);
 			end;
 			local now = lo.current();
-			if now then lo.cur = now; end;
+			if now then lo.cur = now; pcall(lo.applyRace, now); end;
 			if now == n and r.why then r.why("gear", string.format("set %d on (%s)", n, tostring(reason))); end;
 			if now ~= n and r.why then
 				local gs = {};
@@ -6951,7 +6972,8 @@ local indexAPI = (function()
 	function lo.raceRow(name)
 		local pg = pgui();
 		for _, o in ipairs(pg and pg:GetDescendants() or {}) do
-			if isText(o) and shown(o) and trim(txt(o)):upper() == name then
+			local u0 = isText(o) and shown(o) and trim(txt(o)):upper() or "";
+			if u0 == name or u0 == "SHINY " .. name then
 				local row = o.Parent;
 				for _ = 1, 2 do
 					if row then
@@ -7171,13 +7193,26 @@ local indexAPI = (function()
 		-- between runs: sell when due, then make sure set 1 + its race are on
 		local every = math.max(1, math.floor(tonumber(CFG.sellEveryRuns) or 5));
 		local runsSince = (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtSell) or 0);
-		if CFG.autoSell ~= false and runsSince >= every then
+		if not lo.raceChecked then
+			lo.raceChecked = "running";
 			lo.switchAt = now;
 			task.spawn(function()
-				if CFG.autoRace ~= false then lo.setRace(CFG.raceSet3 or "DRAKON", "set 3, selling"); end;
-				lo.sell(string.format("after %d runs", runsSince));
-				if CFG.autoRace ~= false then lo.setRace(CFG.raceSet1 or "DRAKON", "set 1"); end;
+				if CFG.autoRace ~= false then
+					-- once per load: each set wears the race picked for it (the game keeps the race with the set)
+					for n = 1, 3 do
+						local race = lo.raceOf(n);
+						if race and lo.switch(n, "race check") then lo.setRace(race, "set " .. n); end;
+					end;
+				end;
+				lo.switch(1, "ready to run");
+				lo.raceChecked = true;
 			end);
+			return;
+		end;
+		if lo.raceChecked ~= true then return; end;
+		if CFG.autoSell ~= false and runsSince >= every then
+			lo.switchAt = now;
+			task.spawn(lo.sell, string.format("after %d runs", runsSince));
 			return;
 		end;
 		if not lo.hubDone then
@@ -7185,7 +7220,6 @@ local indexAPI = (function()
 			lo.switchAt = now;
 			task.spawn(function()
 				if lo.current() ~= 1 or lo.cur ~= 1 then lo.switch(1, "between runs"); end;
-				if CFG.autoRace ~= false then lo.setRace(CFG.raceSet1 or "DRAKON", "set 1"); end;
 			end);
 		end;
 	end;
@@ -7225,6 +7259,7 @@ local indexAPI = (function()
 		if now - startedAt > 10 then pcall(lo.tick, now); end;
 		-- in the hub with Auto Farm on: open GO MINE and start the chosen stage
 		if CFG.autoStage == true and not busy and not launch.busy and not r.loadoutBusy and now - startedAt > 10 and not inRun()
+			and (CFG.autoLoadouts == false or lo.raceChecked == true)
 			and not relicAPI.hasDraft() and now - launch.at > math.min(60, 8 + launch.fails * 6)
 			and now > (launch.lockedUntil or 0) and goMineButton() then
 			launch.at = now;
@@ -7754,6 +7789,7 @@ end;
 
 (function()
 	-- Settings shared by the controls and the runtime
+	local RACES = { "Drakon", "Shura", "Hydra", "Olympian", "Titan", "Dryad", "Dactyl", "Andros", "Kobalos", "Sphinx", "Lithos", "Nymph", "Yasha", "Nyx", "Phantom", "Don't change" };
 	local STAGES = { "Delve", "Grasslands", "Sun Flats", "Frostbite", "Mycelia", "Pirates Cove", "Infernia", "The Abyss" };
 	local spec = {
 		{
@@ -7776,9 +7812,10 @@ end;
 				{ k = "bossSet", t = "toggle", text = "Damage set (2) on boss fights" },
 				{ k = "autoSell", t = "toggle", text = "Sell ores with set 3" },
 				{ k = "sellEveryRuns", t = "slider", text = "Sell every", min = 1, max = 30, step = 1, suffix = " runs" },
-				{ k = "autoRace", t = "toggle", text = "Wear the set's race between runs" },
-				{ k = "raceSet1", t = "input", text = "Race for set 1 (mining)", placeholder = "DRAKON" },
-				{ k = "raceSet3", t = "input", text = "Race for set 3 (selling)", placeholder = "DRAKON" },
+				{ k = "autoRace", t = "toggle", text = "Check each set's race once per load (hub)" },
+				{ k = "setRace1", t = "combo", text = "Set 1 race (mining)", items = RACES },
+				{ k = "setRace2", t = "combo", text = "Set 2 race (damage)", items = RACES },
+				{ k = "setRace3", t = "combo", text = "Set 3 race (selling)", items = RACES },
 			},
 		},
 		{
@@ -8063,7 +8100,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.6 | Brain",
+		Title = "Delve v5.7 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -8198,7 +8235,7 @@ end;
 			end;
 			tab:Paragraph({
 				Title = "How it works",
-				Desc = "In delves it uses set 1, and set 2 for boss fights or when mobs hit hard (switches at most every 20 s). Every few runs, between runs, it swaps to set 3, sells your ores and goes back to set 1. Races change only in the hub (set 1 race for runs, set 3 race for selling). It never clicks reroll or Robux buttons.",
+				Desc = "In delves it uses set 1, and set 2 for boss fights or when mobs hit hard (switches at most every 20 s). Every few runs, between runs, it swaps to set 3, sells your ores and goes back to set 1. Once per load, in the hub before the first run, it checks each set wears the race picked above (the set keeps it). It never opens Races during a run and never clicks reroll or Robux buttons.",
 			});
 		end;
 		if group.name == "Discord" then
