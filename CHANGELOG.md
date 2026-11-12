@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.2 | Brain`).
+
+## v5.2: The real pillar bug, close mobs (from the v5.1 logs)
+**What the logs showed:** "floor mapped: 6 pillars" was logged several times a second. The game refreshes the floor tile list constantly, and every refresh rebuilt the map from scratch, which **wiped every blocked pillar**. So it pushed into the same pillar 16 times in a row until the timer hit 0:00 and the tunnel caved in. This is also why the older unstick fixes never stuck.
+
+**Fixed**
+- The floor map (and the pillars blocked on it) is only rebuilt when the floor really changes (different size or position). Pillars found on a floor stay blocked for that whole floor. This also removes a constant rebuild that cost performance.
+- If it gets stopped at the same spot 3+ times, it backs off at an angle before routing again.
+- **Mobs right next to you are always fought** (within your circle distance, 5-9 studs), even in the timer danger zone, then it goes straight back to mining.
 
 ## v5.1: Pillars and chests (from the v5.0 logs)
 **What the logs showed:** every "detour" around a pillar was 1 tile long (it aimed a few studs ahead instead of at the chest/ore), so it walked straight back into the same pillar up to 8 times in a row. The mining-stat re-read also fired every 2-3 s because buff counters like "BLOODRUSH 3/10" kept changing, which caused the "Delve stats" pop-up spam.

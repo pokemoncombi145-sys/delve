@@ -4439,6 +4439,23 @@ nav.N8 = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 
 local function navBuild()
 	if nav.tiles == i and nav.map then return true; end;
 	if nav.tiles == i and not nav.map then return false; end;
+	-- the tile list gets refreshed all the time; only a different floor (other size or position) is a new map.
+	-- Rebuilding every refresh wiped the blocked pillars, so it walked into the same pillar again and again.
+	local sig = nil;
+	if #i >= 3 then
+		local a1, b1 = math.huge, math.huge;
+		for _, t in ipairs(i) do
+			if t.cx < a1 then a1 = t.cx; end;
+			if t.cz < b1 then b1 = t.cz; end;
+		end;
+		local t1 = i[1];
+		sig = string.format("%d|%d|%d|%d|%d", #i, a1, b1, math.floor(t1.wx / 4 + .5), math.floor(t1.wz / 4 + .5));
+	end;
+	if sig and sig == nav.sig and nav.map then
+		nav.tiles = i;
+		return true;
+	end;
+	nav.sig = sig;
 	nav.tiles, nav.map, nav.open = i, nil, nil;
 	nav.blocked = {};
 	if #i < 3 then return false; end;
@@ -5083,6 +5100,19 @@ local function wantFight(list, pos, now)
 		r.fightWhy = "mob stage";
 		return true;
 	end;
+	-- a mob right on top of you: kill it first (it would keep hitting you and block mining), then back to mining
+	do
+		local closest = math.huge;
+		for _, mob in ipairs(list) do
+			local dd = math.sqrt((mob.x - pos.X) ^ 2 + (mob.z - pos.Z) ^ 2);
+			if dd < closest then closest = dd; end;
+		end;
+		local tooClose = math.max(5, math.min(9, (tonumber(CFG.fightDist) or 8)));
+		if closest <= tooClose then
+			r.fightWhy = string.format("too close (%.1f st): clear it, then mine", closest);
+			return true;
+		end;
+	end;
 	-- delve floor timer in the danger zone: ignore mobs, every second goes to ores / getting down
 	local tl = tonumber(run.timeLeft);
 	if tl and tl <= (tonumber(CFG.dangerTime) or 10) and now - (tonumber(run.timeAt) or -1e9) < 2 then
@@ -5158,6 +5188,12 @@ local function lh(m)
 				local sg = r.steerGoal;
 				local goal = (sg and m - sg.t < 2) and { x = sg.x, z = sg.z } or { x = G.X + dir[1] * 18, z = G.Z + dir[2] * 18 };
 				r.steerPath = nil;
+				if r.stuckStreak >= 3 then
+					-- the same spot keeps stopping it: back off at an angle and drop the current rock as a target
+					r.forceDir = { x = -dir[1] - dir[2], z = -dir[2] + dir[1], untilT = m + .7 };
+					L, u = nil, nil;
+					if r.why then r.why("move", string.format("stuck %d times here: backing off and picking another target", r.stuckStreak)); end;
+				end;
 				local okR, path = pcall(navRoute, G.X, G.Z, goal.x, goal.z, m);
 				if okR and path and #path >= 2 then
 					r.detour = { path = path, i = 1, untilT = m + 4 };
@@ -7480,7 +7516,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.1 | Brain",
+		Title = "Delve v5.2 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
