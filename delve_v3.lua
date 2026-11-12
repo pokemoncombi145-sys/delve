@@ -120,6 +120,13 @@ local m = {
 		relicLearn = true,
 		relicExplore = true,
 		autoStage = false,
+		autoLoadouts = true,
+		bossSet = true,
+		autoSell = true,
+		sellEveryRuns = 5,
+		autoRace = true,
+		raceSet1 = "DRAKON",
+		raceSet3 = "DRAKON",
 		stage = "Delve",
 		stageOther = "",
 		startClosed = true,
@@ -6834,6 +6841,355 @@ local indexAPI = (function()
 		launch.busy, r.launching = false, false;
 	end;
 	r.launchStage = function() launch.at, launch.fails, launch.lockedUntil = d(), 0, nil; task.spawn(launchStage); end;
+	-- ---------------------------------------------------------------- LOADOUTS (T menu > Equipment > Equipped items 1 / 2 / 3)
+	--   1 = mining set, 2 = damage set (boss fights / hard mobs), 3 = sell set.
+	--   Every few runs, between runs: set 3 > Backpack > Sell items > Ores > Select all > Accept, then back to set 1.
+	--   Races (hub only): set 1 and 3 wear Drakon, set 2 wears Shura (editable). Never touches reroll or Robux buttons.
+	local lo = { cur = nil, switchAt = -1e9, hubDone = false, hitsAt = 0, hitsT = 0, hardUntil = 0 };
+	local LO_BAD = { "REROLL", "BUY", "R$", "ROBUX", "FAST ROLL", "SPIN", "GIFT" };
+	function lo.unsafe(obj)
+		local b = obj:IsA("GuiButton") and obj or obj:FindFirstAncestorWhichIsA("GuiButton") or obj;
+		local list = b:GetDescendants();
+		list[#list + 1] = b;
+		for _, o in ipairs(list) do
+			if isText(o) then
+				local t = txt(o):upper();
+				for _, w in ipairs(LO_BAD) do
+					if t:find(w, 1, true) then return true; end;
+				end;
+			end;
+		end;
+		return false;
+	end;
+	function lo.click(obj, check, label)
+		if not obj or lo.unsafe(obj) then
+			if r.why then r.why("gear", "refused to click " .. tostring(label) .. " (looks like a reroll/purchase button)"); end;
+			return false;
+		end;
+		return clickVerified(obj, check, label);
+	end;
+	-- "$321M" / "$4.28K" / "$1,733,355,148" -> number
+	function lo.money(u)
+		local num, suf = tostring(u):upper():match("%$([%d%.,]+)%s*(%a?)");
+		if not num then return 0; end;
+		local v = tonumber((num:gsub(",", ""))) or 0;
+		local mult = ({ K = 1e3, M = 1e6, B = 1e9, T = 1e12 })[suf] or 1;
+		return v * mult;
+	end;
+	function lo.screen() local pg = pgui(); return pg and pg:FindFirstChild("InventoryScreen"); end;
+	function lo.btn(n) local sc = lo.screen(); return sc and sc:FindFirstChild("Loadout" .. n, true); end;
+	-- which set is active: the green one
+	function lo.greenOf(b)
+		local best = -1;
+		for _, o in ipairs(b:GetDescendants()) do
+			if o:IsA("GuiObject") and o.Visible then
+				local okC, c = pcall(function() return o.BackgroundColor3; end);
+				if okC and c and o.BackgroundTransparency < .9 then best = math.max(best, c.G - math.max(c.R, c.B)); end;
+			end;
+		end;
+		local okI, ic = pcall(function() return b.ImageColor3; end);
+		if okI and ic then best = math.max(best, ic.G - math.max(ic.R, ic.B)); end;
+		return best;
+	end;
+	function lo.current()
+		local best, bv = nil, .12;
+		for n = 1, 3 do
+			local b = lo.btn(n);
+			if b and shown(b) then
+				local g = lo.greenOf(b);
+				if g > bv then best, bv = n, g; end;
+			end;
+		end;
+		return best;
+	end;
+	function lo.openMenu()
+		if menuOpen() then return true, false; end;
+		if not pressT() then return false, false; end;
+		return waitFor(menuOpen, 2) ~= nil, true;
+	end;
+	function lo.closeMenu(opened)
+		if opened and menuOpen() then
+			pressT();
+			task.wait(.4);
+			if menuOpen() then pressT(); end;
+		end;
+	end;
+	-- switch to set n (verified by the green highlight)
+	function lo.switch(n, reason)
+		if r.loadoutBusy then return false; end;
+		r.loadoutBusy = true;
+		local ok, res = pcall(function()
+			local okM, opened = lo.openMenu();
+			if not okM then return false; end;
+			task.wait(.3);
+			local win = openTab("EQUIPMENT");
+			if not win then lo.closeMenu(opened); return false; end;
+			task.wait(.3);
+			if lo.current() ~= n then
+				local b = lo.btn(n);
+				-- a swap cooldown is shown on the button: wait it out
+				local cd = b and b:FindFirstChild("Cooldown");
+				if cd then waitFor(function() return not cd.Visible; end, 4); end;
+				lo.click(b, function() return lo.current() == n; end, "set " .. n);
+			end;
+			local now = lo.current();
+			if now then lo.cur = now; end;
+			if now == n and r.why then r.why("gear", string.format("set %d on (%s)", n, tostring(reason))); end;
+			if now ~= n and r.why then
+				local gs = {};
+				for k = 1, 3 do local bk = lo.btn(k); gs[#gs + 1] = bk and string.format("%d:%.2f", k, lo.greenOf(bk)) or (k .. ":?"); end;
+				r.why("gear", string.format("couldn't confirm set %d is on (green); greenness %s", n, table.concat(gs, " ")));
+			end;
+			lo.closeMenu(opened);
+			return now == n;
+		end);
+		r.loadoutBusy = false;
+		lo.switchAt = d();
+		return ok and res;
+	end;
+	-- race for a set (hub only): Races tab > slot > race page > WEAR on that race's row > CLOSE
+	function lo.raceRow(name)
+		local pg = pgui();
+		for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+			if isText(o) and shown(o) and trim(txt(o)):upper() == name then
+				local row = o.Parent;
+				for _ = 1, 2 do
+					if row then
+						for _, s2 in ipairs(row:GetDescendants()) do
+							local u = isText(s2) and trim(txt(s2)):upper() or "";
+							if u == "WEAR" or u:find("WORN", 1, true) then return row; end;
+						end;
+						row = row.Parent;
+					end;
+				end;
+			end;
+		end;
+		return nil;
+	end;
+	function lo.rowWorn(row)
+		for _, s2 in ipairs(row and row:GetDescendants() or {}) do
+			if isText(s2) and shown(s2) and trim(txt(s2)):upper():find("WORN", 1, true) then return true; end;
+		end;
+		return false;
+	end;
+	function lo.racePageOpen()
+		local pg = pgui();
+		for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+			if isText(o) and shown(o) and trim(txt(o)):upper() == "RACE SLOTS" then return o; end;
+		end;
+		return nil;
+	end;
+	function lo.setRace(name, reason)
+		name = trim(tostring(name or "")):upper();
+		if name == "" or run.active or inRun() or r.loadoutBusy then return false; end;
+		r.loadoutBusy, r.scanning = true, true;
+		local ok, res = pcall(function()
+			if not lo.racePageOpen() then
+				local okM = lo.openMenu();
+				if not okM then return false; end;
+				task.wait(.3);
+				local tab = tabLabels("RACES")[1];
+				if not tab then return false; end;
+				lo.click(tab, function() return findWindow("RACES"); end, "Races tab");
+				local rw = waitFor(function() return findWindow("RACES"); end, 2);
+				if not rw then return false; end;
+				task.wait(.4);
+				-- any race slot card opens the race page
+				local slot;
+				for _, o in ipairs(rw:GetDescendants()) do
+					if isText(o) and shown(o) and trim(txt(o)):upper() == name then slot = o; break; end;
+				end;
+				if not slot then
+					for _, o in ipairs(rw:GetDescendants()) do
+						if isText(o) and shown(o) and trim(txt(o)):upper():match("^SLOT %d") then slot = o; break; end;
+					end;
+				end;
+				if not slot then return false; end;
+				lo.click(slot, function() return lo.racePageOpen() ~= nil; end, "race slot");
+				if not waitFor(function() return lo.racePageOpen(); end, 3) then return false; end;
+			end;
+			task.wait(.5);
+			if not r.racePageDumped then
+				r.racePageDumped = true;
+				local rp = lo.racePageOpen();
+				pcall(dump, rp and (sizedAncestor(rp, 300, 300) or rp.Parent), "racepage");
+			end;
+			local row = lo.raceRow(name);
+			if not row then
+				if r.why then r.why("gear", "race " .. name .. " isn't in your race slots"); end;
+				return false;
+			end;
+			if not lo.rowWorn(row) then
+				local wear;
+				for _, s2 in ipairs(row:GetDescendants()) do
+					if isText(s2) and trim(txt(s2)):upper() == "WEAR" then wear = s2; break; end;
+				end;
+				lo.click(wear or row, function() return lo.rowWorn(lo.raceRow(name)); end, "wear " .. name);
+				task.wait(.6);
+			end;
+			local worn = lo.rowWorn(lo.raceRow(name));
+			-- read this race's perks while the page is up (they're shown for the race you wear)
+			if worn then
+				local okP = pcall(scanRace);
+				if okP and type(brain.race) == "table" then
+					brain.racePerks = type(brain.racePerks) == "table" and brain.racePerks or {};
+					brain.racePerks[name] = brain.race.perks;
+					brain.race.name = name;
+				end;
+			end;
+			if r.why then r.why("gear", string.format("race %s %s (%s)", name, worn and "worn" or "not confirmed", tostring(reason))); end;
+			-- leave the race page
+			local pg = pgui();
+			for _, o in ipairs(pg and pg:GetDescendants() or {}) do
+				if isText(o) and shown(o) and trim(txt(o)):upper() == "CLOSE" then
+					lo.click(o, function() return lo.racePageOpen() == nil; end, "close race page");
+					break;
+				end;
+			end;
+			task.wait(.4);
+			if menuOpen() then lo.closeMenu(true); end;
+			return worn;
+		end);
+		r.loadoutBusy, r.scanning = false, false;
+		return ok and res;
+	end;
+	-- sell ores with set 3, then back to set 1
+	function lo.sell(reason)
+		if run.active or inRun() or r.loadoutBusy then return false; end;
+		lo.switch(3, "selling");
+		r.loadoutBusy, r.scanning = true, true;
+		local gained;
+		local ok, err = pcall(function()
+			if lo.current() ~= 3 then
+				if r.why then r.why("gear", "sell skipped: set 3 isn't confirmed green"); end;
+				return;
+			end;
+			local okM, opened = lo.openMenu();
+			if not okM then return; end;
+			task.wait(.3);
+			-- Backpack (ores), never the Equipment tab's sell
+			local bp = findWindow("PERSONAL BACKPACK") or findWindow("SELLING");
+			if not bp then
+				local tab = tabLabels("BACKPACK")[1];
+				if tab then lo.click(tab, function() return findWindow("PERSONAL BACKPACK"); end, "Backpack tab"); end;
+				bp = waitFor(function() return findWindow("PERSONAL BACKPACK"); end, 2);
+			end;
+			if not bp then lo.closeMenu(opened); return; end;
+			if not findWindow("SELLING") then
+				local sb;
+				for _, o in ipairs(bp:GetDescendants()) do
+					if isText(o) and shown(o) and trim(txt(o)):upper() == "SELL ITEMS" then sb = o; break; end;
+				end;
+				lo.click(sb, function() return findWindow("SELLING"); end, "Sell items");
+			end;
+			local sw = waitFor(function() return findWindow("SELLING"); end, 2);
+			if not sw then lo.closeMenu(opened); return; end;
+			-- make sure this is the ore sell screen and the Ores category is selected
+			local oresTab;
+			for _, o in ipairs(sw:GetDescendants()) do
+				if isText(o) and shown(o) and trim(txt(o)):upper() == "ORES" then oresTab = o; break; end;
+			end;
+			if not oresTab then
+				if r.why then r.why("gear", "sell stopped: this isn't the ore sell screen"); end;
+				lo.closeMenu(opened);
+				return;
+			end;
+			lo.click(oresTab, function() return true; end, "Ores");
+			task.wait(.4);
+			local function total()
+				for _, o in ipairs(sw:GetDescendants()) do
+					if isText(o) and shown(o) then
+						local u = trim(txt(o)):upper();
+						if u:find("^TOTAL") then return lo.money(u), u; end;
+					end;
+				end;
+				return 0, nil;
+			end;
+			local sa;
+			for _, o in ipairs(sw:GetDescendants()) do
+				if isText(o) and shown(o) and trim(txt(o)):upper() == "SELECT ALL" then sa = o; break; end;
+			end;
+			lo.click(sa, function() return total() > 0; end, "Select all");
+			local tv, tt = total();
+			if tv <= 0 then
+				if r.why then r.why("gear", "nothing to sell"); end;
+				lo.closeMenu(opened);
+				return;
+			end;
+			local acc;
+			for _, o in ipairs(sw:GetDescendants()) do
+				if isText(o) and shown(o) and trim(txt(o)):upper() == "ACCEPT" then acc = o; break; end;
+			end;
+			local function soldText()
+				local sc = lo.screen();
+				for _, o in ipairs(sc and sc:GetDescendants() or {}) do
+					if isText(o) and shown(o) then
+						local u = trim(txt(o));
+						if u:match("^%+%$[%d,]+") then return u; end;
+					end;
+				end;
+				return nil;
+			end;
+			lo.click(acc, function() return soldText() ~= nil or total() == 0; end, "Accept");
+			gained = waitFor(soldText, 3) or tt;
+			lo.closeMenu(opened);
+		end);
+		r.loadoutBusy, r.scanning = false, false;
+		brain.runsAtSell = tonumber(brain.runCount) or 0;
+		markBrain();
+		if gained then
+			notify("Sold ores: " .. tostring(gained), "Delve gear");
+			if r.why then r.why("gear", "sold ores " .. tostring(gained) .. " (" .. tostring(reason) .. ")"); end;
+			brain.sales = type(brain.sales) == "table" and brain.sales or {};
+			table.insert(brain.sales, { t = os.time(), amount = tostring(gained) });
+			while #brain.sales > 50 do table.remove(brain.sales, 1); end;
+		elseif not ok then
+			notify("Sell error: " .. tostring(err), "Delve gear");
+		end;
+		lo.switch(1, "back to mining after selling");
+		return gained ~= nil;
+	end;
+	-- when to use which set
+	function lo.tick(now)
+		if CFG.autoLoadouts == false or r.loadoutBusy or busy or launch.busy then return; end;
+		if relicAPI.hasDraft() then return; end;
+		if run.active then
+			lo.hubDone = false;
+			-- damage set on boss fights and when the mobs on this floor are hurting you; mining set otherwise
+			if now - lo.hitsT > 30 then lo.hitsAt, lo.hitsT = run.hits, now; end;
+			if run.hits - lo.hitsAt >= 4 then lo.hardUntil = now + 60; lo.hitsAt, lo.hitsT = run.hits, now; end;
+			local boss = r.bossFight or run.bossNow;
+			local want = (boss and CFG.bossSet ~= false) and 2 or (now < lo.hardUntil and 2 or 1);
+			local why = boss and "boss fight" or (now < lo.hardUntil and "mobs hitting hard" or "mining");
+			if want ~= lo.cur and now - lo.switchAt > 20 then
+				lo.switchAt = now;
+				task.spawn(lo.switch, want, why);
+			end;
+			return;
+		end;
+		if inRun() or now - lo.switchAt < 5 then return; end;
+		-- between runs: sell when due, then make sure set 1 + its race are on
+		local every = math.max(1, math.floor(tonumber(CFG.sellEveryRuns) or 5));
+		local runsSince = (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtSell) or 0);
+		if CFG.autoSell ~= false and runsSince >= every then
+			lo.switchAt = now;
+			task.spawn(function()
+				if CFG.autoRace ~= false then lo.setRace(CFG.raceSet3 or "DRAKON", "set 3, selling"); end;
+				lo.sell(string.format("after %d runs", runsSince));
+				if CFG.autoRace ~= false then lo.setRace(CFG.raceSet1 or "DRAKON", "set 1"); end;
+			end);
+			return;
+		end;
+		if not lo.hubDone then
+			lo.hubDone = true;
+			lo.switchAt = now;
+			task.spawn(function()
+				if lo.current() ~= 1 or lo.cur ~= 1 then lo.switch(1, "between runs"); end;
+				if CFG.autoRace ~= false then lo.setRace(CFG.raceSet1 or "DRAKON", "set 1"); end;
+			end);
+		end;
+	end;
+	r.loadout = lo;
 	if type(brain.race) == "table" then r.rollPerk = brain.race.rollPerk; end;
 	local tickAt, queueAt, startedAt = -1e9, -1e9, nil;
 	local function tick(now)
@@ -6861,13 +7217,14 @@ local indexAPI = (function()
 		local every = math.max(1, math.floor(tonumber(CFG.scanEveryRuns) or 10));
 		local runsSince = (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtScan) or 0);
 		local due = brain.indexScannedAt == nil or runsSince >= every;
-		if due and not busy and not r.launching and CFG.autoIndexScan ~= false and now - startedAt > 10
+		if due and not busy and not r.launching and not r.loadoutBusy and CFG.autoIndexScan ~= false and now - startedAt > 10
 			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10 then
 			r.scanTryAt = now;
 			task.spawn(scan, brain.indexScannedAt == nil and "first scan" or string.format("after %d runs", runsSince));
 		end;
+		if now - startedAt > 10 then pcall(lo.tick, now); end;
 		-- in the hub with Auto Farm on: open GO MINE and start the chosen stage
-		if CFG.autoStage == true and not busy and not launch.busy and now - startedAt > 10 and not inRun()
+		if CFG.autoStage == true and not busy and not launch.busy and not r.loadoutBusy and now - startedAt > 10 and not inRun()
 			and not relicAPI.hasDraft() and now - launch.at > math.min(60, 8 + launch.fails * 6)
 			and now > (launch.lockedUntil or 0) and goMineButton() then
 			launch.at = now;
@@ -7412,6 +7769,19 @@ end;
 			},
 		},
 		{
+			name = "Gear",
+			icon = "shirt",
+			items = {
+				{ k = "autoLoadouts", t = "toggle", text = "Switch sets: 1 mining, 2 damage" },
+				{ k = "bossSet", t = "toggle", text = "Damage set (2) on boss fights" },
+				{ k = "autoSell", t = "toggle", text = "Sell ores with set 3" },
+				{ k = "sellEveryRuns", t = "slider", text = "Sell every", min = 1, max = 30, step = 1, suffix = " runs" },
+				{ k = "autoRace", t = "toggle", text = "Wear the set's race between runs" },
+				{ k = "raceSet1", t = "input", text = "Race for set 1 (mining)", placeholder = "DRAKON" },
+				{ k = "raceSet3", t = "input", text = "Race for set 3 (selling)", placeholder = "DRAKON" },
+			},
+		},
+		{
 			name = "Mining",
 			icon = "pickaxe",
 			rescan = true,
@@ -7693,7 +8063,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.5 | Brain",
+		Title = "Delve v5.6 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -7819,6 +8189,16 @@ end;
 					inp.learned.weapon, inp.learned.pickaxe = nil, nil;
 					notify("Learned equip remotes cleared.", "Delve learn");
 				end,
+			});
+		end;
+		if group.name == "Gear" then
+			tab:Button({ Title = "Sell ores now (set 3)", Callback = function() if r.loadout then task.spawn(r.loadout.sell, "manual"); end; end });
+			for n = 1, 3 do
+				tab:Button({ Title = "Switch to set " .. n, Callback = function() if r.loadout then task.spawn(r.loadout.switch, n, "manual"); end; end });
+			end;
+			tab:Paragraph({
+				Title = "How it works",
+				Desc = "In delves it uses set 1, and set 2 for boss fights or when mobs hit hard (switches at most every 20 s). Every few runs, between runs, it swaps to set 3, sells your ores and goes back to set 1. Races change only in the hub (set 1 race for runs, set 3 race for selling). It never clicks reroll or Robux buttons.",
 			});
 		end;
 		if group.name == "Discord" then

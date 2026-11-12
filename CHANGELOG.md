@@ -1,6 +1,15 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.5 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.6 | Brain`).
+
+## v5.6: Equipment sets, auto-sell, races
+New **Gear** tab. Uses the game's own equipped-item sets (T menu > Equipment > Equipped Items **1 / 2 / 3**), checking the set's button turned green after each switch.
+
+- **Set 1 (mining)** is the default in runs. **Set 2 (damage)** goes on for boss fights, and on any floor where mobs land 4+ hits within 30 s (for a minute). It switches at most once every 20 s, and the reason is logged.
+- **Set 3 (selling)**: every 5 runs (adjustable), between runs: set 3 > Backpack > Sell items > Ores > Select all > Accept, then it reads the "+$…" amount, logs it and goes back to set 1. It only sells from the Backpack's ore screen (never the Equipment tab's sell), and stops if the total is $0 or set 3 isn't confirmed green.
+- **Races (hub only)**: wears the set's race between runs (set 1: Drakon, set 3: Drakon for selling, editable) via Races > a slot > the race page's WEAR, confirmed by "(WORN)". While there it reads that race's perks (so attack rolls know about roll perks like Onibi Step / Flame Dash). It refuses to click anything that says reroll, buy, R$, Robux, spin or gift.
+- First visit saves the race page layout to `DelveGuiDump_racepage.txt`.
+- Gear tab buttons: **Sell ores now**, **Switch to set 1 / 2 / 3**.
 
 ## v5.5: Learning audit, stage 2 (Worldheart)
 **Evidence:** 6 of 8 recorded deaths are Worldheart at 9,060 m. In 5 of 6, the script switched to a Heart Pylon 33-100 studs away, crossed the arena, got stuck, and was one-shot (268-380 damage vs 230-264 max HP) with no roll. In the latest one the roll fired 90 ms after the hit.
