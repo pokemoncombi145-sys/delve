@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.9 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.9.1 | Brain`).
+
+## v4.9.1: Mythic drops to Discord
+- Drop alerts (pop-up and Discord, with a screenshot when the helper runs) now go out for **Mythic tier or higher**, whatever the odds (e.g. Moonlit Glowcap, Mythic, 1 in 6,000). Lower tiers are no longer posted.
+- Drops that show no tier (from chat) still count at 1 in 100,000 or rarer.
 
 ## v4.9: Danger learning, boss patterns, perfect dodges, correct depth
 **Learns every attack type**

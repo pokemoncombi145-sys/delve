@@ -5994,8 +5994,9 @@ local indexAPI = (function()
 		local rank, total = rarityRank(odds);
 		local topPct = tonumber(CFG.rareTopPct) or 3;
 		local inTop = rank and total >= 20 and topPct > 0 and rank <= math.max(1, math.ceil(total * topPct / 100));
-		-- only really rare drops (1 in 100,000 or rarer by default) are announced
-		local rare = (odds or 0) >= (tonumber(CFG.rareDropOdds) or 100000);
+		-- only Mythic tier or higher is announced (with a screenshot when the helper runs);
+		-- drops with no tier shown (e.g. from chat) count when they're 1 in 100,000 or rarer
+		local rare = tierRank >= TIERS.MYTHIC or (tierRank == 0 and (odds or 0) >= (tonumber(CFG.rareDropOdds) or 100000));
 		if not rare then return; end;
 		pcall(function()
 			if type(appendfile) == "function" then
@@ -6879,7 +6880,7 @@ end;
 				{ k = "webhookUrl", t = "input", text = "Webhook URL", placeholder = "https://discord.com/api/webhooks/..." },
 				{ k = "webhookDelay", t = "slider", text = "Screenshot delay", min = 0, max = 10, step = .5, suffix = " s" },
 				{ k = "dropWebhook", t = "toggle", text = "Post rare drops" },
-				{ k = "rareDropOdds", t = "slider", text = "Rare drop = 1 in at least", min = 1000, max = 1000000, step = 1000, suffix = "" },
+				{ k = "rareDropOdds", t = "slider", text = "Drops with no tier: 1 in at least", min = 1000, max = 1000000, step = 1000, suffix = "" },
 			},
 		},
 		{
@@ -7098,7 +7099,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.9 | Brain",
+		Title = "Delve v4.9.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
