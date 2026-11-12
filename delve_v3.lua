@@ -119,7 +119,7 @@ local m = {
 		-- brain / learning
 		relicLearn = true,
 		relicExplore = true,
-		relicDelay = .7,
+		relicDelay = .3,
 		relicNotify = true,
 		dodgeLearn = true,
 		smartEscape = true,
@@ -2513,7 +2513,11 @@ local relicAPI = (function()
 			end;
 			if cat then break; end;
 		end;
-		local pct = tonumber(u:match("([%d%.]+)%s*%%"));
+		local pct;
+		for num in u:gmatch("([%d%.]+)%s*%%") do
+			local v = tonumber(num);
+			if v and (not pct or v > pct) then pct = v; end;
+		end;
 		local mult = tonumber(u:match("[X×]%s*([%d%.]+)"));
 		local mag = pct or (mult and mult > 1 and (mult - 1) * 100) or 20;
 		mag = math.min(150, math.max(5, mag));
@@ -2837,6 +2841,7 @@ local relicAPI = (function()
 			end;
 		end;
 		markBrain();
+		saveBrain(true);
 		draft = nil;
 	end;
 	local function sigOf(cards)
@@ -2900,16 +2905,44 @@ local relicAPI = (function()
 		end;
 	end;
 
+	-- seconds left on the "PICK A RELIC - 4s" countdown (nil if not found)
+	local function timerLeft()
+		if not draft then return nil; end;
+		local lbl = draft.timerLabel;
+		if not (lbl and lbl.Parent) then
+			draft.timerLabel = nil;
+			if draft.timerSearched then return nil; end;
+			draft.timerSearched = true;
+			local first = draft.cards[1];
+			local sg = first and first.root:FindFirstAncestorWhichIsA("LayerCollector");
+			local pg = l:FindFirstChild("PlayerGui");
+			for _, scope in ipairs({ sg, pg }) do
+				if scope and not draft.timerLabel then
+					for _, o in ipairs(scope:GetDescendants()) do
+						if o:IsA("TextLabel") and txt(o):upper():find("PICK A RELIC") then
+							draft.timerLabel = o;
+							break;
+						end;
+					end;
+				end;
+			end;
+			lbl = draft.timerLabel;
+			if not lbl then return nil; end;
+		end;
+		return tonumber(txt(lbl):upper():match("(%d+)%s*S%s*$") or txt(lbl):match("(%d+)%s*[sS]"));
+	end;
 	local function relicTick(now)
-		if now - MQ.check < .2 and MQ.phase == "idle" then
-			return draft ~= nil and Q.cardPick and Q.background ~= true;
+		-- fast poll while a draft is up, slower otherwise
+		local interval = draft and .05 or .15;
+		if now - MQ.check < interval and MQ.phase == "idle" then
+			return false;
 		end;
 		MQ.check = now;
 		local cards = findCardsSlow(now);
 		if not cards then
 			if MQ.phase == "down" then inp.mouseUp(); end;
 			MQ.phase = "idle";
-			if draft and now - draft.lastSeen > .4 then finishDraft(); end;
+			if draft and now - draft.lastSeen > .3 then finishDraft(); end;
 			return false;
 		end;
 		local sig = sigOf(cards);
@@ -2920,43 +2953,63 @@ local relicAPI = (function()
 		draft.lastSeen = now;
 		local ps = posSig(cards);
 		if ps ~= draft.pos then draft.pos, draft.stableSince = ps, now; end;
-		if not Q.cardPick or iQ() or not inp.active() or draft.picked or not draft.choice or draft.choice.score < -1e5 then
+		if not Q.cardPick or draft.picked then
 			if MQ.phase == "down" then inp.mouseUp(); end;
 			MQ.phase = "idle";
 			return false;
 		end;
-		local delay = tonumber(Q.relicDelay) or .7;
-		if now - draft.openedAt < delay or now - draft.stableSince < .35 then
-			return Q.background ~= true;
-		end;
+		-- always have something to click: best card, or any card that isn't already taken
 		local choice = draft.choice;
+		if not choice or choice.score < -1e5 then
+			choice = nil;
+			for _, c in ipairs(draft.cards) do
+				if not c.taken then choice = c; break; end;
+			end;
+			choice = choice or draft.cards[1];
+			draft.choice = choice;
+		end;
+		if not choice then return false; end;
+		-- the real mouse can only be used while Roblox is focused and the menu is closed;
+		-- otherwise click the card's button directly (works tabbed out, no focus needed)
+		local canMouse = Q.background ~= true and inp.focused() and not iQ();
+		local left = timerLeft();
+		local urgent = left ~= nil and left <= 3;
+		local delay = math.min(tonumber(Q.relicDelay) or .4, .4);
+		if not urgent and (now - draft.openedAt < delay or now - draft.stableSince < .2) then
+			return false;
+		end;
 		local target = clickTarget(choice);
 		local mx, my, vx, vy = guiPoint(target);
+		if MQ.phase == "move" and not canMouse then
+			MQ.phase = "idle";
+		end;
 		if MQ.phase == "idle" then
-			-- give the previous click a second to close the draft before trying again
-			if draft.clicks > 0 and now - draft.ourClickAt < 1.1 then return Q.background ~= true; end;
-			if draft.attempts >= 7 then
+			-- give the previous click a moment to close the draft before trying again
+			local wait = draft.method == "mouse" and .9 or .45;
+			if urgent then wait = .25; end;
+			if draft.clicks > 0 and now - draft.ourClickAt < wait then return false; end;
+			if draft.attempts >= 12 then
 				if not draft.gaveUp then
 					draft.gaveUp = true;
-					notify("Couldn't click the relic after 7 tries. Pick it yourself; I'll still learn from it.", "Delve relic");
+					notify("Couldn't click the relic after 12 tries. Pick it yourself; I'll still learn from it.", "Delve relic");
 				end;
 				return false;
 			end;
 			draft.attempts = draft.attempts + 1;
-			local methods = Q.background == true and { "signal", "vim", "signal", "vim" } or { "mouse", "mouse", "signal", "vim", "mouse", "signal", "vim" };
+			local methods = canMouse and { "signal", "mouse", "vim", "signal", "mouse" } or { "signal", "vim", "signal" };
 			local method = methods[(draft.attempts - 1) % #methods + 1];
+			if method == "vim" and not VIMr then method = "signal"; end;
 			draft.method = method;
 			if method == "signal" then
 				draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
-				if not inp.clickGui(choice.button or choice.root) then inp.clickGui(choice.root); end;
-				return Q.background ~= true;
+				local okA = inp.clickGui(choice.button or choice.root);
+				if not okA then inp.clickGui(choice.root); end;
+				return false;
 			elseif method == "vim" then
-				if VIMr then
-					draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
-					pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, true, game, 0);
-					task.delay(.06, function() pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, false, game, 0); end);
-				end;
-				return Q.background ~= true;
+				draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
+				pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, true, game, 0);
+				task.delay(.05, function() pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, false, game, 0); end);
+				return false;
 			end;
 			MQ.bx, MQ.by = mx, my;
 			MQ.phase, MQ.t = "move", now;
@@ -2964,14 +3017,14 @@ local relicAPI = (function()
 		if MQ.phase == "move" then
 			DQ(MQ.bx, MQ.by, now);
 			local there = math.abs(KQ.X - MQ.bx) <= 6 and math.abs(KQ.Y - MQ.by) <= 6;
-			if there and now - MQ.t >= .15 then
+			if there and now - MQ.t >= .08 then
 				draft.ourClickAt = now;
 				inp.mouseDown();
 				MQ.phase, MQ.t = "down", now;
-			elseif now - MQ.t > 1.5 then
+			elseif now - MQ.t > 1 then
 				MQ.phase = "idle";
 			end;
-		elseif MQ.phase == "down" and now - MQ.t >= .08 then
+		elseif MQ.phase == "down" and now - MQ.t >= .06 then
 			inp.mouseUp();
 			draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
 			MQ.phase, MQ.t = "idle", now;
@@ -3039,6 +3092,7 @@ local relicAPI = (function()
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
 		run.cash0 = cashNow();
 		run.id = l:GetAttribute("RunId");
+		run.plateSeen = now;
 	end;
 	local function runFinish(now)
 		if not run.active then return; end;
@@ -3126,7 +3180,10 @@ local relicAPI = (function()
 		local plate = workspace:FindFirstChild("StrataPlate");
 		local id = l:GetAttribute("RunId");
 		if run.active then
-			if endRoom then
+			if plate then
+				run.plateSeen = now;
+			end;
+			if endRoom or (not plate and now - (run.plateSeen or now) > 4) then
 				runFinish(now);
 			elseif id ~= nil and run.id ~= nil and id ~= run.id then
 				runFinish(now);
@@ -4229,6 +4286,7 @@ r.step = function()
 				vQ();
 				if MQ.phase == "down" then inp.mouseUp(); end;
 				MQ.phase = "idle";
+				pcall(LQ, m);
 			end;
 			if wQ and not blockedInput then zQ(); end;
 			if dQ and m - aQ.poll >= .1 then aQ.poll = m; dQ(); end;
@@ -4918,8 +4976,14 @@ r.conn = q.RenderStepped:Connect(function()
 -- RenderStepped stops firing when the window is minimized or throttled in the background;
 -- in background mode Heartbeat keeps the farm running whenever rendering has stalled
 r.conn2 = q.Heartbeat:Connect(function()
-		if Q.background == true and d() - r.lastRender > .1 then
-			r.runStep();
+		if d() - r.lastRender > .1 then
+			if Q.background == true then
+				r.runStep();
+			else
+				local now = d();
+				pcall(brainTick, now);
+				pcall(LQ, now);
+			end;
 		end;
 	end);
 
