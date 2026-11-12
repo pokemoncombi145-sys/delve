@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.8.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.8.2 | Brain`).
+
+## v5.8.2: Two gaps in the v5.8.1 safety fixes (from code review; not yet verified in gameplay)
+- **Queued attack roll at a boss start.** A roll queued just before a boss appeared could still fire, because the queued roll ran before the boss check. Now a boss fight cancels any queued attack roll (and its lean toward the target) first, and right before spending a queued roll it re-checks for an incoming attack, a mob windup and a predicted boss attack; if any is present the roll is cancelled and kept for defence.
+- **Set clicks after it became unsafe.** The click helper could keep retrying (events, virtual mouse, real mouse, each with a wait) without re-checking safety or the 8 s limit. It now takes an abort check that runs before every attempt and while waiting; set switches during runs stop as soon as it becomes unsafe or the deadline passes ("became unsafe while clicking" / "timed out while clicking"). Opening the Equipment tab uses the same check.
 
 ## v5.8.1: Priority 1 safety fixes (not yet verified in gameplay)
 - **Safe set switching in runs.** The T menu is only opened when no attack is incoming, you aren't standing at a hazard, and no enemy is within striking distance (10 st, or its learned reach + 4). Safety is checked again right before clicking. If it isn't safe, the switch is skipped (logged at most every 10 s) and retried when it is; it is never forced.

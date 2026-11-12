@@ -4396,9 +4396,27 @@ local function attackRoll(m)
 			brain.rollDist = math.max(2, math.min(20, (tonumber(brain.rollDist) or dist) * .8 + dist * .2));
 		end;
 	end;
-	-- phase 2: direction is set, roll now
+	-- boss fights: keep every roll for defence. Cancel a queued attack roll too (and its lean toward the target).
+	if r.bossFight then
+		if r.offRollAt then r.offRollAt, r.forceDir = nil, nil; f("attack roll cancelled: boss fight"); end;
+		return;
+	end;
+	-- phase 2: direction is set, roll now, unless something dangerous started in the meantime
 	if r.offRollAt and m >= r.offRollAt then
 		r.offRollAt = nil;
+		local danger = next(Cl) ~= nil;
+		if not danger then
+			for _, mob in pairs(el) do
+				if mob.owned and mob.phase == "windup" then danger = true; break; end;
+			end;
+		end;
+		local pr0 = dangerMem.predict;
+		if pr0 and pr0.at - m < 1.2 and pr0.at - m > -.5 then danger = true; end;
+		if danger then
+			r.forceDir = nil;
+			f("attack roll cancelled: an attack is coming");
+			return;
+		end;
 		if inp.active() and m - (r.lastRoll or -1e9) >= yl and eQ(m) then
 			r.lastRoll = m;
 			r.attackRolls = (r.attackRolls or 0) + 1;
@@ -4407,8 +4425,6 @@ local function attackRoll(m)
 		end;
 		return;
 	end;
-	-- boss fights: keep every roll for defence (the race's roll perk still fires on defensive rolls)
-	if r.bossFight then r.offRollAt = nil; return; end;
 	local mode = CFG.attackRoll or "Auto";
 	if mode == "Off" or (mode == "Auto" and not r.rollPerk) or WQ ~= "combat" or not G or not inp.active() then return; end;
 	if CFG.autoRoll == false or m - (r.lastRoll or -1e9) < yl + .35 or r.offRollAt then return; end;
@@ -5982,35 +5998,54 @@ local indexAPI = (function()
 	end;
 	r.fireAll = fireAll;
 	-- click with increasingly "real" methods until check() says it worked
-	local function clickVerified(obj, check, label)
+	local function clickVerified(obj, check, label, abort)
 		if not obj then return false; end;
+		-- abort(): checked before every attempt and while waiting (e.g. it became unsafe, or a deadline passed)
+		local aborted = false;
+		local function stop()
+			if abort and abort() then aborted = true; end;
+			return aborted;
+		end;
+		local function waitOk(secs)
+			local v = waitFor(function()
+				if stop() then return "abort"; end;
+				return check();
+			end, secs);
+			return v ~= nil and v ~= "abort";
+		end;
 		local targets = {};
 		local btn = obj:IsA("GuiButton") and obj or obj:FindFirstAncestorWhichIsA("GuiButton");
 		if btn then targets[#targets + 1] = btn; end;
 		if obj.Parent and obj.Parent:IsA("GuiObject") and obj.Parent ~= btn then targets[#targets + 1] = obj.Parent; end;
 		targets[#targets + 1] = obj;
 		for _, t2 in ipairs(targets) do
+			if stop() then return false, "aborted"; end;
 			fireAll(t2);
-			if waitFor(check, 1.2) then return true, "events"; end;
+			if waitOk(1.2) then return true, "events"; end;
+			if aborted then return false, "aborted"; end;
 		end;
 		local vx, vy = centerOf(btn or obj);
 		local focusedNow = inp.focused();
 		if VIMx then
+			if stop() then return false, "aborted"; end;
 			pcall(VIMx.SendMouseMoveEvent, VIMx, vx, vy, game);
 			task.wait(.05);
 			pcall(VIMx.SendMouseButtonEvent, VIMx, vx, vy, 0, true, game, 0);
 			task.wait(.06);
 			pcall(VIMx.SendMouseButtonEvent, VIMx, vx, vy, 0, false, game, 0);
-			if waitFor(check, 1.2) then return true, "virtual mouse"; end;
+			if waitOk(1.2) then return true, "virtual mouse"; end;
+			if aborted then return false, "aborted"; end;
 		end;
 		if focusedNow and Q.background ~= true then
+			if stop() then return false, "aborted"; end;
 			-- real mouse: fullscreen, so viewport coordinates are screen coordinates
 			inp.mouseMove(math.floor(vx + .5), math.floor(vy + .5));
 			task.wait(.15);
 			inp.mouseDown();
 			task.wait(.07);
 			inp.mouseUp();
-			if waitFor(check, 1.5) then return true, "mouse"; end;
+			if waitOk(1.5) then return true, "mouse"; end;
+			if aborted then return false, "aborted"; end;
 		end;
 		notify("Couldn't click " .. tostring(label or obj.Name) .. ". Layout saved to DelveGuiDump_menu.txt.", "Delve index");
 		return false;
@@ -6035,11 +6070,11 @@ local indexAPI = (function()
 		return ok;
 	end;
 	-- click a bottom tab and wait until that window's title is showing
-	local function openTab(name)
+	local function openTab(name, abort)
 		if findWindow(name) then return findWindow(name); end;
 		local tab = tabLabels(name)[1];
 		if not tab then return nil; end;
-		local ok = clickVerified(tab, function() return findWindow(name); end, name .. " tab");
+		local ok = clickVerified(tab, function() return findWindow(name); end, name .. " tab", abort);
 		return ok and findWindow(name) or nil;
 	end;
 	local function scrollers(win)
@@ -6953,12 +6988,12 @@ local indexAPI = (function()
 		end;
 		return false;
 	end;
-	function lo.click(obj, check, label)
+	function lo.click(obj, check, label, abort)
 		if not obj or lo.unsafe(obj) then
 			if r.why then r.why("gear", "refused to click " .. tostring(label) .. " (looks like a reroll/purchase button)"); end;
 			return false;
 		end;
-		return clickVerified(obj, check, label);
+		return clickVerified(obj, check, label, abort);
 	end;
 	-- "$321M" / "$4.28K" / "$1,733,355,148" -> number
 	function lo.money(u)
@@ -7059,8 +7094,11 @@ local indexAPI = (function()
 			openedHere = opened;
 			if not okM then return false, "menu didn't open"; end;
 			task.wait(.3);
-			local win = openTab("EQUIPMENT");
-			if not win then return false, "Equipment tab didn't open"; end;
+			local stopIf = function() return d() > deadline or (guarded and not lo.safeNow()); end;
+			local win = openTab("EQUIPMENT", stopIf);
+			if not win then
+				return false, (d() > deadline and "timed out opening Equipment") or (guarded and not lo.safeNow() and "became unsafe opening Equipment") or "Equipment tab didn't open";
+			end;
 			task.wait(.3);
 			if lo.current() ~= n then
 				if guarded then
@@ -7075,7 +7113,13 @@ local indexAPI = (function()
 					if guarded then return false, "set swap on cooldown"; end;
 					waitFor(function() return not cd.Visible; end, math.max(0, deadline - d()));
 				end;
-				lo.click(btn, function() return lo.current() == n; end, "set " .. n);
+				-- every click attempt re-checks the deadline and (in a run) safety; it stops as soon as either fails
+				local _, how = lo.click(btn, function() return lo.current() == n; end, "set " .. n, function()
+					return d() > deadline or (guarded and not lo.safeNow());
+				end);
+				if how == "aborted" then
+					return false, d() > deadline and "timed out while clicking" or "became unsafe while clicking";
+				end;
 			end;
 			local now2 = lo.current();
 			lo.cur = now2; -- nil = can't tell which set is on
@@ -8264,7 +8308,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.8.1 | Brain",
+		Title = "Delve v5.8.2 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
