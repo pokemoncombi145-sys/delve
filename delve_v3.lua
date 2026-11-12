@@ -5028,11 +5028,28 @@ function bossStudy.tick(list, pos, now)
 	cur.shielded = rate ~= nil and normal ~= nil and normal > 0 and rate < normal * .3;
 	-- the other things on the field, and which of them just died
 	local alive = {};
+	cur.still = cur.still or {};
+	local stillNow = {};
 	for _, mob in ipairs(list) do
 		if mob ~= boss and (mob.x - boss.x) ^ 2 + (mob.z - boss.z) ^ 2 < 10000 then
 			alive[mob.addr] = tostring(mob.name);
+			-- standing still for 3 s while a boss is up = probably a boss mechanic (pylon, totem, crystal)
+			local st = cur.still[mob.addr];
+			if not st or (mob.x - st.x) ^ 2 + (mob.z - st.z) ^ 2 > .25 then
+				st = { x = mob.x, z = mob.z, since = now };
+			end;
+			stillNow[mob.addr] = st;
+			if now - st.since >= 3 and not st.flagged then
+				st.flagged = true;
+				if r.why then r.why("boss", string.format("%s hasn't moved for 3 s next to %s: treating it as a boss mechanic, attacking it first", tostring(mob.name), cur.name)); end;
+				if not bossStudy.notes[cur.name .. ":still:" .. tostring(mob.name)] then
+					bossStudy.notes[cur.name .. ":still:" .. tostring(mob.name)] = true;
+					notify(string.format("%s isn't moving: likely part of %s's mechanic. Destroying it first.", tostring(mob.name), cur.name), "Delve boss");
+				end;
+			end;
 		end;
 	end;
+	cur.still = stillNow;
 	for addr, name in pairs(cur.adds) do
 		if not alive[addr] and not cur.pending then
 			cur.pending = { name = name, at = now, before = cur.rate or 0 };
@@ -5075,6 +5092,9 @@ function bossStudy.bias(mob)
 	local rec = type(book) == "table" and book[tostring(mob.name)];
 	if type(rec) == "table" and (tonumber(rec.score) or 0) >= 1 then return 60; end;
 	if type(rec) == "table" and (tonumber(rec.score) or 0) <= -1 then return 0; end;
+	local st = cur.still and cur.still[mob.addr];
+	-- give it up after 25 s (some still things can't be destroyed)
+	if st and st.flagged and d() - st.since < 25 then return 45; end;
 	if cur.shielded then return 30; end;
 	return 0;
 end;
@@ -7516,7 +7536,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.2 | Brain",
+		Title = "Delve v5.3 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

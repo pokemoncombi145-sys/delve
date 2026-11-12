@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.3 | Brain`).
+
+## v5.3: Stationary boss mechanics
+- While a boss is up, any other "mob" near it that hasn't moved for 3 seconds (pylons, totems, crystals) is treated as part of the boss mechanic and attacked first. A pop-up and the reasoning log say which one.
+- Priority order: adds learned to make the boss vulnerable > stationary things > anything else when the boss is shielded. If killing a stationary thing turns out not to help, the boss study learns that and stops prioritising it; it also gives up on one after 25 s in case it can't be destroyed.
 
 ## v5.2: The real pillar bug, close mobs (from the v5.1 logs)
 **What the logs showed:** "floor mapped: 6 pillars" was logged several times a second. The game refreshes the floor tile list constantly, and every refresh rebuilt the map from scratch, which **wiped every blocked pillar**. So it pushed into the same pillar 16 times in a row until the timer hit 0:00 and the tunnel caved in. This is also why the older unstick fixes never stuck.
