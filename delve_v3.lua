@@ -1,0 +1,4941 @@
+local uiNotify = nil;
+local function notify(message, title)
+	print("[" .. tostring(title) .. "] " .. tostring(message));
+	if uiNotify then
+		pcall(uiNotify, tostring(message), tostring(title));
+	end;
+end;
+
+local function start()
+notify("Starting…", "Delve v3");
+local env = (type(getgenv) == "function" and getgenv()) or _G;
+local missingInput;
+-- Executor compatibility (Volt, Potassium, etc.): any missing OS-input function is replaced with a
+-- VirtualInputManager / window-focus based fallback so the farm still runs instead of refusing to start.
+do
+	local VIMc;
+	pcall(function() VIMc = game:GetService("VirtualInputManager"); end);
+	local UISc = game:GetService("UserInputService");
+	local focused = true;
+	pcall(function()
+		UISc.WindowFocused:Connect(function() focused = true; end);
+		UISc.WindowFocusReleased:Connect(function() focused = false; end);
+	end);
+	local digit = { [0] = "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine" };
+	local special = { [32] = "Space", [16] = "LeftShift", [160] = "LeftShift", [161] = "RightShift", [17] = "LeftControl", [18] = "LeftAlt", [9] = "Tab" };
+	local function vkCode(vk)
+		local name = special[vk];
+		if not name and vk >= 65 and vk <= 90 then name = string.char(vk); end;
+		if not name and vk >= 48 and vk <= 57 then name = digit[vk - 48]; end;
+		return name and Enum.KeyCode[name];
+	end;
+	local mx, my = 0, 0;
+	local shims = {};
+	if type(isrbxactive) ~= "function" then
+		shims.isrbxactive = function() return focused; end;
+	end;
+	if VIMc then
+		if type(keypress) ~= "function" then
+			shims.keypress = function(vk) local c = vkCode(vk); if c then pcall(VIMc.SendKeyEvent, VIMc, true, c, false, game); end; end;
+		end;
+		if type(keyrelease) ~= "function" then
+			shims.keyrelease = function(vk) local c = vkCode(vk); if c then pcall(VIMc.SendKeyEvent, VIMc, false, c, false, game); end; end;
+		end;
+		if type(mousemoveabs) ~= "function" then
+			shims.mousemoveabs = function(x, y) mx, my = x, y; pcall(VIMc.SendMouseMoveEvent, VIMc, x, y, game); end;
+		end;
+		if type(mouse1press) ~= "function" then
+			shims.mouse1press = function() pcall(VIMc.SendMouseButtonEvent, VIMc, mx, my, 0, true, game, 0); end;
+		end;
+		if type(mouse1release) ~= "function" then
+			shims.mouse1release = function() pcall(VIMc.SendMouseButtonEvent, VIMc, mx, my, 0, false, game, 0); end;
+		end;
+	end;
+	for name, fn in pairs(shims) do
+		if type(getgenv) == "function" then pcall(function() getgenv()[name] = fn; end); end;
+		pcall(function() _G[name] = fn; end);
+	end;
+	isrbxactive = isrbxactive or shims.isrbxactive;
+	keypress = keypress or shims.keypress;
+	keyrelease = keyrelease or shims.keyrelease;
+	mousemoveabs = mousemoveabs or shims.mousemoveabs;
+	mouse1press = mouse1press or shims.mouse1press;
+	mouse1release = mouse1release or shims.mouse1release;
+	local required = {
+		isrbxactive = isrbxactive, keypress = keypress, keyrelease = keyrelease,
+		mousemoveabs = mousemoveabs, mouse1press = mouse1press, mouse1release = mouse1release,
+	};
+	local shimmed = {};
+	for name in pairs(shims) do shimmed[#shimmed + 1] = name; end;
+	if #shimmed > 0 then
+		notify("Using VirtualInputManager fallback for: " .. table.concat(shimmed, ", "), "Delve");
+	end;
+	for name in string.gmatch("isrbxactive keypress keyrelease mousemoveabs mouse1press mouse1release", "%S+") do
+		if type(required[name]) ~= "function" then
+			missingInput = "Executor is missing input function: " .. name .. " (turn on Background mode)";
+			notify(missingInput, "Delve");
+			break;
+		end;
+	end;
+end;
+
+local instanceIds = setmetatable({}, { __mode = "k" });
+local nextId = 0;
+local function instanceId(instance)
+	local id = instanceIds[instance];
+	if not id then
+		nextId = nextId + 1;
+		id = nextId;
+		instanceIds[instance] = id;
+	end;
+	return id;
+end;
+
+local m = {
+		on = false,
+		mine = true,
+		walk = false,
+		radius = .69,
+		reach = 1.29,
+		combat = true,
+		chase = true,
+		fightDist = 8,
+		autoCombatStats = true,
+		dodge = true,
+		autoRoll = true,
+		chests = true,
+		centerFarm = false,
+		autoReplay = false,
+		antiAfk = false,
+		dodgeLog = false,
+		replayDelay = 2.5,
+		chestRange = 120,
+		keepAway = 7,
+		hitMargin = 1.5,
+		meleeReach = 5.5,
+		rollLead = .2,
+		feat = {},
+		cardPick = true,
+		-- brain / learning
+		relicLearn = true,
+		relicExplore = true,
+		relicDelay = .7,
+		relicNotify = true,
+		dodgeLearn = true,
+		smartEscape = true,
+		cornerAvoid = true,
+		edgeSafe = 6,
+		relicCodexNotify = true,
+		-- targeting priority (ores first, fight bosses / threats)
+		mobPriority = "Smart",
+		lowHpPct = 35,
+		crowdSize = 5,
+		-- settings / run reporting
+		autoStartFarm = true,
+		webhookOn = false,
+		webhookUrl = "",
+		webhookDelay = 1.5,
+		-- new settings
+		mineRange = 150,
+		autoStats = false,
+		reachScale = 1,
+		radiusScale = .85,
+		centerOre = false,
+		minTier = 1,
+		skipAfter = 9,
+		autoEquip = true,
+		pickSlot = 1,
+		weaponSlot = 2,
+		rollKey = "Q",
+		-- center farm / dodge fixes
+		centerCleanup = true,
+		rollCooldown = 1.05,
+		pingComp = true,
+		windupLearn = true,
+		-- background / silent aim
+		background = false,
+		silentAim = false,
+		bgKeyMethod = "Auto",
+		bgMoveMethod = "Both",
+		useLearned = true,
+	};
+local G = env.Delve;
+if G and G.stop then
+	pcall(G.stop);
+end;
+env.Delve = { cfg = (G and G.cfg) or m };
+local r = env.Delve;
+local Q = r.cfg;
+local CFG = Q; -- stable alias: much of the original code shadows Q locally
+for m, G in pairs(m) do
+	if Q[m] == nil then
+		Q[m] = G;
+	end;
+end;
+-- AUTOSAVE: every setting (toggles, sliders, dropdowns, webhook, farm on/off) is written to
+-- DelveSettings.json whenever it changes and restored on the next load.
+do
+	local okRead, raw = pcall(function()
+		if type(isfile) == "function" and not isfile("DelveSettings.json") then return nil; end;
+		return type(readfile) == "function" and readfile("DelveSettings.json") or nil;
+	end);
+	if okRead and type(raw) == "string" and #raw > 2 then
+		local okDec, data = pcall(function() return game:GetService("HttpService"):JSONDecode(raw); end);
+		if okDec and type(data) == "table" then
+			for k, v in pairs(data) do
+				if k == "on" then
+					r.savedOn = v == true;
+				elseif k == "feat" and type(v) == "table" then
+					Q.feat = type(Q.feat) == "table" and Q.feat or {};
+					for fk, fv in pairs(v) do
+						if type(fv) == "boolean" then Q.feat[fk] = fv; end;
+					end;
+				elseif m[k] ~= nil and k ~= "feat" and type(v) == type(m[k]) then
+					Q[k] = v;
+				elseif k == "v3Migrated" or k == "bgMigrated" then
+					Q[k] = v;
+				end;
+			end;
+			r.settingsLoaded = true;
+		end;
+	end;
+end;
+r.saveSettings = function(force)
+	if type(writefile) ~= "function" then return; end;
+	local copy = {};
+	for k, v in pairs(CFG) do
+		local tv = type(v);
+		if tv == "number" or tv == "string" or tv == "boolean" then copy[k] = v; end;
+	end;
+	copy.feat = CFG.feat;
+	copy.on = (CFG.on or r.autoStart) and true or false;
+	local ok, js = pcall(function() return game:GetService("HttpService"):JSONEncode(copy); end);
+	if ok and (force or js ~= r.lastSettingsJson) then
+		r.lastSettingsJson = js;
+		pcall(writefile, "DelveSettings.json", js);
+	end;
+end;
+-- (v2 forced cardPick off on every load, which is why relic auto-pick never ran)
+if not Q.v3Migrated then
+	Q.v3Migrated = true;
+	Q.cardPick = true;
+end;
+if not Q.bgMigrated then
+	Q.bgMigrated = true;
+	if Q.bgKeyMethod == "VirtualInputManager" then
+		Q.bgKeyMethod = "Auto";
+	end;
+end;
+local e = {
+		"mine",
+		"walk",
+		"combat",
+		"chase",
+		"dodge",
+		"autoRoll",
+		"chests",
+	};
+local function N(m)
+	Q.on = m and true or false;
+	r.farmOn = Q.on;
+	for m, G in ipairs(e) do
+		Q[G] = Q.on and Q.feat[G] ~= false;
+	end;
+end;
+N(false);
+if r.savedOn and Q.autoStartFarm ~= false then
+	r.autoStart = true; -- farm was on last time: turn it back on as soon as a run is loaded
+end;
+local S = game:GetService("Players") or game.Players;
+local w = game:GetService("ReplicatedStorage") or game.ReplicatedStorage;
+local q = game:GetService("RunService") or game.RunService;
+local l = S.LocalPlayer;
+if not l then
+	notify("Join Delve before running the script.", "Delve");
+	return;
+end;
+local guiService = game:GetService("GuiService");
+local d = (type(os) == "table" and os.clock) or tick;
+local function f(m)
+	if Q.dodgeLog then
+		pcall(appendfile, "dodge_log.txt", string.format("%.2f %s\n", d(), m));
+	end;
+end;
+-- ===================================================================================
+-- BRAIN: persistent memory that learns from your runs (saved to DelveBrain.json)
+--   relics[name]  -> how runs went when that relic was taken, how often YOU picked it
+--   cat[category] -> learned weight per relic stat category (damage, mining, survival...)
+--   dodge         -> extra safety margin / roll timing learned from hits you took
+--   mobReach[mob] -> real attack reach learned per mob (bosses with big swings)
+-- ===================================================================================
+local brain = {
+	file = "DelveBrain.json",
+	v = 3,
+	relics = {},
+	cat = {},
+	sets = {},
+	runs = {},
+	dodge = { extra = 0, leadAdj = 0, hits = 0, dodges = 0 },
+	mobReach = {},
+	windups = {},
+	codex = {},   -- every relic ever seen: name, tier, effects, how it was understood
+	pairs = {},   -- relic combos taken in the same run and how those runs went
+	catMode = {}, -- category weights learned separately for delve runs and wave runs
+	threat = {},  -- how close a mob may get before it's worth stopping mining to fight it
+};
+do
+	local Http, BRAIN_FILE = game:GetService("HttpService"), brain.file;
+	local okRead, raw = pcall(function()
+		if type(isfile) == "function" and not isfile(BRAIN_FILE) then return nil; end;
+		return type(readfile) == "function" and readfile(BRAIN_FILE) or nil;
+	end);
+	if okRead and type(raw) == "string" and #raw > 2 then
+		local okDec, data = pcall(Http.JSONDecode, Http, raw);
+		if okDec and type(data) == "table" then
+			for k, v in pairs(data) do
+				if type(v) == type(brain[k]) or brain[k] == nil then
+					brain[k] = v;
+				end;
+			end;
+		end;
+	end;
+	for _, key in ipairs({ "relics", "cat", "sets", "runs", "mobReach", "windups", "codex", "pairs", "catMode", "threat" }) do
+		if type(brain[key]) ~= "table" then brain[key] = {}; end;
+	end;
+	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
+	brain.dodge.extra = tonumber(brain.dodge.extra) or 0;
+	brain.dodge.leadAdj = tonumber(brain.dodge.leadAdj) or 0;
+	brain.dodge.hits = tonumber(brain.dodge.hits) or 0;
+	brain.dodge.dodges = tonumber(brain.dodge.dodges) or 0;
+	if next(brain.windups) then
+		r.windups = r.windups or {};
+		for name, dur in pairs(brain.windups) do
+			if r.windups[name] == nil and tonumber(dur) then r.windups[name] = tonumber(dur); end;
+		end;
+	end;
+end;
+local brainState = { dirty = false, savedAt = -1e9 };
+local function saveBrain(force)
+	local now = d();
+	if not force and (not brainState.dirty or now - brainState.savedAt < 15) then return; end;
+	brainState.dirty, brainState.savedAt = false, now;
+	if type(writefile) ~= "function" then return; end;
+	if type(r.windups) == "table" then
+		for name, dur in pairs(r.windups) do brain.windups[tostring(name)] = dur; end;
+	end;
+	pcall(function() writefile("DelveBrain.json", game:GetService("HttpService"):JSONEncode(brain)); end);
+end;
+local function markBrain() brainState.dirty = true; end;
+r.brain = brain;
+-- current run, used to judge how good the relics picked during it were
+local run = { active = false, relics = {}, depth = 0, wave = 0, died = false, hits = 0, combatT = 0, mineT = 0 };
+r.run = run;
+local z = 8;
+local x = 67108864;
+-- Input backends. Foreground mode uses the executor's OS-level input (needs Roblox focused).
+-- Background mode avoids OS input entirely so the game can sit behind other windows:
+--   walking     -> Humanoid:Move every physics step
+--   keys        -> VirtualInputManager (or the game's own InputBegan/InputEnded connections)
+--   mouse aim   -> silent aim: the mouse values the game reads are spoofed, the real cursor never moves
+--   GUI buttons -> fired directly (replay button, relic cards)
+local inp = {};
+do
+	local UIS = game:GetService("UserInputService");
+	local VIM;
+	pcall(function() VIM = game:GetService("VirtualInputManager"); end);
+	-- shared with the metamethod hooks, which are installed once per executor session
+	local shared = env.DelveAim;
+	if type(shared) ~= "table" then
+		shared = {};
+		env.DelveAim = shared;
+	end;
+	shared.mouse = l:GetMouse();
+	shared.uis = UIS;
+	shared.inset = guiService:GetGuiInset();
+	shared.world, shared.view = nil, nil;
+	inp.moveVec = nil;
+	inp.learned = type(env.DelveLearned) == "table" and env.DelveLearned or {};
+	env.DelveLearned = inp.learned;
+	inp.keyMode = {};
+
+	local osKeypress, osKeyrelease, osMoveAbs = keypress, keyrelease, mousemoveabs;
+	local osDown, osUp, osActive = mouse1press, mouse1release, isrbxactive;
+
+	local digitNames = { [0] = "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine" };
+	local specialEnums = { [32] = "Space", [16] = "LeftShift", [160] = "LeftShift", [161] = "RightShift", [17] = "LeftControl", [18] = "LeftAlt", [9] = "Tab" };
+	local function keyEnum(vk)
+		local name = specialEnums[vk];
+		if not name and vk >= 65 and vk <= 90 then name = string.char(vk); end;
+		if not name and vk >= 48 and vk <= 57 then name = digitNames[vk - 48]; end;
+		return name and Enum.KeyCode[name];
+	end;
+
+	function inp.active()
+		if Q.background == true then return true; end;
+		return type(osActive) == "function" and osActive() or false;
+	end;
+	function inp.focused()
+		return type(osActive) == "function" and osActive() or false;
+	end;
+	function inp.silent()
+		return (Q.silentAim == true or Q.background == true) and shared.hooked == true;
+	end;
+
+	-- keys ---------------------------------------------------------------
+	local function viaConnections(code, down)
+		if type(getconnections) ~= "function" then return false; end;
+		local input = {
+			KeyCode = code,
+			UserInputType = Enum.UserInputType.Keyboard,
+			UserInputState = down and Enum.UserInputState.Begin or Enum.UserInputState.End,
+			Position = Vector3.zero,
+			Delta = Vector3.zero,
+			IsModifierKeyDown = function() return false; end,
+		};
+		local fired = false;
+		for _, c in ipairs(getconnections(down and UIS.InputBegan or UIS.InputEnded)) do
+			local fn = c.Function;
+			if type(fn) == "function" then
+				task.spawn(fn, input, false);
+				fired = true;
+			end;
+		end;
+		return fired;
+	end;
+	local function viaVim(code, down)
+		return VIM ~= nil and (pcall(VIM.SendKeyEvent, VIM, down, code, false, game));
+	end;
+	local function sendKey(vk, down)
+		local code = keyEnum(vk);
+		if not code then return false; end;
+		local method = Q.bgKeyMethod;
+		if method == "Input connections" then
+			return viaConnections(code, down);
+		elseif method == "VirtualInputManager" then
+			return viaVim(code, down) or viaConnections(code, down);
+		end;
+		-- Auto: VirtualInputManager only reaches the game while Roblox is focused, so when tabbed out use the
+		-- game's own input connections. If a tool key stops having an effect, OQ rotates this key's method.
+		if inp.focused() then
+			return viaVim(code, down) or viaConnections(code, down);
+		end;
+		local mode = inp.keyMode[vk] or "connections";
+		if mode == "vim" then
+			return viaVim(code, down) or viaConnections(code, down);
+		elseif mode == "both" then
+			local a = viaConnections(code, down);
+			local b = viaVim(code, down);
+			return a or b;
+		end;
+		return viaConnections(code, down) or viaVim(code, down);
+	end;
+	local modeOrder = { "connections", "vim", "both" };
+	function inp.rotateKey(vk)
+		local current = inp.keyMode[vk] or "connections";
+		local nextIndex = 1;
+		for i, name in ipairs(modeOrder) do
+			if name == current then nextIndex = i % #modeOrder + 1; end;
+		end;
+		inp.keyMode[vk] = modeOrder[nextIndex];
+		return inp.keyMode[vk];
+	end;
+	function inp.key(vk, down)
+		if Q.background == true then
+			sendKey(vk, down);
+		elseif down then
+			if osKeypress then osKeypress(vk); end;
+		else
+			if osKeyrelease then osKeyrelease(vk); end;
+		end;
+	end;
+
+	-- real mouse (foreground only) -------------------------------------------
+	function inp.mouseMove(x, y) if osMoveAbs then osMoveAbs(x, y); end; end;
+	function inp.mouseDown() if osDown then osDown(); end; end;
+	function inp.mouseUp() if osUp then osUp(); end; end;
+
+	-- GUI buttons ------------------------------------------------------------
+	local function fireEvent(signal)
+		if type(firesignal) == "function" and pcall(firesignal, signal) then
+			return true;
+		end;
+		if type(getconnections) == "function" then
+			local fired = false;
+			for _, c in ipairs(getconnections(signal)) do
+				if type(c.Fire) == "function" then
+					pcall(c.Fire, c);
+					fired = true;
+				elseif type(c.Function) == "function" then
+					task.spawn(c.Function);
+					fired = true;
+				end;
+			end;
+			return fired;
+		end;
+		return false;
+	end;
+	function inp.clickGui(button)
+		if not button then return false; end;
+		local target = button:IsA("GuiButton") and button or button:FindFirstChildWhichIsA("GuiButton", true);
+		if not target then return false; end;
+		return fireEvent(target.Activated) or fireEvent(target.MouseButton1Click);
+	end;
+
+	-- walking ----------------------------------------------------------------
+	local function humanoid()
+		local character = l.Character;
+		return character and character:FindFirstChildOfClass("Humanoid"), character;
+	end;
+	function inp.setMove(x, z)
+		inp.moveVec = Vector3.new(x, 0, z);
+	end;
+	function inp.clearMove()
+		if inp.moveVec then
+			inp.moveVec = nil;
+			local h = humanoid();
+			if h then pcall(h.Move, h, Vector3.zero, false); end;
+		end;
+	end;
+	local function applyMove()
+		local v = inp.moveVec;
+		if not v or not (Q.background == true or inp.testing) then return; end;
+		local h, character = humanoid();
+		if not h then return; end;
+		local method = Q.bgMoveMethod or "Both";
+		if method ~= "Velocity" then
+			h:Move(v, false);
+		end;
+		if method ~= "Humanoid:Move" then
+			local root = character:FindFirstChild("HumanoidRootPart");
+			if root then
+				local vel = root.AssemblyLinearVelocity;
+				root.AssemblyLinearVelocity = Vector3.new(v.X * h.WalkSpeed, vel.Y, v.Z * h.WalkSpeed);
+			end;
+		end;
+	end;
+	-- the default controls write Move(0) on RenderStepped, so ours is written at several points in the frame:
+	-- after them on RenderStepped, before physics on Stepped, and again on Heartbeat
+	pcall(function() q:UnbindFromRenderStep("DelveMove"); end);
+	pcall(function() q:BindToRenderStep("DelveMove", 2000, applyMove); end);
+	inp.moveConn = q.Stepped:Connect(applyMove);
+	inp.moveConn2 = q.Heartbeat:Connect(applyMove);
+
+	-- silent aim -------------------------------------------------------------
+	function inp.setAim(world)
+		local camera = workspace.CurrentCamera;
+		if not camera then return false; end;
+		local p = camera:WorldToViewportPoint(world);
+		if p.Z <= 0 then
+			shared.world, shared.view, shared.target = nil, nil, nil;
+			return false;
+		end;
+		shared.world = world;
+		shared.view = Vector2.new(p.X, p.Y);
+		-- Mouse.Target: whatever the camera ray through the aim point hits first (mining may read this)
+		local origin = camera.CFrame.Position;
+		local delta = world - origin;
+		local params = RaycastParams.new();
+		params.FilterType = Enum.RaycastFilterType.Exclude;
+		params.FilterDescendantsInstances = { l.Character };
+		local result = workspace:Raycast(origin, delta.Unit * (delta.Magnitude + 25), params);
+		shared.target = result and result.Instance or nil;
+		return true;
+	end;
+	function inp.clearAim()
+		shared.world, shared.view, shared.target = nil, nil, nil;
+	end;
+	local function installHooks()
+		if shared.hooked and shared.hookVersion == 2 then return true; end;
+		if type(hookmetamethod) ~= "function" or type(newcclosure) ~= "function"
+			or type(checkcaller) ~= "function" or type(getnamecallmethod) ~= "function" then
+			return shared.hooked == true;
+		end;
+		local ok = pcall(function()
+			local oldIndex;
+			oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
+				local view = shared.view;
+				if view and self == shared.mouse and not checkcaller() then
+					if key == "Target" then
+						if shared.target then return shared.target; end;
+					elseif key == "Hit" then
+						return CFrame.new(shared.world);
+					elseif key == "X" then
+						return view.X;
+					elseif key == "Y" then
+						return view.Y - shared.inset.Y;
+					elseif key == "UnitRay" then
+						local origin = workspace.CurrentCamera.CFrame.Position;
+						return Ray.new(origin, (shared.world - origin).Unit);
+					end;
+				end;
+				return oldIndex(self, key);
+			end));
+			local oldNamecall;
+			oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+				local view = shared.view;
+				if view and self == shared.uis and getnamecallmethod() == "GetMouseLocation" and not checkcaller() then
+					return view;
+				end;
+				return oldNamecall(self, ...);
+			end));
+		end);
+		if ok then
+			shared.hooked = true;
+			shared.hookVersion = 2;
+		end;
+		return shared.hooked == true;
+	end;
+	function inp.ensureSilent()
+		if Q.background == true or Q.silentAim == true then
+			if not installHooks() then
+				notify("Silent aim needs hookmetamethod, newcclosure, checkcaller and getnamecallmethod. One is missing in this executor build, so the real mouse is used.", "Delve");
+			end;
+		end;
+	end;
+
+	-- learn the game's own equip remotes ---------------------------------------
+	-- A key press can't reach every game script while tabbed out, so instead record which remotes the game
+	-- fires when you swap tools by hand, then replay exactly those calls in background mode.
+	local function installRecorder()
+		if shared.recHooked then return true; end;
+		if type(hookmetamethod) ~= "function" or type(newcclosure) ~= "function"
+			or type(checkcaller) ~= "function" or type(getnamecallmethod) ~= "function" then
+			return false;
+		end;
+		local ok = pcall(function()
+			local old;
+			old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+				local log = shared.remoteLog;
+				if log then
+					local method = getnamecallmethod();
+					if (method == "FireServer" or method == "InvokeServer") and not checkcaller() then
+						log[#log + 1] = { t = d(), remote = self, method = method, args = table.pack(...) };
+						if #log > 600 then table.remove(log, 1); end;
+					end;
+				end;
+				return old(self, ...);
+			end));
+		end);
+		shared.recHooked = ok;
+		return ok;
+	end;
+
+	function inp.learn(action, vk)
+		if not installRecorder() then
+			notify("Learning needs hookmetamethod, newcclosure, checkcaller and getnamecallmethod.", "Delve learn");
+			return;
+		end;
+		local code = keyEnum(vk);
+		if not code then return; end;
+		shared.remoteLog = {};
+		local finished = false;
+		local conn;
+		conn = UIS.InputBegan:Connect(function(input)
+			if finished or input.KeyCode ~= code then return; end;
+			finished = true;
+			conn:Disconnect();
+			local pressAt = d();
+			task.delay(.4, function()
+				local log = shared.remoteLog or {};
+				shared.remoteLog = nil;
+				-- remotes that fire constantly before the press are background traffic, not the swap
+				local baseline = {};
+				for _, call in ipairs(log) do
+					if call.t < pressAt - .05 then
+						baseline[call.remote] = (baseline[call.remote] or 0) + 1;
+					end;
+				end;
+				local found = {};
+				for _, call in ipairs(log) do
+					if call.t >= pressAt - .02 and (baseline[call.remote] or 0) < 3 then
+						found[#found + 1] = { remote = call.remote, method = call.method, args = call.args };
+					end;
+				end;
+				if #found == 0 then
+					notify("Learn '" .. action .. "': nothing fired besides constant background traffic. Try again with the OTHER tool out so the key really swaps.", "Delve learn");
+					return;
+				end;
+				inp.learned[action] = found;
+				local names = {};
+				for _, call in ipairs(found) do
+					names[#names + 1] = call.remote.Name;
+				end;
+				notify(string.format("Learned '%s': %d remote call%s (%s). Background mode now replays these instead of pressing the key.",
+					action, #found, #found == 1 and "" or "s", table.concat(names, ", ")), "Delve learn");
+			end);
+		end);
+		task.delay(10, function()
+			if not finished then
+				finished = true;
+				conn:Disconnect();
+				shared.remoteLog = nil;
+				notify("Learn '" .. action .. "': no key press seen in 10 seconds. Roblox must be focused while you press it.", "Delve learn");
+			end;
+		end);
+		notify(string.format("Learning '%s'. Click into Roblox and press that tool's key within 10 seconds (have the OTHER tool out first so it really swaps).", action), "Delve learn");
+	end;
+
+	function inp.replay(action)
+		local list = inp.learned[action];
+		if not list or not list[1] then return false; end;
+		for _, call in ipairs(list) do
+			local remote = call.remote;
+			if remote and remote.Parent then
+				local args = call.args;
+				if call.method == "InvokeServer" then
+					task.spawn(function() remote:InvokeServer(table.unpack(args, 1, args.n)); end);
+				else
+					pcall(function() remote:FireServer(table.unpack(args, 1, args.n)); end);
+				end;
+			end;
+		end;
+		return true;
+	end;
+
+	function inp.report()
+		local function has(fn) return type(fn) == "function" and "yes" or "NO"; end;
+		return string.format("hookmetamethod %s | newcclosure %s | checkcaller %s | getnamecallmethod %s | VirtualInputManager %s | getconnections %s | firesignal %s | hooks installed: %s",
+			has(hookmetamethod), has(newcclosure), has(checkcaller), has(getnamecallmethod),
+			VIM and "yes" or "NO", has(getconnections), has(firesignal), shared.hooked and "yes" or "no");
+	end;
+
+	function inp.status()
+		local h, character = humanoid();
+		return string.format("background=%s silent=%s hooks=%s aimSet=%s target=%s moveVec=%s MoveDirection=%.2f PickaxeOut=%s WeaponDrawn=%s keys=%s move=%s learned weapon/pickaxe=%d/%d",
+			tostring(Q.background == true), tostring(inp.silent()), tostring(shared.hooked == true), tostring(shared.view ~= nil),
+			tostring(shared.target and shared.target.Name), tostring(inp.moveVec ~= nil),
+			h and h.MoveDirection.Magnitude or -1,
+			tostring(character and character:GetAttribute("PickaxeOut")), tostring(character and character:GetAttribute("WeaponDrawn")),
+			tostring(Q.bgKeyMethod), tostring(Q.bgMoveMethod or "Both"),
+			#(inp.learned.weapon or {}), #(inp.learned.pickaxe or {}));
+	end;
+
+	-- sends a slot key with the background key method and reports whether the game reacted
+	function inp.testEquip(vk, attribute, label)
+		local character = l.Character;
+		if not character then
+			notify("No character yet.", "Delve test");
+			return;
+		end;
+		local before = character:GetAttribute(attribute);
+		sendKey(vk, true);
+		task.wait(.08);
+		sendKey(vk, false);
+		task.wait(.7);
+		local after = character:GetAttribute(attribute);
+		local focused = type(osActive) == "function" and osActive();
+		local connections = type(getconnections) == "function" and #getconnections(UIS.InputBegan) or -1;
+		notify(string.format("%s: %s %s -> %s | key method %s | Roblox %s | %d InputBegan connections%s",
+			label, attribute, tostring(before), tostring(after), tostring(Q.bgKeyMethod),
+			focused and "focused" or "tabbed out", connections,
+			before == after and " | NO CHANGE: the game did not react to the key" or ""), "Delve test");
+	end;
+
+	-- walks forward for one second with the background movement method and reports the distance
+	function inp.testWalk()
+		local h, character = humanoid();
+		local root = character and character:FindFirstChild("HumanoidRootPart");
+		local camera = workspace.CurrentCamera;
+		if not (h and root and camera) then
+			notify("No character or camera yet.", "Delve test");
+			return;
+		end;
+		local look = camera.CFrame.LookVector;
+		local flat = Vector3.new(look.X, 0, look.Z).Unit;
+		local from = root.Position;
+		inp.testing = true;
+		inp.setMove(flat.X, flat.Z);
+		task.wait(1);
+		local moveDirection = h.MoveDirection.Magnitude;
+		inp.clearMove();
+		inp.testing = false;
+		local moved = (root.Position - from) * Vector3.new(1, 0, 1);
+		notify(string.format("Walk test: moved %.1f studs in 1s (WalkSpeed %.0f, MoveDirection %.2f, method %s)%s",
+			moved.Magnitude, h.WalkSpeed, moveDirection, tostring(Q.bgMoveMethod or "Both"),
+			moved.Magnitude < 1 and " | DID NOT MOVE" or ""), "Delve test");
+	end;
+
+	function inp.stop()
+		pcall(function() q:UnbindFromRenderStep("DelveMove"); end);
+		if inp.moveConn then
+			inp.moveConn:Disconnect();
+			inp.moveConn = nil;
+		end;
+		if inp.moveConn2 then
+			inp.moveConn2:Disconnect();
+			inp.moveConn2 = nil;
+		end;
+		inp.clearMove();
+		inp.clearAim();
+	end;
+end;
+-- INPUT-BACKENDS-END
+local function farmBlocker()
+	if missingInput and Q.background ~= true then return missingInput; end;
+	if not w:FindFirstChild("StrataNet") and not workspace:FindFirstChild("StrataPlate") then
+		return "Waiting for Delve. Join a run and try again.";
+	end;
+end;
+local function W(m)
+	local G, r = 0, nil;
+	for m, Q in ipairs(m:GetDescendants()) do
+		local e = Q.ClassName;
+		if e == "Part" or e == "MeshPart" then
+			G = G + 1;
+			if not r then
+				r = Q.Color;
+			end;
+		end;
+	end;
+	local Q = r and string.format("%d,%d,%d", math.floor(r.R + .5), math.floor(r.G + .5), math.floor(r.B + .5)) or "-";
+	return G, Q;
+end;
+local K, o = {}, {};
+local F = {};
+do
+	local m = w:FindFirstChild("Assets");
+	local G = m and m:FindFirstChild("Rocks");
+	if G then
+		for m, G in ipairs(G:GetChildren()) do
+			local r, Q = W(G);
+			K[r .. (("|" .. Q))] = G.Name;
+			if o[r] == nil then
+				o[r] = G.Name;
+			else
+				o[r] = false;
+			end;
+		end;
+	end;
+	local r = m and m:FindFirstChild("Mobs");
+	if r then
+		for m, G in ipairs(r:GetChildren()) do
+			F[G.Name] = true;
+		end;
+	end;
+end;
+local j = { DelveCursedRock = true, DelveSporeBloom = true };
+local R = {
+		DelveTimeCrystal = 25,
+		DelveTreasureGeode = 25,
+		DelveRelicFountain = 15,
+		DelveBlastRock = 3,
+	};
+local function C(m)
+	if j[m] then
+		return -6;
+	end;
+	if R[m] then
+		return R[m];
+	end;
+	local G = tonumber(m and m:match("(%d+)$"));
+	if not G or G <= 1 then
+		return 1;
+	end;
+	return G * G;
+end;
+local D = {};
+local E = nil;
+local a = nil;
+local i, s, O = {}, nil, false;
+local V = {};
+local function orePart(ore)
+	if ore:IsA("BasePart") then return ore; end;
+	return ore:FindFirstChildWhichIsA("BasePart") or ore:FindFirstChildWhichIsA("BasePart", true);
+end;
+local function y(m)
+	local G = 10;
+	local Q = workspace:FindFirstChild("StrataPlate");
+	if not Q then
+		if E then
+			D, E, a = {}, nil, nil;
+		end;
+		return false;
+	end;
+	local e = instanceId(Q);
+	if e ~= E then
+		D, E, a, r.lastAim = {}, e, nil, nil;
+		s, i, O, V = nil, {}, true, {};
+		r.groundTileCount = nil;
+		r.centerFarmTiles, r.centerFarmTile, r.centerFarmChest = nil, nil, nil;
+		r.statsFound = false;
+	end;
+	local N = Q:FindFirstChild("Ground");
+	local S = N and N:GetChildren();
+	local w = S and ((S[1] and instanceId(S[1])));
+	local tileCount = S and #S or 0;
+	if w ~= s or tileCount ~= r.groundTileCount then
+		s, i, O, V = w, {}, true, {};
+		r.groundTileCount = tileCount;
+		for m, G in ipairs(S or {}) do
+			local r, Q = G.Name:match("^Tile_(%d+)_(%d+)$");
+			if r then
+				local m = G.Position;
+				r, Q = tonumber(r), tonumber(Q);
+				i[#i + 1] = {
+						cx = r,
+						cz = Q,
+						wx = m.X,
+						wz = m.Z,
+						wy = m.Y,
+					};
+				V[r * 4096 + Q] = true;
+			end;
+		end;
+	end;
+	local q = {};
+	for Q, e in ipairs(Q:GetChildren()) do
+		local N = e.Name;
+		local S = tonumber(N);
+		if S then
+			q[N] = true;
+			local Q = instanceId(e);
+			local w = D[N];
+			if w and w.addr ~= Q then
+				D[N] = nil;
+				r.lastAim = nil;
+				if #i < 3 then
+					a = nil;
+				end;
+			end;
+			if not D[N] then
+				local part = orePart(e);
+				if part then
+					local G = part.Position;
+					local r, w;
+					if S >= x then
+						local m = S - x;
+						r = math.floor(m / 1024);
+						w = ((m - r * 1024)) + .5;
+						r = r + .5;
+					else
+						r = math.floor(S / 1024);
+						w = S - r * 1024;
+					end;
+					local q, l = W(e);
+					local d = K[q .. (("|" .. l))] or o[q] or "?";
+					D[N] = {
+							cx = r,
+							cz = w,
+							wx = G.X,
+							wy = G.Y,
+							wz = G.Z,
+							kind = d,
+							addr = Q,
+							instance = e,
+						};
+				end;
+			else
+				local r = D[N];
+				local Q = not r.settled or (G > 0 and m - ((r.readAt or 0)) > 3);
+				if Q then
+					if r.settled then
+						G = G - 1;
+					end;
+					local part = orePart(e);
+					local N = part and part.Position;
+					if not N then
+						D[e.Name] = nil;
+					else
+						r.readAt = m;
+						if math.abs(N.Y - r.wy) < .05 and ((math.abs(N.X - r.wx) < .05 and math.abs(N.Z - r.wz) < .05)) then
+							r.stillSince = r.stillSince or m;
+							if m - r.stillSince >= 1.5 then
+								r.settled = true;
+							end;
+						else
+							r.stillSince, r.settled = nil, false;
+							if #i < 3 then
+								a = nil;
+							end;
+						end;
+						r.wx, r.wy, r.wz = N.X, N.Y, N.Z;
+					end;
+				end;
+			end;
+		end;
+	end;
+	for m in pairs(D) do
+		if not q[m] then
+			D[m] = nil;
+		end;
+	end;
+	return true;
+end;
+r.debugRocks = function()
+		local m, G = 0, nil;
+		for r, Q in pairs(D) do
+			m = m + 1;
+			G = G or string.format("%s@%.0f,%.0f,%.0f", r, Q.wx, Q.wy, Q.wz);
+		end;
+		return m, G, E, a ~= nil;
+	end;
+local function b(m, G)
+	local r = ((m[1] * ((m[5] * m[9] - m[6] * m[8])) - m[2] * ((m[4] * m[9] - m[6] * m[7])))) + m[3] * ((m[4] * m[8] - m[5] * m[7]));
+	if math.abs(r) < 1e-09 then
+		return nil;
+	end;
+	local function Q(m, G, r)
+		return ((m[1] * ((G[2] * r[3] - G[3] * r[2])) - G[1] * ((m[2] * r[3] - m[3] * r[2])))) + r[1] * ((m[2] * G[3] - m[3] * G[2]));
+	end;
+	local e, N, S = { m[1], m[4], m[7] }, { m[2], m[5], m[8] }, { m[3], m[6], m[9] };
+	return { Q(G, N, S) / r, Q(e, G, S) / r, Q(e, N, G) / r };
+end;
+local function v(m, G, r, Q)
+	local e = {
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+		};
+	local N = { 0, 0, 0 };
+	for m, S in ipairs(m) do
+		local w, q, l = S[G], S[r], S[Q];
+		e[1] = e[1] + w * w;
+		e[2] = e[2] + w * q;
+		e[3] = e[3] + w;
+		e[5] = e[5] + q * q;
+		e[6] = e[6] + q;
+		e[9] = e[9] + 1;
+		N[1] = N[1] + w * l;
+		N[2] = N[2] + q * l;
+		N[3] = N[3] + l;
+	end;
+	e[4], e[7], e[8] = e[2], e[3], e[6];
+	return b(e, N);
+end;
+local function n(m)
+	if #i >= 3 then
+		if O or not a then
+			O = false;
+			local m, G = v(i, "wx", "wz", "cx"), v(i, "wx", "wz", "cz");
+			local r, Q = v(i, "cx", "cz", "wx"), v(i, "cx", "cz", "wz");
+			if m and ((G and ((r and Q)))) then
+				return {
+					toCx = m,
+					toCz = G,
+					toWx = r,
+					toWz = Q,
+					y = i[1].wy + 1.8,
+				};
+			end;
+		else
+			return a;
+		end;
+	end;
+	if #m < 3 then
+		return a;
+	end;
+	local G = v(m, "wx", "wz", "cx");
+	local r = v(m, "wx", "wz", "cz");
+	local Q = v(m, "cx", "cz", "wx");
+	local e = v(m, "cx", "cz", "wz");
+	if not ((G and ((r and ((Q and e)))))) then
+		return a;
+	end;
+	local N = 0;
+	for m, G in ipairs(m) do
+		N = N + G.wy;
+	end;
+	return {
+		toCx = G,
+		toCz = r,
+		toWx = Q,
+		toWz = e,
+		y = N / #m,
+	};
+end;
+local function g(m, G, r)
+	return ((m.toCx[1] * G + m.toCx[2] * r)) + m.toCx[3], ((m.toCz[1] * G + m.toCz[2] * r)) + m.toCz[3];
+end;
+local function Z(m, G, r)
+	return Vector3.new(((m.toWx[1] * G + m.toWx[2] * r)) + m.toWx[3], m.y, ((m.toWz[1] * G + m.toWz[2] * r)) + m.toWz[3]);
+end;
+local k, T, A, h, U = .707, -0.707, -0.707, -0.707, .91;
+local function B()
+	local m = workspace.CurrentCamera;
+	if not m then
+		return;
+	end;
+	local G = m.CFrame;
+	local r, Q = G.RightVector, G.LookVector;
+	local e = math.sqrt(r.X * r.X + r.Z * r.Z);
+	local N = math.sqrt(Q.X * Q.X + Q.Z * Q.Z);
+	if e < .001 or N < .001 then
+		return;
+	end;
+	k, T, A, h = r.X / e, r.Z / e, Q.X / N, Q.Z / N;
+	U = math.max(.2, math.min(1, -Q.Y));
+end;
+local function M(m, G)
+	local r = m * k + G * T;
+	local Q = ((m * A + G * h)) * U;
+	return math.sqrt(r * r + Q * Q);
+end;
+local L = nil;
+local X = nil;
+local u = nil;
+local Y = 0;
+local function p(m, G, r, Q, e)
+	local N = M(r - m, Q - G);
+	if N <= e or N < 1e-06 then
+		return r, Q;
+	end;
+	local S = e / N;
+	return m + ((r - m)) * S, G + ((Q - G)) * S;
+end;
+local function H(m)
+	local G = {};
+	for m, r in ipairs(m) do
+		local Q = math.floor(r.cx) * 4096 + math.floor(r.cz);
+		local e = G[Q];
+		if not e then
+			e = {};
+			G[Q] = e;
+		end;
+		e[#e + 1] = r;
+	end;
+	return G;
+end;
+-- Mining coverage uses grid distance. Camera pitch only affects aim reach.
+local function miningDistanceSquared(dx, dz)
+	return dx * dx + dz * dz;
+end;
+local function t(m, G, r, Q)
+	local e, N = 0, 0;
+	local S = math.ceil(Q) + 1;
+	local radiusSquared = Q * Q;
+	local w, q = math.floor(G), math.floor(r);
+	for w = w - S, w + S, 1 do
+		for S = q - S, q + S, 1 do
+			local q = m[w * 4096 + S];
+			if q then
+				for m, S in ipairs(q) do
+					if miningDistanceSquared(S.cx - G, S.cz - r) <= radiusSquared then
+						e = e + S.w;
+						if S.w > 0 then
+							N = N + 1;
+						end;
+					end;
+				end;
+			end;
+		end;
+	end;
+	return e, N;
+end;
+local function P(m, G, r, Q)
+	local e = {};
+	local N = math.ceil(2 * r);
+	for m, S in ipairs(m) do
+		if S.w > 0 then
+			e[#e + 1] = { S.cx, S.cz, S.instance };
+			if Q then
+				for m = -0.5, .5, 1 do
+					for G = -0.5, .5, 1 do
+						e[#e + 1] = { S.cx + m, S.cz + G };
+					end;
+				end;
+				local m, Q = math.floor(S.cx), math.floor(S.cz);
+				for m = m - N, m + N, 1 do
+					for Q = Q - N, Q + N, 1 do
+						local N = G[m * 4096 + Q];
+						if N then
+							for m, G in ipairs(N) do
+								if G.w > 0 and ((((G.cx > S.cx or (G.cx == S.cx and G.cz > S.cz))) and miningDistanceSquared(G.cx - S.cx, G.cz - S.cz) <= 4 * r * r)) then
+									e[#e + 1] = { ((S.cx + G.cx)) / 2, ((S.cz + G.cz)) / 2 };
+								end;
+							end;
+						end;
+					end;
+				end;
+			end;
+		end;
+	end;
+	return e;
+end;
+local J = {};
+local function I(m, G, r, Q, e)
+	local N = {};
+	for m, S in ipairs(m) do
+		local w, q = t(G, S[1], S[2], r);
+		if q > 0 and w > 0 then
+			N[#N + 1] = {
+					ax = S[1],
+					az = S[2],
+					score = w,
+					v = w / ((1 + .04 * M(S[1] - Q, S[2] - e))),
+				};
+		end;
+	end;
+	table.sort(N, function(m, G)
+		return m.v > G.v;
+	end);
+	local S = {};
+	for m, G in ipairs(N) do
+		local Q = true;
+		for m, e in ipairs(S) do
+			if M(G.ax - e.ax, G.az - e.az) < r * 1.5 then
+				Q = false;
+				break;
+			end;
+		end;
+		if Q then
+			S[#S + 1] = G;
+			if #S >= 60 then
+				break;
+			end;
+		end;
+	end;
+	return S;
+end;
+local function ml(m, G, r, Q)
+	local e, N = {}, {};
+	local S, w = G, r;
+	if Q then
+		e[1], N[Q] = Q, true;
+		S, w = m[Q].ax, m[Q].az;
+	end;
+	while #e < #m do
+		local G, r = nil, nil;
+		for m, Q in ipairs(m) do
+			if not N[m] then
+				local e = M(Q.ax - S, Q.az - w);
+				if not r or e < r then
+					G, r = m, e;
+				end;
+			end;
+		end;
+		N[G] = true;
+		e[#e + 1] = G;
+		S, w = m[G].ax, m[G].az;
+	end;
+	return e;
+end;
+local function Gl(m, G, r, Q, e)
+	local function N(e)
+		if e == 0 then
+			return r, Q;
+		end;
+		local N = m[G[e]];
+		return N.ax, N.az;
+	end;
+	local function S(m, G)
+		local r, Q = N(m);
+		local e, S = N(G);
+		return M(r - e, Q - S);
+	end;
+	local w = #G;
+	local q, l = true, 0;
+	while q and l < 20 do
+		q, l = false, l + 1;
+		for m = e and 2 or 1, w - 1, 1 do
+			for r = m + 1, w, 1 do
+				local Q = S(m - 1, m) + ((r < w and S(r, r + 1) or 0));
+				local e = S(m - 1, r) + ((r < w and S(m, r + 1) or 0));
+				if e < Q - 1e-06 then
+					local Q, e = m, r;
+					while Q < e do
+						G[Q], G[e] = G[e], G[Q];
+						Q, e = Q + 1, e - 1;
+					end;
+					q = true;
+				end;
+			end;
+		end;
+	end;
+	return G;
+end;
+local function rl(m, G, r, Q)
+	local e, N, S = 0, r, Q;
+	for G, r in ipairs(G) do
+		local Q = m[r];
+		e = e + M(Q.ax - N, Q.az - S);
+		N, S = Q.ax, Q.az;
+	end;
+	return e;
+end;
+local function cQ(m)
+	local camera = workspace.CurrentCamera;
+	if not camera then return nil; end;
+	local G, r = camera:WorldToScreenPoint(m);
+	if (not r or (G.X == 0 and G.Y == 0)) and not (inp.silent() and G.Z > 0) then
+		return nil;
+	end;
+	return G;
+end;
+local function Ql(m, G)
+	L, u = nil, nil;
+	local e = {};
+	-- rock search range (0 = unlimited) and minimum tier filter
+	local rng = tonumber(Q.mineRange) or 0;
+	local rngSq = rng > 0 and rng * rng or nil;
+	local minTier = tonumber(Q.minTier) or 1;
+	for pass = 1, 2 do
+		local hasTarget = false;
+		for rockName, r in pairs(D) do
+			local Q = r.wy - m.Y;
+			if (math.abs(Q) < 6 or (Q >= 6 and (Q < 40 and not r.settled))) and (pass == 2 or not rngSq or (r.wx - m.X) ^ 2 + (r.wz - m.Z) ^ 2 <= rngSq) then
+				r.name = rockName;
+				local wt = (r.skipUntil and r.skipUntil > G) and 0 or C(r.kind);
+				if wt > 0 and minTier > 1 then
+					local tn = tonumber(tostring(r.kind):match("(%d+)$"));
+					if tn and tn < minTier then
+						wt = 0;
+					end;
+				end;
+				r.w = wt;
+				hasTarget = hasTarget or wt > 0;
+				e[#e + 1] = r;
+			end;
+		end;
+		-- nothing in range: if walking is on, widen the search so we walk to the nearest rocks
+		if hasTarget or not Q.walk or not rngSq or pass == 2 then
+			break;
+		end;
+		e = {};
+	end;
+	a = n(e);
+	r.rockCount = #e;
+	if not r.prevCount or #e < r.prevCount or #e > r.prevCount + 2 then
+		r.progressAt = G;
+	end;
+	r.prevCount = #e;
+	if not a or #e == 0 then
+		X = nil;
+		r.posCount, r.noAimSince = 0, nil;
+		return;
+	end;
+	local N, S = g(a, m.X, m.Z);
+	r.cell = { N, S };
+	-- center farm: if nothing could be aimed for a moment, drop the safety margins so ores
+	-- sitting right at the edge of the mining circle still get hit
+	local relax = Q.centerFarm and r.noAimSince and G - r.noAimSince > .4;
+	local w = math.max(.3, (tonumber(Q.reach) or 1.29) * (tonumber(Q.reachScale) or 1)) * (relax and 1 or .95);
+	local miningRadius = math.max(.1, tonumber(Q.radius) or .69);
+	local radiusScale = relax and .97 or math.max(.4, math.min(1, tonumber(Q.radiusScale) or .85));
+	local q = miningRadius * radiusScale;
+	r.relaxed = relax and true or false;
+	local l = H(e);
+	local d = 0;
+	for m, G in ipairs(e) do
+		if G.w > 0 then
+			d = d + 1;
+		end;
+	end;
+	local centerOre = Q.centerOre == true;
+	local f = not centerOre and (d >= 5 or (Q.centerFarm and d >= 2));
+	if r.clusterOn ~= f or r.centerOre ~= centerOre then
+		X = nil;
+	end;
+	r.clusterOn = f;
+	r.centerOre = centerOre;
+	local z = {};
+	for m, G in ipairs(e) do
+		if M(G.cx - N, G.cz - S) <= ((w + q)) + .5 then
+			z[#z + 1] = G;
+		end;
+	end;
+	local x = nil;
+	local bestCenterDistance = math.huge;
+	local retryDirect = Q.centerFarm and G - (r.progressAt or G) >= 2;
+	local preferDirect = centerOre or retryDirect;
+	for pass = 1, (Q.centerFarm and 2 or 1) do
+		local direct = (pass == 1 and preferDirect) or (pass == 2 and not preferDirect);
+		local cluster = not direct and (f or (Q.centerFarm and d >= 2));
+		for _, candidate in ipairs(P(z, l, q, cluster)) do
+			local aimX, aimZ = candidate[1], candidate[2];
+			local inReach = M(aimX - N, aimZ - S) <= w;
+			if not direct then
+				aimX, aimZ = p(N, S, aimX, aimZ, w);
+				inReach = true;
+			end;
+			local score, hits = 0, 0;
+			local ore = direct and candidate[3] or nil;
+			if inReach and Q.centerFarm then
+				local part = ore and orePart(ore);
+				local point = not direct and Z(a, aimX, aimZ) or (part and part.Position);
+				inReach = point and cQ(point);
+			end;
+			if inReach then score, hits = t(l, aimX, aimZ, q); end;
+			if hits > 0 and score > 0 and (not x or score >= x.score - 1e-6) then
+				local centerDistance = math.huge;
+				for _, rock in ipairs(z) do
+					if rock.w > 0 then
+						centerDistance = math.min(centerDistance, miningDistanceSquared(rock.cx - aimX, rock.cz - aimZ));
+					end;
+				end;
+				local aimDistance = M(aimX - N, aimZ - S);
+				if not x or score > x.score + 1e-6
+					or centerDistance < bestCenterDistance - 1e-6
+					or (math.abs(centerDistance - bestCenterDistance) <= 1e-6 and aimDistance < x.d)
+				then
+					x = { ax = aimX, az = aimZ, score = score, n = hits, d = aimDistance, ore = ore };
+					bestCenterDistance = centerDistance;
+				end;
+			end;
+		end;
+		if x then break; end;
+	end;
+	L = x;
+	r.lastAim = x;
+	-- remember whether ores exist that we currently can't aim at (drives the center-farm stray trip)
+	r.posCount = d;
+	if x then
+		r.noAimSince = nil;
+	elseif d > 0 then
+		r.noAimSince = r.noAimSince or G;
+	else
+		r.noAimSince = nil;
+	end;
+	if X then
+		X.score = t(l, X.ax, X.az, q);
+		if X.score <= 0 then
+			X = nil;
+		end;
+	end;
+	if not X or G - Y >= .5 then
+		Y = G;
+		local m = I(P(e, l, q, f), l, q, N, S);
+		if #J > 0 and a then
+			local G = {};
+			for m, r in ipairs(m) do
+				local Q = Z(a, r.ax, r.az);
+				local e = false;
+				for m, G in ipairs(J) do
+					if ((Q.X - G.x)) ^ 2 + ((Q.Z - G.z)) ^ 2 < G.block * G.block then
+						e = true;
+						break;
+					end;
+				end;
+				if not e then
+					G[#G + 1] = r;
+				end;
+			end;
+			m = G;
+		end;
+		if #m > 0 then
+			local G = Gl(m, ml(m, N, S), N, S);
+			local r = rl(m, G, N, S);
+			local Q = m[G[1]];
+			local e = nil;
+			if X then
+				for G, r in ipairs(m) do
+					if M(r.ax - X.ax, r.az - X.az) < q then
+						e = rl(m, Gl(m, ml(m, N, S, G), N, S, true), N, S);
+						break;
+					end;
+				end;
+			end;
+			if not X or not e or r < e * .9 then
+				X = {
+						ax = Q.ax,
+						az = Q.az,
+						score = Q.score,
+						v = r,
+					};
+			end;
+		end;
+	end;
+	r.walkGoal = X;
+	if not x then
+		r.progressAt = G;
+	end;
+	local K = G - ((r.progressAt or G));
+	if K > (tonumber(Q.skipAfter) or 9) and x then
+		local stalledRock;
+		local closest = math.huge;
+		for _, rock in ipairs(e) do
+			if rock.w > 0 then
+				local distance = miningDistanceSquared(rock.cx - x.ax, rock.cz - x.az);
+				if distance <= q * q and distance < closest then
+					stalledRock, closest = rock, distance;
+				end;
+			end;
+		end;
+		if stalledRock then
+			stalledRock.skipUntil = G + 3;
+			r.skipped = (r.skipped or 0) + 1;
+		end;
+		r.progressAt, r.lastAim, r.walkGoal = G, nil, nil;
+		L, X, u = nil, nil, nil;
+		K = 0;
+	end;
+	r.stalled = K > 4;
+	if X then
+		local m = M(X.ax - N, X.az - S);
+		if (not x and m > .01) or (r.stalled and m > .35) or (x and m > w * .85 and X.score > x.score * 1.2) then
+			u = Z(a, X.ax, X.az);
+		end;
+	end;
+end;
+local el = {};
+local Nl = nil;
+local function Sl(m, G, r, Q)
+	local e = G:FindFirstChild("Torso") or G:FindFirstChild("HumanoidRootPart") or G:FindFirstChild("Head");
+	local N = e and e.Position;
+	if typeof(N) ~= "Vector3" then
+		return;
+	end;
+	if m.t and r - m.t > .001 then
+		local G = r - m.t;
+		local Q, e = ((N.X - m.x)) / G, ((N.Z - m.z)) / G;
+		if math.abs(Q) > 80 or math.abs(e) > 80 then
+			Q, e = 0, 0;
+		end;
+		m.vx = ((m.vx or 0)) * .5 + Q * .5;
+		m.vz = ((m.vz or 0)) * .5 + e * .5;
+	end;
+	m.x, m.y, m.z, m.t = N.X, N.Y, N.Z, r;
+	local S = G:GetAttribute("AtkPhase");
+	if S ~= m.phase then
+		if S == "windup" then
+			m.windupAt = r;
+		elseif S == "strike" then
+			m.strikeAt = r;
+			-- learn how long this mob's windup lasts so the roll can be scheduled before the strike lands
+			local dv = env.Delve;
+			if dv and m.windupAt and m.name then
+				local dur = r - m.windupAt;
+				if dur > .05 and dur < 4 then
+					dv.windups = dv.windups or {};
+					local old = dv.windups[m.name];
+					dv.windups[m.name] = old and (old * .6 + dur * .4) or dur;
+				end;
+			end;
+		end;
+	end;
+	m.phase = S;
+	if Q or not m.hpT or r - m.hpT > .25 then
+		m.hpT = r;
+		local Q = G:FindFirstChildOfClass("Humanoid");
+		if Q then
+			m.hp, m.max = Q.Health, Q.MaxHealth;
+		end;
+	end;
+end;
+local function wl(m, G, r)
+	m.chk = r;
+	if G:GetAttribute("MobId") == nil then
+		m.owned = false;
+		m.pending = true;
+		return;
+	end;
+	m.pending = nil;
+	m.boss = G:GetAttribute("Boss") == true or G:GetAttribute("IsBoss") == true
+		or G:GetAttribute("MobType") == "Boss" or tostring(G.Name):lower():find("boss") ~= nil;
+	local Q = G:GetAttribute("Owner");
+	if Q ~= nil then
+		m.owned = Q == l.UserId;
+	else
+		local r = G:GetAttribute("RunId");
+		m.owned = r == nil or r == Nl;
+	end;
+end;
+local ql = {};
+local ll = {};
+local dl = Q.chestRange;
+local function fl(m, G)
+	local r = m:FindFirstChild("Body") or m:FindFirstChild("Base") or m.PrimaryPart;
+	local Q = r and r.Position;
+	if typeof(Q) ~= "Vector3" then
+		return nil;
+	end;
+	if G and ((Q.X - G.X)) ^ 2 + ((Q.Z - G.Z)) ^ 2 > dl * dl then
+		return nil;
+	end;
+	local e = instanceId(m);
+	local N = ll[e];
+	if N == nil then
+		local G = m:GetAttribute("Viewer");
+		local r = m:GetAttribute("Owner");
+		N = ((G == nil or G == l.UserId)) and ((((r == nil or r == l.UserId)) and not m:GetAttribute("HiddenFor_" .. l.UserId)));
+		ll[e] = N;
+	end;
+	if not N then
+		return nil;
+	end;
+	local S = m:GetAttribute("ChestState");
+	if S == "open" then
+		return nil;
+	end;
+	return e, {
+		x = Q.X,
+		z = Q.Z,
+		locked = S ~= "unlocked",
+		state = S,
+	};
+end;
+local function zl(m)
+	Nl = l:GetAttribute("RunId");
+	local G = workspace:GetChildren();
+	local r = {};
+	local e = l.Character;
+	local N = e and e:FindFirstChild("HumanoidRootPart");
+	local S = N and N.Position;
+	local w = {};
+	for G, e in ipairs(G) do
+		local N = e.Name;
+		if (Q.chests or (Q.on and Q.centerFarm)) and (not F[N] and ((N == "DelveChest" or (e.ClassName == "Model" and e:GetAttribute("ChestRarity") ~= nil)))) then
+			local m, G = fl(e, S);
+			if m then
+				w[m] = G;
+			end;
+		elseif F[N] then
+			local Q = instanceId(e);
+			r[Q] = true;
+			local N = el[Q];
+			if not N then
+				N = { name = e.Name };
+				el[Q] = N;
+			end;
+			N.idx = G;
+			if N.owned == nil or (not N.owned and m - N.chk > ((N.pending and .4 or 2))) then
+				wl(N, e, m);
+			end;
+			if N.owned then
+				Sl(N, e, m);
+			end;
+		end;
+	end;
+	for m in pairs(el) do
+		if not r[m] then
+			el[m] = nil;
+		end;
+	end;
+	ql = w;
+	local plate = workspace:FindFirstChild("StrataPlate");
+	r.chestScanPlate = plate and instanceId(plate);
+end;
+local function cl(m)
+	local G, r = nil, nil;
+	for Q, e in pairs(ql) do
+		if not e.locked then
+			local Q = ((e.x - m.X)) ^ 2 + ((e.z - m.Z)) ^ 2;
+			if not r or Q < r then
+				G, r = e, Q;
+			end;
+		end;
+	end;
+	return G;
+end;
+local function xl(m)
+	local G = nil;
+	for r, Q in pairs(el) do
+		if Q.owned then
+			G = G or workspace:GetChildren();
+			local e = G[Q.idx];
+			if not e or instanceId(e) ~= r then
+				e = nil;
+				for m = math.max(1, Q.idx - 12), math.min(#G, Q.idx + 12), 1 do
+					local N = G[m];
+					if instanceId(N) == r then
+						e, Q.idx = N, m;
+						break;
+					end;
+				end;
+			end;
+			if e then
+				Sl(Q, e, m);
+			else
+				el[r] = nil;
+			end;
+		end;
+	end;
+end;
+local function Wl(m, G, r)
+	local Q = workspace:GetChildren();
+	local e = Q[G.idx];
+	if e and instanceId(e) == m then
+		G.dead = e:GetAttribute("Dead") and true or false;
+	end;
+end;
+local function Kl(m, G)
+	local r = math.min(.15, G - ((m.t or G)));
+	return Vector3.new(m.x + ((m.vx or 0)) * r, m.y, m.z + ((m.vz or 0)) * r);
+end;
+local function ol()
+	local m = {};
+	for G, r in pairs(el) do
+		if r.owned and ((r.x and ((not r.dead and ((r.hp == nil or r.hp > 0)))))) then
+			r.addr = G;
+			m[#m + 1] = r;
+		end;
+	end;
+	return m;
+end;
+local Fl = {};
+local jl = { "Hazards", "MobTelegraphs", "DelveHazards" };
+local function Rl(m)
+	local G = math.sqrt(m.X * m.X + m.Z * m.Z);
+	if G < .001 then
+		return 0, 0;
+	end;
+	return m.X / G, m.Z / G;
+end;
+local Cl = {};
+local function Dl(m)
+	return m > .05 and m < .065;
+end;
+local function El(m, G)
+	local r = { { v = m.RightVector, s = G.X }, { v = m.UpVector, s = G.Y }, { v = m.LookVector, s = G.Z } };
+	local Q, e = 1, -1;
+	for m, G in ipairs(r) do
+		local r = math.abs(G.v.Y);
+		if r > e then
+			Q, e = m, r;
+		end;
+	end;
+	local N = r[Q].s;
+	table.remove(r, Q);
+	local S, w = Rl(r[1].v);
+	local q, l = Rl(r[2].v);
+	local d, f = r[1].s / 2, r[2].s / 2;
+	local z = m.Position;
+	return {
+		x = z.X,
+		z = z.Z,
+		ax = S,
+		az = w,
+		bx = q,
+		bz = l,
+		h1 = d,
+		h2 = f,
+		circle = math.abs(d - f) <= .06 * math.max(d, f),
+	}, N;
+end;
+local function al(m, G)
+	for m, G in pairs(Cl) do
+		G.seen = false;
+	end;
+	local function r(m, G)
+		if m.circle and G.circle then
+			if ((m.x - G.x)) ^ 2 + ((m.z - G.z)) ^ 2 < .01 and G.h1 < m.h1 - .01 then
+				return G.h1 / m.h1;
+			end;
+		elseif not m.circle and ((not G.circle and ((math.abs(m.h1 - G.h1) < .05 and ((m.bx * G.bx + m.bz * G.bz > .99 and G.h2 < m.h2 - .01)))))) then
+			local r, Q = m.x - m.bx * m.h2, m.z - m.bz * m.h2;
+			local e, N = G.x - G.bx * G.h2, G.z - G.bz * G.h2;
+			if ((r - e)) ^ 2 + ((Q - N)) ^ 2 < .04 then
+				return G.h2 / m.h2;
+			end;
+		end;
+		return nil;
+	end;
+	for Q, e in ipairs(m) do
+		local N, S, w = nil, 0, false;
+		for m, G in ipairs(m) do
+			if Q ~= m then
+				local m = r(e, G);
+				if m then
+					N, S = m, S + 1;
+				elseif r(G, e) then
+					w = true;
+				end;
+			end;
+		end;
+		if S == 1 and not w then
+			local m = string.format("%d:%d:%d", math.floor(e.x * 4 + .5), math.floor(e.z * 4 + .5), math.floor(((e.h1 + e.h2)) * 4 + .5));
+			local r = Cl[m];
+			if not r or N < r.p - .05 then
+				r = { p0 = N, t0 = G };
+				Cl[m] = r;
+			end;
+			r.zone, r.p, r.seen = e, N, true;
+			if G - r.t0 > .03 and N > r.p0 + .01 then
+				r.hitAt = r.t0 + ((((1 - r.p0)) * ((G - r.t0)))) / ((N - r.p0));
+			end;
+		end;
+	end;
+	for m, r in pairs(Cl) do
+		if not r.seen and G - ((r.hitAt or r.t0)) > .3 then
+			Cl[m] = nil;
+		end;
+	end;
+end;
+local il = .6;
+local sl = 20;
+local Ol = 1.5;
+local Vl = Q.hitMargin;
+local yl = 1.05;
+local bl = Q.rollLead;
+local vl = Q.meleeReach;
+local nl = {};
+local function gl(m, G, r, Q)
+	local e = math.max(r / 2, .6);
+	-- velocity is sampled over >= 40 ms and cached, so scanning every frame doesn't zero it out
+	local N = nl[m];
+	if not N or Q - N.t > .5 then
+		N = { x = G.X, z = G.Z, t = Q };
+		nl[m] = N;
+	elseif Q - N.t >= .04 then
+		local dt = Q - N.t;
+		N.vx, N.vz = (G.X - N.x) / dt, (G.Z - N.z) / dt;
+		N.x, N.z, N.t = G.X, G.Z, Q;
+	end;
+	if N.vx then
+		local r2, S = N.vx, N.vz;
+		local w = math.sqrt(r2 * r2 + S * S);
+		if w > 2 then
+			local m2, Q2 = r2 / w, S / w;
+			local N2 = math.min(w * il, sl);
+			return {
+				x = G.X + (m2 * N2) / 2,
+				z = G.Z + (Q2 * N2) / 2,
+				ax = m2,
+				az = Q2,
+				bx = -Q2,
+				bz = m2,
+				h1 = N2 / 2 + e,
+				h2 = e,
+				circle = false,
+				pm = Ol,
+			}, m2, Q2, w;
+		end;
+	end;
+	return {
+		x = G.X,
+		z = G.Z,
+		ax = 1,
+		az = 0,
+		bx = 0,
+		bz = 1,
+		h1 = e,
+		h2 = e,
+		circle = true,
+		pm = Ol,
+	};
+end;
+local Zl = .4;
+local kl = 20;
+local Tl = {};
+local function Al(m, G, r, Q, e, N)
+	local S = m.x * m.ax + m.z * m.az;
+	local w = m.x * m.bx + m.z * m.bz;
+	local q, l = m.x + G * N, m.z + r * N;
+	local d = q * m.ax + l * m.az;
+	local f = q * m.bx + l * m.bz;
+	local z = m.h1 + math.max(Q, 0) * N;
+	local c = m.h2 + math.max(e, 0) * N;
+	local x, W = math.min(S - m.h1, d - z), math.max(S + m.h1, d + z);
+	local K, o = math.min(w - m.h2, f - c), math.max(w + m.h2, f + c);
+	local F, j = ((x + W)) / 2, ((K + o)) / 2;
+	return {
+		x = F * m.ax + j * m.bx,
+		z = F * m.az + j * m.bz,
+		ax = m.ax,
+		az = m.az,
+		bx = m.bx,
+		bz = m.bz,
+		h1 = math.min(((W - x)) / 2, m.h1 + kl),
+		h2 = math.min(((o - K)) / 2, m.h2 + kl),
+		circle = false,
+	};
+end;
+local function hl(m, G, r, Q)
+	local e, N = G - m.x, r - m.z;
+	return math.abs(e * m.ax + N * m.az) < m.h1 + Q and math.abs(e * m.bx + N * m.bz) < m.h2 + Q;
+end;
+local function Ul(m, G, r)
+	-- growth/velocity is sampled over >= 40 ms and cached (same reason as gl)
+	local Q = Tl[m];
+	if not Q or r - Q.t > .5 then
+		Tl[m] = { x = G.x, z = G.z, h1 = G.h1, h2 = G.h2, t = r };
+		return G;
+	end;
+	local e = r - Q.t;
+	if e >= .04 then
+		Q.gh1, Q.gh2 = (G.h1 - Q.h1) / e, (G.h2 - Q.h2) / e;
+		Q.gx, Q.gz = (G.x - Q.x) / e, (G.z - Q.z) / e;
+		Q.x, Q.z, Q.h1, Q.h2, Q.t = G.x, G.z, G.h1, G.h2, r;
+	end;
+	if G.circle or not Q.gh1 then
+		return G;
+	end;
+	local N, S, w, q = Q.gh1, Q.gh2, Q.gx, Q.gz;
+	if N < 1 and (S < 1 and w * w + q * q < 1) then
+		return G;
+	end;
+	return Al(G, w, q, N, S, Zl), w, q, N, S;
+end;
+local Bl, Ml = {}, -1000000000.0;
+local function Ll(m)
+	if m - Ml < .1 then
+		return Bl;
+	end;
+	Ml = m;
+	Bl = {};
+	local G = workspace:FindFirstChild("Plates");
+	if G then
+		for m, G in ipairs(G:GetChildren()) do
+			for m, G in ipairs(G:GetChildren()) do
+				if G.Name:sub(1, 7) == "Hazard_" then
+					Bl[#Bl + 1] = G;
+				end;
+			end;
+		end;
+	end;
+	return Bl;
+end;
+local function Xl(m, G)
+	Fl = {};
+	local e = G or d();
+	local N = {};
+	local S = {};
+	local function w(G)
+		local r, Q = pcall(function()
+				return G.Size;
+			end);
+		if not ((r and typeof(Q) == "Vector3")) then
+			return;
+		end;
+		local w = G.CFrame;
+		local q = w.Position;
+		if m and ((q.X - m.X)) ^ 2 + ((q.Z - m.Z)) ^ 2 >= 3600 then
+			return;
+		end;
+		local l = math.max(Q.X, Q.Y, Q.Z) >= 1.5;
+		local d = Dl(Q.X) or Dl(Q.Y) or Dl(Q.Z);
+		if l or d then
+			local r, q = El(w, Q);
+			if l then
+				local Q, S, w, q, l = Ul(instanceId(G), r, e);
+				Fl[#Fl + 1] = Q;
+				if S and m then
+					for d = 0, 8, 1 do
+						local f = (Zl * d) / 8;
+						if hl(Al(r, S, w, q, l, f), m.X, m.Z, Vl) then
+							N[#N + 1] = { key = "g" .. tostring(instanceId(G)), zone = Q, hitAt = e + f };
+							break;
+						end;
+					end;
+				end;
+			end;
+			if Dl(q) then
+				S[#S + 1] = r;
+			end;
+		end;
+		if not l and (not d and ((G.Transparency or 0)) < .95) then
+			local r, S, w, l = gl(instanceId(G), q, math.max(Q.X, Q.Y, Q.Z), e);
+			Fl[#Fl + 1] = r;
+			if l and m then
+				local Q, d = m.X - q.X, m.Z - q.Z;
+				local f = Q * S + d * w;
+				local z = math.abs(d * S - Q * w);
+				if f > 0 and z < r.h2 + 1.5 then
+					N[#N + 1] = { key = "p" .. tostring(instanceId(G)), zone = r, hitAt = e + f / l };
+				end;
+			end;
+		end;
+	end;
+	local function q(m, G)
+		G = G or 0;
+		for m, r in ipairs(m:GetChildren()) do
+			if G < 2 and ((r.ClassName == "Folder" or r.ClassName == "Model")) then
+				q(r, G + 1);
+			else
+				w(r);
+			end;
+		end;
+	end;
+	for m, G in ipairs(jl) do
+		local r = workspace:FindFirstChild(G);
+		if r then
+			q(r);
+		end;
+	end;
+	local l = {};
+	for G, r in ipairs(Ll(e)) do
+		local Q, e = nil, 0;
+		for m, G in ipairs(r:GetChildren()) do
+			local r, N = pcall(function()
+					return G.Size;
+				end);
+			if r and typeof(N) == "Vector3" then
+				local m, r = math.min(N.X, N.Y, N.Z), math.max(N.X, N.Y, N.Z);
+				if r >= 3 and r / 2 > e then
+					Q, e = G.Position, r / 2;
+				end;
+				if m < .2 and (r >= 3 and ((G.Transparency or 0)) < .95) then
+					local m, r = El(G.CFrame, N);
+					if r < .2 then
+						S[#S + 1] = m;
+					end;
+				end;
+			end;
+		end;
+		if Q and ((not m or ((Q.X - m.X)) ^ 2 + ((Q.Z - m.Z)) ^ 2 < 3600)) then
+			Fl[#Fl + 1] = {
+					x = Q.X,
+					z = Q.Z,
+					ax = 1,
+					az = 0,
+					bx = 0,
+					bz = 1,
+					h1 = e,
+					h2 = e,
+					circle = true,
+					pm = Vl,
+				};
+			l[#l + 1] = { x = Q.X, z = Q.Z, block = e + Vl };
+		end;
+	end;
+	J = l;
+	for G, r in ipairs(workspace:GetChildren()) do
+		if r.ClassName == "Part" then
+			local G = r.Size;
+			if typeof(G) == "Vector3" then
+				local Q, e = math.min(G.X, G.Y, G.Z), math.max(G.X, G.Y, G.Z);
+				if Q < .2 and (e >= 3 and (e <= 30 and ((r.Transparency or 0)) < .95)) then
+					local Q = r.Position;
+					if not m or ((Q.X - m.X)) ^ 2 + ((Q.Z - m.Z)) ^ 2 < 3600 then
+						local m, Q = El(r.CFrame, G);
+						if Q < .2 then
+							m.pm = Vl;
+							Fl[#Fl + 1] = m;
+							S[#S + 1] = m;
+						end;
+					end;
+				end;
+			end;
+		end;
+	end;
+	for G, r in pairs(el) do
+		if r.owned and (r.x and (not r.dead and ((r.phase == "windup" or r.phase == "strike")))) then
+			if not m or ((r.x - m.X)) ^ 2 + ((r.z - m.Z)) ^ 2 < 3600 then
+				local learnedReach = (CFG.dodgeLearn ~= false and tonumber(brain.mobReach[tostring(r.name)])) or 0;
+				local reachNow = math.max(vl, learnedReach);
+				Fl[#Fl + 1] = {
+						x = r.x,
+						z = r.z,
+						ax = 1,
+						az = 0,
+						bx = 0,
+						bz = 1,
+						h1 = reachNow,
+						h2 = reachNow,
+						mob = r.name,
+						circle = true,
+						pm = 2,
+					};
+			end;
+		end;
+	end;
+	for m, G in pairs(nl) do
+		if e - G.t > 1 then
+			nl[m] = nil;
+		end;
+	end;
+	for m, G in pairs(Tl) do
+		if e - G.t > 1 then
+			Tl[m] = nil;
+		end;
+	end;
+	r.zoneCount = #Fl;
+	r.zones = Fl;
+	if Q.autoRoll then
+		al(S, G or d());
+		for m, G in ipairs(N) do
+			local r = Cl[G.key];
+			Cl[G.key] = {
+					zone = G.zone,
+					p = 0,
+					t0 = r and r.t0 or e,
+					hitAt = G.hitAt,
+					seen = true,
+					rolled = r and r.rolled,
+				};
+		end;
+	end;
+end;
+local function ul(m, G, r, Q)
+	local e, N = G - m.x, r - m.z;
+	local S = e * m.ax + N * m.az;
+	local w = e * m.bx + N * m.bz;
+	if m.circle then
+		local G = m.h1 + Q;
+		local r = math.sqrt(S * S + w * w);
+		if r >= G then
+			return nil;
+		end;
+		if r < .2 then
+			return G, m.ax, m.az;
+		end;
+		return G - r, e / r, N / r;
+	end;
+	local q, l = ((m.h1 + Q)) - math.abs(S), ((m.h2 + Q)) - math.abs(w);
+	if q <= 0 or l <= 0 then
+		return nil;
+	end;
+	if q < l then
+		local G = S >= 0 and 1 or -1;
+		return q, m.ax * G, m.az * G;
+	end;
+	local d = w >= 0 and 1 or -1;
+	return l, m.bx * d, m.bz * d;
+end;
+local Yl = Q.keepAway;
+local pl = {
+		W = 87,
+		A = 65,
+		S = 83,
+		D = 68,
+	};
+local Hl = {};
+local function tl(m, G)
+	if ((Hl[m] or false)) == G then
+		return;
+	end;
+	Hl[m] = G;
+	if G then
+		inp.key(pl[m], true);
+	else
+		inp.key(pl[m], false);
+	end;
+end;
+local function Pl()
+	for m in pairs(pl) do
+		tl(m, false);
+	end;
+	inp.clearMove();
+end;
+local Jl, Il, mQ = 81, 49, 50;
+local GQ, rQ = nil, nil;
+local function QQ(m, G)
+	if GQ then
+		return false;
+	end;
+	inp.key(m, true);
+	GQ, rQ = m, G;
+	return true;
+end;
+local function eQ(m)
+	-- a roll always wins over a pending tool-equip key press
+	if GQ and GQ ~= Jl then
+		inp.key(GQ, false);
+		GQ = nil;
+	end;
+	if QQ(Jl, m) then
+		r.rolls = ((r.rolls or 0)) + 1;
+		return true;
+	end;
+	return false;
+end;
+local function NQ(m, G)
+	if GQ and ((G or m - rQ >= .05)) then
+		inp.key(GQ, false);
+		GQ = nil;
+	end;
+end;
+local function SQ(m, G)
+	if not m then
+		Pl();
+		return;
+	end;
+	local r = math.sqrt(m * m + G * G);
+	if r < .001 then
+		Pl();
+		return;
+	end;
+	m, G = m / r, G / r;
+	run.lastDir = { m, G };
+	if Q.background == true then
+		-- no key presses in background mode: walk with Humanoid:Move
+		inp.setMove(m, G);
+		return;
+	end;
+	local Q = m * A + G * h;
+	local e = m * k + G * T;
+	tl("W", Q > .38);
+	tl("S", Q < -0.38);
+	tl("D", e > .38);
+	tl("A", e < -0.38);
+end;
+local wQ, qQ, lQ = false, true, -1000000000.0;
+local dQ;
+local function fQ(m)
+	if d() - lQ < 10 then
+		if not m then
+			notify("stats scan already ran in the last 10 s", "delve", 3);
+		end;
+		return;
+	end;
+	wQ, qQ = true, m;
+end;
+r.readStats = fQ;
+local function zQ()
+	wQ = false;
+	-- manual stats: skip the scan entirely
+	if Q.autoStats == false then
+		return;
+	end;
+	lQ = d();
+	r.statsFound = false;
+	local ok, objects = pcall(getgc, true);
+	local radius, reach;
+	local ambiguous = false;
+	if ok and type(objects) == "table" then
+		for _, object in ipairs(objects) do
+			if type(object) == "table" and type(rawget(object, "RuneFind")) == "number" then
+				local candidateRadius = rawget(object, "Radius");
+				local candidateReach = rawget(object, "Reach");
+				if type(candidateRadius) == "number" and candidateRadius >= .1 and candidateRadius <= 10
+					and type(candidateReach) == "number" and candidateReach >= .3 and candidateReach <= 20
+				then
+					if radius and (radius ~= candidateRadius or reach ~= candidateReach) then
+						ambiguous = true;
+						break;
+					end;
+					radius, reach = candidateRadius, candidateReach;
+				end;
+			end;
+		end;
+	end;
+	if radius and not ambiguous then
+		Q.radius, Q.reach = radius, reach;
+		r.statsFound = true;
+	end;
+	if dQ then
+		dQ();
+	end;
+	if r.statsFound then
+		notify(string.format("radius %.2f  reach %.2f", Q.radius, Q.reach), "delve stats", 4);
+	elseif not qQ then
+		notify("No unambiguous mining stats found. Current radius and reach kept.", "delve stats", 4);
+	end;
+end;
+local xQ = nil;
+local WQ = "idle";
+local KQ = l:GetMouse();
+local oQ, FQ = nil, nil;
+local jQ, RQ = nil, nil;
+local CQ = nil;
+local function DQ(m, G, Q)
+	if CQ and CQ.step < 2 then
+		local m, G = CQ.x - KQ.X, CQ.y - KQ.Y;
+		if jQ and ((math.abs(m - jQ) <= 3 and math.abs(G - RQ) <= 3)) then
+			oQ, FQ = m, G;
+		end;
+		jQ, RQ = m, G;
+	end;
+	local e, N;
+	if oQ then
+		e, N = m + oQ, G + FQ;
+	else
+		local inset = guiService:GetGuiInset();
+		e, N = m + inset.X, G + inset.Y;
+	end;
+	local S, w;
+	if CQ then
+		S, w = CQ.fx, CQ.fy;
+	end;
+	if oQ then
+		local m, G = KQ.X + oQ, KQ.Y + FQ;
+		if not S or (CQ.step < 2 and math.abs(m - CQ.x) + math.abs(G - CQ.y) > 6) then
+			S, w = m, G;
+		end;
+	end;
+	local q = .5;
+	if S and q > 0 then
+		local m = CQ and math.min(Q - CQ.t, .1) or .016666666666667;
+		local G = 1 - ((q * .9)) ^ ((m * 60));
+		S, w = S + ((e - S)) * G, w + ((N - w)) * G;
+		if math.abs(e - S) + math.abs(N - w) < 1 then
+			S, w = e, N;
+		end;
+	else
+		S, w = e, N;
+	end;
+	local l, d = math.floor(S + .5), math.floor(w + .5);
+	local f = CQ and math.abs(l - CQ.x) + math.abs(d - CQ.y) or 99;
+	if not CQ or f > 0 then
+		inp.mouseMove(l, d);
+	end;
+	CQ = {
+			x = l,
+			y = d,
+			fx = S,
+			fy = w,
+			step = f,
+			t = Q,
+		};
+	r.mouseOffset = oQ and string.format("%d,%d", oQ, FQ) or "measuring";
+end;
+local function EQ(m, G)
+	local r = cQ(m);
+	local Q = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize;
+	if not r or not Q or r.X < 0 or r.Y < 0 or r.X > Q.X or r.Y > Q.Y then
+		CQ = nil;
+		return;
+	end;
+	DQ(r.X, r.Y, G);
+end;
+local aQ = {
+		eval = 0,
+		poll = 0,
+		sweep = 0,
+		refresh = 0,
+		dead = 0,
+		tool = 0,
+		haz = -1,
+		ping = 0,
+	};
+local function iQ()
+	-- in background mode nothing touches the mouse/keyboard, so an open menu doesn't need to pause the farm
+	if Q.background == true then
+		return false;
+	end;
+	return r.win and ((r.win.alive and r.win:IsVisible()));
+end;
+local function sQ()
+	local m = l.Character;
+	local G = m and m:FindFirstChild("HumanoidRootPart");
+	return G and G.Position, m;
+end;
+local function OQ(m)
+	if Q.autoEquip == false then
+		return;
+	end;
+	if m - aQ.tool < .25 then
+		return;
+	end;
+	aQ.tool = m;
+	local G = nil;
+	if WQ == "combat" and ((Q.combat and xQ)) then
+		G = "weapon";
+	elseif WQ == "mine" and ((Q.mine and L)) then
+		G = "pickaxe";
+	end;
+	if not G or not inp.active() or iQ() then
+		return;
+	end;
+	if m - ((r.toolPressAt or -1000000000.0)) < .8 then
+		return;
+	end;
+	local e = l.Character;
+	if not e then
+		return;
+	end;
+	local N;
+	if G == "weapon" then
+		N = e:GetAttribute("WeaponDrawn");
+	else
+		N = e:GetAttribute("PickaxeOut");
+	end;
+	if N == true then
+		r.toolTry = nil;
+		return;
+	end;
+	if Q.background == true and Q.useLearned ~= false then
+		local learned = inp.learned[G];
+		if learned and learned[1] then
+			-- background: replay the game's own equip remotes instead of pressing a key
+			if inp.replay(G) then
+				r.toolPressAt = m;
+				r.toolPresses = ((r.toolPresses or 0)) + 1;
+			end;
+			return;
+		end;
+	end;
+	local tk = G == "weapon" and mQ or Il;
+	local last = r.toolTry;
+	if last and last.key == tk and Q.background == true and not inp.focused() then
+		-- the previous press changed nothing while tabbed out: send this key a different way
+		local mode = inp.rotateKey(tk);
+		if m - (r.toolNoteAt or -100) > 3 then
+			r.toolNoteAt = m;
+			notify(string.format("%s key had no effect, trying key method: %s", G, mode), "Delve");
+		end;
+	end;
+	if QQ(tk, m) then
+		r.toolPressAt = m;
+		r.toolPresses = ((r.toolPresses or 0)) + 1;
+		r.toolTry = { key = tk, t = m };
+	end;
+end;
+local VQ = {
+		seenAt = nil,
+		check = 0,
+		phase = "idle",
+		t = 0,
+		bx = 0,
+		by = 0,
+	};
+r.replays = r.replays or 0;
+local function yQ(m)
+	if not m:IsA("GuiObject") or not m.Visible then return nil; end;
+	local size = m.AbsoluteSize;
+	if size.X < 1 or size.Y < 1 then return nil; end;
+	return size.X, size.Y;
+end;
+local function bQ()
+	local m = l:FindFirstChild("PlayerGui");
+	local G = m and m:FindFirstChild("RunEnd");
+	local r = G and G:FindFirstChild("Verbs");
+	return r and r:FindFirstChild("Again");
+end;
+local function vQ()
+	if VQ.phase == "down" then
+		inp.mouseUp();
+	end;
+	VQ.phase = "idle";
+end;
+local function nQ(m)
+	if not Q.autoReplay then
+		vQ();
+		VQ.seenAt = nil;
+		return false;
+	end;
+	if m - VQ.check >= .5 then
+		VQ.check = m;
+		if workspace:FindFirstChild("RunEndRoom") then
+			VQ.seenAt = VQ.seenAt or m;
+		else
+			VQ.seenAt = nil;
+			vQ();
+		end;
+	end;
+	if not VQ.seenAt or m - VQ.seenAt < Q.replayDelay then
+		return false;
+	end;
+	if not inp.active() or iQ() then
+		vQ();
+		return false;
+	end;
+	if VQ.phase == "idle" then
+		if m - VQ.t < 3 then
+			return false;
+		end;
+		local G = bQ();
+		if not G then
+			return false;
+		end;
+		if Q.background == true then
+			-- no mouse in background mode: fire the button directly
+			VQ.t = m;
+			if inp.clickGui(G) then
+				r.replays = r.replays + 1;
+			end;
+			return true;
+		end;
+		local r = G.AbsolutePosition;
+		local Q, e = yQ(G);
+		if not Q then return false; end;
+		VQ.bx, VQ.by = r.X + Q / 2, r.Y + e / 2;
+		VQ.phase, VQ.t = "move", m;
+	end;
+	if VQ.phase == "move" then
+		DQ(VQ.bx, VQ.by, m);
+		local G = math.abs(KQ.X - VQ.bx) <= 6 and math.abs(KQ.Y - VQ.by) <= 6;
+		if G and ((CQ and CQ.step == 0)) then
+			VQ.phase, VQ.t = "settle", m;
+		elseif m - VQ.t > 2 then
+			VQ.phase, VQ.t = "idle", m;
+		end;
+	elseif VQ.phase == "settle" then
+		DQ(VQ.bx, VQ.by, m);
+		if m - VQ.t >= .1 then
+			inp.mouseDown();
+			VQ.phase, VQ.t = "down", m;
+		end;
+	elseif VQ.phase == "down" then
+		if m - VQ.t >= .08 then
+			inp.mouseUp();
+			r.replays = r.replays + 1;
+			VQ.phase, VQ.t = "idle", m;
+		end;
+	end;
+	return true;
+end;
+-- ===================================================================================
+-- RELIC BRAIN
+--   * finds the relic draft on screen (any GUI layout: looks for the tier words on cards)
+--   * reads every card: tier, name, stat lines, set progress
+--   * scores each card: tier + stat lines x category weights + set progress + what it learned
+--   * waits for the card animation to settle, clicks, then VERIFIES the draft closed and
+--     retries with another click method if not (mouse -> GUI signal -> VirtualInputManager)
+--   * learns: relics you pick by hand are remembered (imitation), and every relic taken in a
+--     run is credited with how good that run was compared to your usual runs
+-- ===================================================================================
+local MQ = { phase = "idle", t = 0, check = 0, bx = 0, by = 0 };
+local relicAPI = (function()
+	local VIMr;
+	pcall(function() VIMr = game:GetService("VirtualInputManager"); end);
+	local Http = game:GetService("HttpService");
+	local TIER_VALUE = { COMMON = 0, UNCOMMON = 10, RARE = 20, EPIC = 45, LEGENDARY = 80, MYTHIC = 150, EXOTIC = 160, DIVINE = 180, SECRET = 200 };
+	local CATS = {
+		{ "range", { "MINING RANGE", "MINE RANGE", "RADIUS", "REACH" } },
+		{ "mining", { "MINE POWER", "MINING POWER", "MINING SPEED", "MINE SPEED", "MINING", "PICKAXE", " ORE", "ROCK" } },
+		{ "control", { "FREEZE", "FROZEN", " ICE", "ICE ", "SLOW", "STUN", "KNOCKBACK", "FROST", "CHILL", "ROOT" } },
+		{ "survival", { "DAMAGE TAKEN", "MAX HEALTH", "HEALTH", "MAX HP", " HP", "HEAL", "REGEN", "SHIELD", "ARMOR", "DEFENSE", "LIFESTEAL", "LIFE STEAL", "REVIVE", "INVULN", "BLOCK" } },
+		{ "damage", { "DAMAGE", "DPS", "CRIT", "OVERKILL", "ATTACK", "WEAPON", "STRIKE", "BLEED", "BURN", "POISON", "EXECUTE", "CHAIN", "EXPLO" } },
+		{ "mobility", { "MOVE SPEED", "MOVEMENT", "WALK SPEED", "ROLL", "DODGE", "DASH", "SPEED" } },
+		{ "luck", { "LUCK", "RARITY", "DROP" } },
+		{ "econ", { "CASH", "MONEY", "GOLD", "COIN", "SELL", "VALUE", " XP", "EXP" } },
+	};
+	local BUTTON_WORDS = { SELECT = true, PICK = true, CHOOSE = true, TAKE = true, CLAIM = true, EQUIP = true };
+
+	local function trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")); end;
+	local function txt(o)
+		local ok, v = pcall(function() return o.ContentText; end);
+		if ok and type(v) == "string" and v ~= "" then return v; end;
+		return o.Text or "";
+	end;
+	local function shown(o)
+		while o and o ~= game do
+			if o:IsA("LayerCollector") then return o.Enabled ~= false; end;
+			if o:IsA("GuiObject") and not o.Visible then return false; end;
+			o = o.Parent;
+		end;
+		return false;
+	end;
+	local function relicRec(key)
+		local rec = brain.relics[key];
+		if type(rec) ~= "table" then
+			rec = { n = 0, zsum = 0, picks = 0, user = 0, offered = 0 };
+			brain.relics[key] = rec;
+		end;
+		return rec;
+	end;
+
+	-- clause -> signed value, category
+	local function clauseValue(cl)
+		local u = " " .. cl:upper() .. " ";
+		if u:match("^%s*TAKEN%s*$") then return 0, nil; end;
+		if u:find("MORE ELITES", 1, true) or u:find("CURSE", 1, true) then return -40, "risk"; end;
+		local cat;
+		for _, c in ipairs(CATS) do
+			for _, kw in ipairs(c[2]) do
+				if u:find(kw, 1, true) then cat = c[1]; break; end;
+			end;
+			if cat then break; end;
+		end;
+		local pct = tonumber(u:match("([%d%.]+)%s*%%"));
+		local mult = tonumber(u:match("[X×]%s*([%d%.]+)"));
+		local mag = pct or (mult and mult > 1 and (mult - 1) * 100) or 20;
+		mag = math.min(150, math.max(5, mag));
+		local aimsEnemy = u:find("ENEM", 1, true) or u:find("FOE", 1, true) or u:find(" MOB", 1, true) or u:find("BOSS", 1, true);
+		local goodWhenLow = u:find("TAKEN", 1, true) or u:find("COOLDOWN", 1, true) or aimsEnemy;
+		local neg = u:match("^%s*%-") ~= nil or u:find("LESS ", 1, true) or u:find("REDUC", 1, true) or u:find("LOWER", 1, true);
+		local sign = 1;
+		if neg and not goodWhenLow then sign = -1; end;
+		if not neg and u:find("TAKEN", 1, true) and not aimsEnemy then sign = -1; end;
+		if u:find("COLLAPSE", 1, true) and u:find("FASTER", 1, true) then sign = -1; end;
+		return sign * mag, cat;
+	end;
+	local function runMode()
+		return (run.depth > 0 or run.isDelve) and "delve" or "waves";
+	end;
+	run.modeName = runMode;
+	local function pairKey(a, b)
+		if a > b then a, b = b, a; end;
+		return a .. "||" .. b;
+	end;
+	local function catWeight(cat)
+		if not cat then return .6; end;
+		if cat == "risk" then return 1; end;
+		local cm = brain.catMode[runMode()];
+		local learned = 1;
+		if Q.relicLearn ~= false then
+			learned = (type(cm) == "table" and tonumber(cm[cat])) or tonumber(brain.cat[cat]) or 1;
+		end;
+		local total = run.combatT + run.mineT;
+		local cf = total > 20 and run.combatT / total or .5;
+		local ctx = 1;
+		if cat == "damage" or cat == "survival" or cat == "control" or cat == "mobility" then
+			ctx = .6 + .8 * cf;
+		elseif cat == "mining" or cat == "range" then
+			ctx = .6 + .8 * (1 - cf);
+		elseif cat == "luck" or cat == "econ" then
+			ctx = .7;
+		end;
+		if cat == "survival" then ctx = ctx * (1 + math.min(1, run.hits / 8)); end;
+		return learned * ctx;
+	end;
+
+	-- ---------------------------------------------------------------- card discovery
+	local hintName = nil;
+	local function cardsIn(root)
+		local found, seen = {}, {};
+		local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080);
+		for _, o in ipairs(root:GetDescendants()) do
+			if o:IsA("TextLabel") or o:IsA("TextButton") then
+				local t = trim(txt(o)):upper();
+				if TIER_VALUE[t] and shown(o) then
+					local card = o.Parent;
+					while card and card:IsA("GuiObject") and (card.AbsoluteSize.Y < 120 or card.AbsoluteSize.X < 90) do
+						card = card.Parent;
+					end;
+					if card and card:IsA("GuiObject") and not seen[card] and card.AbsoluteSize.X < vp.X * .6 then
+						seen[card] = true;
+						found[#found + 1] = { root = card, tierLabel = o, tier = t };
+					end;
+				end;
+			end;
+		end;
+		-- real drafts are 2+ cards of the same size side by side (filters out "Rare" loot toasts)
+		local groups = {};
+		for _, c in ipairs(found) do
+			local s = c.root.AbsoluteSize;
+			local key = math.floor(s.X / 12) .. "x" .. math.floor(s.Y / 12);
+			groups[key] = groups[key] or {};
+			table.insert(groups[key], c);
+		end;
+		local best;
+		for _, gcards in pairs(groups) do
+			if #gcards >= 2 and (not best or #gcards > #best) then best = gcards; end;
+		end;
+		if best then
+			table.sort(best, function(x, y) return x.root.AbsolutePosition.X < y.root.AbsolutePosition.X; end);
+		end;
+		return best;
+	end;
+	local function findCards()
+		local pg = l:FindFirstChild("PlayerGui");
+		if not pg then return nil; end;
+		local tried = {};
+		local function try(sg)
+			if not sg or tried[sg] or not sg:IsA("LayerCollector") or sg.Enabled == false then return nil; end;
+			tried[sg] = true;
+			local cards = cardsIn(sg);
+			if cards then hintName = sg.Name; end;
+			return cards;
+		end;
+		local cards = try(pg:FindFirstChild("RelicDraft")) or (hintName and try(pg:FindFirstChild(hintName)));
+		if cards then return cards; end;
+		for _, sg in ipairs(pg:GetChildren()) do
+			local n = sg.Name:upper();
+			if n:find("RELIC") or n:find("DRAFT") or n:find("PICK") or n:find("CHOICE") or n:find("UPGRADE") or n:find("CARD") then
+				cards = try(sg);
+				if cards then return cards; end;
+			end;
+		end;
+		return nil;
+	end;
+	local fullScanAt = -1e9;
+	local function findCardsSlow(now)
+		local cards = findCards();
+		if cards or now - fullScanAt < 1.5 then return cards; end;
+		fullScanAt = now;
+		local pg = l:FindFirstChild("PlayerGui");
+		if not pg then return nil; end;
+		for _, sg in ipairs(pg:GetChildren()) do
+			if sg:IsA("LayerCollector") and sg.Enabled ~= false then
+				local c2 = cardsIn(sg);
+				if c2 then hintName = sg.Name; return c2; end;
+			end;
+		end;
+		return nil;
+	end;
+
+	local function parseCard(c)
+		local labels = {};
+		for _, o in ipairs(c.root:GetDescendants()) do
+			if (o:IsA("TextLabel") or o:IsA("TextButton")) and o.Visible then
+				local t = txt(o);
+				if t:match("%S") then
+					labels[#labels + 1] = { o = o, t = trim(t), y = o.AbsolutePosition.Y, size = o.TextBounds.Y };
+				end;
+			end;
+		end;
+		table.sort(labels, function(x, y) return x.y < y.y; end);
+		local nameL, nameSize, taken = nil, nil, false;
+		local firstNumY = math.huge;
+		for _, L in ipairs(labels) do
+			if L.t:find("%d") then firstNumY = math.min(firstNumY, L.y); end;
+		end;
+		for _, L in ipairs(labels) do
+			local u = L.t:upper();
+			local on = L.o.Name:lower();
+			if u == "TAKEN" or u == "OWNED" or u == "SOLD OUT" then taken = true; end;
+			if L.o ~= c.tierLabel and not BUTTON_WORDS[u] then
+				if on == "name" or on == "title" or on == "relicname" or on == "displayname" then
+					nameL, nameSize = L, math.huge;
+				elseif nameSize ~= math.huge and not u:find("%d") and #u <= 32 and L.y <= firstNumY
+					and not u:find("SET%s+%d") and (not nameSize or L.size > nameSize) then
+					nameL, nameSize = L, L.size;
+				end;
+			end;
+		end;
+		local desc = {};
+		for _, L in ipairs(labels) do
+			local u = L.t:upper();
+			local sn, sp, sN = u:match("^(.-)%s*SET%s+(%d+)%s*/%s*(%d+)");
+			if sn then
+				c.setName, c.setP, c.setN = trim(sn), tonumber(sp), tonumber(sN);
+			elseif L ~= nameL and L.o ~= c.tierLabel and not BUTTON_WORDS[u] then
+				desc[#desc + 1] = L.t;
+			end;
+		end;
+		c.name = nameL and nameL.t or (desc[1] or "?");
+		c.desc = desc;
+		c.taken = taken;
+		c.key = trim(c.name):upper();
+		if c.key == "" or c.key == "?" then c.key = trim(table.concat(desc, " ")):upper():sub(1, 48); end;
+		-- what to click: the card's own button if it has one
+		local btn;
+		if c.root:IsA("GuiButton") then btn = c.root; end;
+		if not btn then
+			local action = c.root:FindFirstChild("Action", true);
+			if action and action:IsA("GuiButton") then btn = action; end;
+		end;
+		btn = btn or c.root:FindFirstChildWhichIsA("GuiButton", true) or c.tierLabel:FindFirstAncestorWhichIsA("GuiButton");
+		c.button = btn;
+		return c;
+	end;
+
+	local function scoreCard(c)
+		local parts = {};
+		if c.taken then return -1e6, { "taken" }, {}; end;
+		local tierV = TIER_VALUE[c.tier] or 0;
+		local total = tierV;
+		parts[#parts + 1] = string.format("%s +%d", c.tier, tierV);
+		local cats = {};
+		local effects = {};
+		local text = table.concat(c.desc, "\n"):gsub("%s+([%+%-]%d)", "\n%1");
+		for cl in text:gmatch("[^\n]+") do
+			local v, cat = clauseValue(cl);
+			if v ~= 0 then
+				local w = catWeight(cat);
+				total = total + v * w;
+				if cat then cats[cat] = true; end;
+				effects[#effects + 1] = { cat = cat or "other", v = v, text = trim(cl) };
+				parts[#parts + 1] = string.format("%s %+.0f", cat or "other", v * w);
+			end;
+		end;
+		c.effects = effects;
+		if c.setN and c.setN > 0 and c.setP then
+			local sb = 10 + 30 * (c.setP / c.setN);
+			if c.setP == c.setN - 1 then sb = sb + 60; end;
+			local hist = brain.sets[tostring(c.setName)];
+			if type(hist) == "number" then sb = sb + math.min(20, hist * 2); end;
+			total = total + sb;
+			parts[#parts + 1] = string.format("set %d/%d %+.0f", c.setP, c.setN, sb);
+		end;
+		local rec = brain.relics[c.key];
+		if Q.relicLearn ~= false and type(rec) == "table" then
+			local n = tonumber(rec.n) or 0;
+			local zsum = tonumber(rec.zsum) or 0;
+			-- prefer what it learned in THIS kind of run (delve vs waves) once there's enough of it
+			local ms = type(rec.modes) == "table" and rec.modes[runMode()];
+			if type(ms) == "table" and (tonumber(ms.n) or 0) >= 2 then
+				n, zsum = tonumber(ms.n), tonumber(ms.zsum) or 0;
+			end;
+			if n > 0 then
+				local conf = n / (n + 3);
+				local z = math.max(-2, math.min(2, zsum / n));
+				total = total + z * 30 * conf;
+				parts[#parts + 1] = string.format("learned %+.0f (%d runs)", z * 30 * conf, n);
+			end;
+			local offered = tonumber(rec.offered) or 0;
+			if offered >= 1 and (tonumber(rec.user) or 0) > 0 then
+				local im = (tonumber(rec.user) or 0) / offered * 50;
+				total = total + im;
+				parts[#parts + 1] = string.format("you pick it %+.0f", im);
+			end;
+		end;
+		-- synergy with relics already taken this run (learned from past runs with the same combo)
+		if Q.relicLearn ~= false then
+			local syn = 0;
+			for _, owned in ipairs(run.relics) do
+				local pr = brain.pairs[pairKey(c.key, owned.key)];
+				if type(pr) == "table" and (tonumber(pr.n) or 0) > 0 then
+					local pn = tonumber(pr.n);
+					syn = syn + math.max(-2, math.min(2, (tonumber(pr.zsum) or 0) / pn)) * 15 * (pn / (pn + 2));
+				end;
+			end;
+			if syn ~= 0 then
+				total = total + syn;
+				parts[#parts + 1] = string.format("combo %+.0f", syn);
+			end;
+			-- never-tried relics get a small curiosity bonus so the brain eventually tests them
+			if type(rec) ~= "table" or (tonumber(rec.n) or 0) == 0 then
+				total = total + 4;
+			end;
+		end;
+		return total, parts, cats;
+	end;
+	-- CODEX: every relic ever seen is saved with what the brain understood it to do
+	local function codexUpdate(c)
+		local cx = brain.codex[c.key];
+		local isNew = type(cx) ~= "table";
+		if isNew then
+			cx = { first = os.time(), seen = 0 };
+			brain.codex[c.key] = cx;
+		end;
+		cx.name, cx.tier = c.name, c.tier;
+		cx.seen = (tonumber(cx.seen) or 0) + 1;
+		cx.desc = table.concat(c.desc or {}, " | ");
+		cx.set, cx.setN = c.setName, c.setN;
+		cx.effects = c.effects;
+		local cl = {};
+		for cat in pairs(c.cats or {}) do cl[#cl + 1] = cat; end;
+		table.sort(cl);
+		cx.cats = cl;
+		cx.lastScore = math.floor((c.score or 0) + .5);
+		cx.mode = runMode();
+		if isNew and Q.relicCodexNotify ~= false then
+			notify(string.format("New relic learned: %s [%s] -> %s", tostring(c.name), tostring(c.tier),
+				#cl > 0 and table.concat(cl, ", ") or "special effect"), "Delve codex");
+		end;
+		markBrain();
+	end;
+
+	-- ---------------------------------------------------------------- click helpers
+	local function guiPoint(obj)
+		local pos, size = obj.AbsolutePosition, obj.AbsoluteSize;
+		local cx, cy = pos.X + size.X / 2, pos.Y + size.Y / 2;
+		local inset = guiService:GetGuiInset();
+		local sg = obj:FindFirstAncestorWhichIsA("ScreenGui");
+		local ignore = false;
+		if sg then
+			local ok, v = pcall(function() return sg.IgnoreGuiInset; end);
+			ignore = ok and v == true;
+		end;
+		local vx, vy = cx + (ignore and 0 or inset.X), cy + (ignore and 0 or inset.Y);
+		-- mouse space (what the cursor mover expects) = viewport minus the top bar
+		return vx - inset.X, vy - inset.Y, vx, vy;
+	end;
+	local function clickTarget(c)
+		local b = c.button;
+		if b and b.AbsoluteSize.X >= 20 and b.AbsoluteSize.Y >= 12 and shown(b) then return b; end;
+		return c.root;
+	end;
+
+	-- ---------------------------------------------------------------- draft state machine
+	local draft = nil;
+	local function disconnectDraft()
+		if draft and draft.conns then
+			for _, cn in ipairs(draft.conns) do pcall(function() cn:Disconnect(); end); end;
+			draft.conns = {};
+		end;
+	end;
+	local function finishDraft()
+		if not draft then return; end;
+		disconnectDraft();
+		local picked = draft.picked;
+		if not picked and draft.clicks > 0 then picked = draft.choice; end;
+		for _, c in ipairs(draft.cards) do
+			local rec = relicRec(c.key);
+			rec.offered = (tonumber(rec.offered) or 0) + 1;
+			rec.name = c.name;
+		end;
+		if picked then
+			local rec = relicRec(picked.key);
+			rec.picks = (tonumber(rec.picks) or 0) + 1;
+			if draft.userPicked then rec.user = (tonumber(rec.user) or 0) + 1; end;
+			run.relics[#run.relics + 1] = { key = picked.key, cats = picked.cats or {} };
+			if picked.setName then
+				brain.sets[picked.setName] = (tonumber(brain.sets[picked.setName]) or 0) + 1;
+			end;
+			r.cardPicks = (r.cardPicks or 0) + 1;
+			if draft.userPicked and draft.choice and draft.choice ~= picked then
+				notify(string.format("Noted: you picked %s over my choice %s. I'll weigh that next time.", picked.name, draft.choice.name), "Delve brain");
+			end;
+		end;
+		markBrain();
+		draft = nil;
+	end;
+	local function sigOf(cards)
+		local s = {};
+		for _, c in ipairs(cards) do s[#s + 1] = c.tier .. ":" .. trim(txt(c.tierLabel)) .. ":" .. tostring(c.root); end;
+		return table.concat(s, "|");
+	end;
+	local function posSig(cards)
+		local s = {};
+		for _, c in ipairs(cards) do
+			local p = c.root.AbsolutePosition;
+			s[#s + 1] = math.floor(p.X / 3) .. "," .. math.floor(p.Y / 3);
+		end;
+		return table.concat(s, "|");
+	end;
+	local function openDraft(cards, now)
+		draft = { sig = sigOf(cards), cards = {}, openedAt = now, stableSince = now, pos = posSig(cards), attempts = 0, clicks = 0, conns = {}, ourClickAt = -1e9, lastSeen = now };
+		local scored = {};
+		for _, c in ipairs(cards) do
+			parseCard(c);
+			c.score, c.parts, c.cats = scoreCard(c);
+			pcall(codexUpdate, c);
+			draft.cards[#draft.cards + 1] = c;
+			scored[#scored + 1] = c;
+			-- watch for YOUR clicks so the brain can learn your preferences
+			for _, b in ipairs({ c.button, c.root:IsA("GuiButton") and c.root or nil }) do
+				if b then
+					for _, sigName in ipairs({ "Activated", "MouseButton1Click" }) do
+						local ok, cn = pcall(function()
+							return b[sigName]:Connect(function()
+								if not draft or draft.picked then return; end;
+								draft.picked = c;
+								draft.userPicked = d() - draft.ourClickAt > .7;
+							end);
+						end);
+						if ok and cn then draft.conns[#draft.conns + 1] = cn; end;
+					end;
+				end;
+			end;
+		end;
+		table.sort(scored, function(x, y) return x.score > y.score; end);
+		local choice = scored[1];
+		draft.explored = false;
+		if Q.relicExplore ~= false and #scored >= 2 and scored[2].score > -1e5 and scored[2].score >= scored[1].score - 25 then
+			local rec2 = brain.relics[scored[2].key];
+			local n2 = type(rec2) == "table" and (tonumber(rec2.n) or 0) or 0;
+			if n2 < 3 and math.random() < .08 then
+				choice = scored[2];
+				draft.explored = true;
+			end;
+		end;
+		draft.choice = choice;
+		local lines = {};
+		for _, c in ipairs(scored) do
+			lines[#lines + 1] = string.format("%s [%s] = %.0f  (%s)", c.name, c.tier, c.score, table.concat(c.parts, ", "));
+		end;
+		r.lastDraft = lines;
+		if Q.relicNotify ~= false and choice then
+			notify(string.format("%s %s (%.0f)%s", Q.cardPick and "Picking" or "I'd pick", choice.name, choice.score,
+				draft.explored and " [exploring a close 2nd]" or ""), "Delve relic");
+		end;
+	end;
+
+	local function relicTick(now)
+		if now - MQ.check < .2 and MQ.phase == "idle" then
+			return draft ~= nil and Q.cardPick and Q.background ~= true;
+		end;
+		MQ.check = now;
+		local cards = findCardsSlow(now);
+		if not cards then
+			if MQ.phase == "down" then inp.mouseUp(); end;
+			MQ.phase = "idle";
+			if draft and now - draft.lastSeen > .4 then finishDraft(); end;
+			return false;
+		end;
+		local sig = sigOf(cards);
+		if draft and draft.sig ~= sig then
+			finishDraft();
+		end;
+		if not draft then openDraft(cards, now); end;
+		draft.lastSeen = now;
+		local ps = posSig(cards);
+		if ps ~= draft.pos then draft.pos, draft.stableSince = ps, now; end;
+		if not Q.cardPick or iQ() or not inp.active() or draft.picked or not draft.choice or draft.choice.score < -1e5 then
+			if MQ.phase == "down" then inp.mouseUp(); end;
+			MQ.phase = "idle";
+			return false;
+		end;
+		local delay = tonumber(Q.relicDelay) or .7;
+		if now - draft.openedAt < delay or now - draft.stableSince < .35 then
+			return Q.background ~= true;
+		end;
+		local choice = draft.choice;
+		local target = clickTarget(choice);
+		local mx, my, vx, vy = guiPoint(target);
+		if MQ.phase == "idle" then
+			-- give the previous click a second to close the draft before trying again
+			if draft.clicks > 0 and now - draft.ourClickAt < 1.1 then return Q.background ~= true; end;
+			if draft.attempts >= 7 then
+				if not draft.gaveUp then
+					draft.gaveUp = true;
+					notify("Couldn't click the relic after 7 tries. Pick it yourself; I'll still learn from it.", "Delve relic");
+				end;
+				return false;
+			end;
+			draft.attempts = draft.attempts + 1;
+			local methods = Q.background == true and { "signal", "vim", "signal", "vim" } or { "mouse", "mouse", "signal", "vim", "mouse", "signal", "vim" };
+			local method = methods[(draft.attempts - 1) % #methods + 1];
+			draft.method = method;
+			if method == "signal" then
+				draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
+				if not inp.clickGui(choice.button or choice.root) then inp.clickGui(choice.root); end;
+				return Q.background ~= true;
+			elseif method == "vim" then
+				if VIMr then
+					draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
+					pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, true, game, 0);
+					task.delay(.06, function() pcall(VIMr.SendMouseButtonEvent, VIMr, vx, vy, 0, false, game, 0); end);
+				end;
+				return Q.background ~= true;
+			end;
+			MQ.bx, MQ.by = mx, my;
+			MQ.phase, MQ.t = "move", now;
+		end;
+		if MQ.phase == "move" then
+			DQ(MQ.bx, MQ.by, now);
+			local there = math.abs(KQ.X - MQ.bx) <= 6 and math.abs(KQ.Y - MQ.by) <= 6;
+			if there and now - MQ.t >= .15 then
+				draft.ourClickAt = now;
+				inp.mouseDown();
+				MQ.phase, MQ.t = "down", now;
+			elseif now - MQ.t > 1.5 then
+				MQ.phase = "idle";
+			end;
+		elseif MQ.phase == "down" and now - MQ.t >= .08 then
+			inp.mouseUp();
+			draft.ourClickAt, draft.clicks = now, draft.clicks + 1;
+			MQ.phase, MQ.t = "idle", now;
+		end;
+		return true;
+	end;
+
+	-- ---------------------------------------------------------------- run tracking
+	local hud = { scanAt = -1e9 };
+	local function parseMoney(s)
+		local str = tostring(s):upper():gsub("[,%$%s]", "");
+		local num, suf = str:match("^([%d%.]+)(%a*)");
+		local v = tonumber(num);
+		if not v then return nil; end;
+		local mult = { K = 1e3, M = 1e6, B = 1e9, T = 1e12, QD = 1e15, QN = 1e18 };
+		return v * (mult[suf] or 1);
+	end;
+	local function cashNow()
+		local ls = l:FindFirstChild("leaderstats");
+		if not ls then return nil; end;
+		for _, v in ipairs(ls:GetChildren()) do
+			local n = v.Name:upper();
+			if v:IsA("ValueBase") and (n:find("CASH") or n:find("MONEY") or n:find("COIN")) then
+				local ok, val = pcall(function() return v.Value; end);
+				if ok then return type(val) == "number" and val or parseMoney(val); end;
+			end;
+		end;
+		return nil;
+	end;
+	local function readHud(now)
+		if now - hud.scanAt > 3 then
+			hud.scanAt = now;
+			local pg = l:FindFirstChild("PlayerGui");
+			if pg then
+				hud.boss, hud.delve = nil, nil;
+				for _, o in ipairs(pg:GetDescendants()) do
+					if o:IsA("TextLabel") then
+						local u = trim(txt(o)):upper();
+						if u:find("DEPTH%D*%d") then hud.depth = o; end;
+						if u:find("WAVE%s*%d") then hud.wave = o; end;
+						if u == "DELVE" then hud.delve = o; end;
+						if u:find("BOSS") and #u <= 40 then hud.boss = o; end;
+					end;
+				end;
+			end;
+		end;
+		if hud.depth and hud.depth.Parent then
+			local v = tonumber(txt(hud.depth):upper():match("DEPTH%D*(%d+)"));
+			if v and v > run.depth then run.depth = v; end;
+		end;
+		if hud.wave and hud.wave.Parent then
+			local wt = txt(hud.wave):upper();
+			local v = tonumber(wt:match("WAVE%s*(%d+)"));
+			if v and v > run.wave then run.wave = v; end;
+			-- "WAVE 4 - ORE" -> stage "ORE"
+			run.stage = trim(wt:match("WAVE%s*%d+%s*[%-:]%s*(.+)$") or "");
+		end;
+		if hud.delve and hud.delve.Parent and shown(hud.delve) then run.isDelve = true; end;
+		run.bossHud = (hud.boss and hud.boss.Parent and shown(hud.boss)) and true or false;
+	end;
+	local function runStart(now)
+		run.active, run.startAt = true, now;
+		run.relics, run.depth, run.wave, run.died, run.hits = {}, 0, 0, false, 0;
+		run.combatT, run.mineT = 0, 0;
+		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
+		run.cash0 = cashNow();
+		run.id = l:GetAttribute("RunId");
+	end;
+	local function runFinish(now)
+		if not run.active then return; end;
+		run.active = false;
+		local dur = now - run.startAt;
+		if dur < 20 then return; end;
+		local cash1 = cashNow();
+		local gain = (run.cash0 and cash1) and (cash1 - run.cash0) or 0;
+		local mode = run.depth > 0 and "delve" or "waves";
+		local score = run.depth + run.wave * 15 + (gain > 1 and math.log10(gain) * 8 or 0)
+			- (run.died and 30 or 0) - run.hits * .5 + math.min(dur, 900) / 30;
+		local st = brain.runs[mode];
+		if type(st) ~= "table" then st = { n = 0, mean = 0, m2 = 0 }; brain.runs[mode] = st; end;
+		local std = st.n >= 3 and math.sqrt(st.m2 / (st.n - 1)) or 10;
+		std = math.max(std, 3);
+		local z = st.n >= 1 and (score - st.mean) / std or 0;
+		st.n = st.n + 1;
+		local delta = score - st.mean;
+		st.mean = st.mean + delta / st.n;
+		st.m2 = st.m2 + delta * (score - st.mean);
+		local zc = math.max(-2.5, math.min(2.5, z));
+		if Q.relicLearn ~= false then
+			brain.catMode[mode] = type(brain.catMode[mode]) == "table" and brain.catMode[mode] or {};
+			local cm = brain.catMode[mode];
+			for idx, pick in ipairs(run.relics) do
+				local rec = relicRec(pick.key);
+				rec.n = (tonumber(rec.n) or 0) + 1;
+				rec.zsum = (tonumber(rec.zsum) or 0) + zc;
+				rec.modes = type(rec.modes) == "table" and rec.modes or {};
+				local ms = type(rec.modes[mode]) == "table" and rec.modes[mode] or { n = 0, zsum = 0 };
+				ms.n, ms.zsum = (tonumber(ms.n) or 0) + 1, (tonumber(ms.zsum) or 0) + zc;
+				rec.modes[mode] = ms;
+				for cat in pairs(pick.cats) do
+					brain.cat[cat] = math.max(.4, math.min(2.5, (tonumber(brain.cat[cat]) or 1) + .04 * zc));
+					cm[cat] = math.max(.4, math.min(2.5, (tonumber(cm[cat]) or tonumber(brain.cat[cat]) or 1) + .06 * zc));
+				end;
+				for j = idx + 1, #run.relics do
+					local other = run.relics[j];
+					if other.key ~= pick.key then
+						local pk = pairKey(pick.key, other.key);
+						local pr = type(brain.pairs[pk]) == "table" and brain.pairs[pk] or { n = 0, zsum = 0 };
+						pr.n, pr.zsum = (tonumber(pr.n) or 0) + 1, (tonumber(pr.zsum) or 0) + zc;
+						brain.pairs[pk] = pr;
+					end;
+				end;
+			end;
+		end;
+		-- full run history (one JSON line per run) so the brain keeps a long memory
+		local names = {};
+		for _, pick in ipairs(run.relics) do
+			local cx = brain.codex[pick.key];
+			names[#names + 1] = type(cx) == "table" and cx.name or pick.key;
+		end;
+		local record = {
+			t = os.time(), mode = mode, score = math.floor(score * 10 + .5) / 10, z = math.floor(zc * 100 + .5) / 100,
+			depth = run.depth, wave = run.wave, cash = gain, died = run.died, hits = run.hits,
+			seconds = math.floor(dur), relics = names,
+		};
+		pcall(function()
+			local line = Http:JSONEncode(record) .. "\n";
+			if type(appendfile) == "function" and type(isfile) == "function" and isfile("DelveRuns.jsonl") then
+				appendfile("DelveRuns.jsonl", line);
+			elseif type(writefile) == "function" then
+				local old = "";
+				if type(isfile) == "function" and isfile("DelveRuns.jsonl") and type(readfile) == "function" then old = readfile("DelveRuns.jsonl"); end;
+				writefile("DelveRuns.jsonl", old .. line);
+			end;
+		end);
+		brain.runCount = (tonumber(brain.runCount) or 0) + 1;
+		if r.sendRunWebhook then
+			local info = record;
+			info.relicCount = #names;
+			task.delay(tonumber(Q.webhookDelay) or 1.5, function() pcall(r.sendRunWebhook, info); end);
+		end;
+		markBrain();
+		saveBrain(true);
+		notify(string.format("Run scored %.0f (%s run, %+.2f vs your average). Learned from %d relic pick%s.",
+			score, mode, zc, #run.relics, #run.relics == 1 and "" or "s"), "Delve brain");
+	end;
+	local runCheckAt = -1e9;
+	local function runTick(now)
+		if now - runCheckAt < .5 then return; end;
+		runCheckAt = now;
+		local endRoom = workspace:FindFirstChild("RunEndRoom");
+		local plate = workspace:FindFirstChild("StrataPlate");
+		local id = l:GetAttribute("RunId");
+		if run.active then
+			if endRoom then
+				runFinish(now);
+			elseif id ~= nil and run.id ~= nil and id ~= run.id then
+				runFinish(now);
+				runStart(now);
+			else
+				readHud(now);
+			end;
+		elseif plate and not endRoom then
+			runStart(now);
+		end;
+	end;
+
+	local function report()
+		local list = {};
+		for key, rec in pairs(brain.relics) do
+			if type(rec) == "table" then
+				local n = tonumber(rec.n) or 0;
+				local v = n > 0 and (tonumber(rec.zsum) or 0) / n or 0;
+				list[#list + 1] = { name = rec.name or key, v = v, n = n, user = tonumber(rec.user) or 0, offered = tonumber(rec.offered) or 0 };
+			end;
+		end;
+		table.sort(list, function(x, y) return x.v * x.n / (x.n + 3) > y.v * y.n / (y.n + 3); end);
+		local out = {};
+		for k = 1, math.min(8, #list) do
+			local e = list[k];
+			out[#out + 1] = string.format("%s %+.2f (%d runs, you %d/%d)", e.name, e.v, e.n, e.user, e.offered);
+		end;
+		local cats = {};
+		for cat, w in pairs(brain.cat) do cats[#cats + 1] = string.format("%s x%.2f", cat, tonumber(w) or 1); end;
+		return (#out > 0 and table.concat(out, "\n") or "No relics learned yet.") .. "\nCategory weights: " .. (#cats > 0 and table.concat(cats, ", ") or "default");
+	end;
+
+	return {
+		tick = relicTick,
+		runTick = runTick,
+		report = report,
+		finish = function() pcall(disconnectDraft); end,
+		hasDraft = function() return draft ~= nil; end,
+	};
+end)();
+local function LQ(m)
+	return relicAPI.tick(m);
+end;
+local function uQ(now, force)
+	local character = l.Character;
+	local tool = character and character:FindFirstChildOfClass("Tool");
+	if character ~= r.rangeCharacter or tool ~= r.rangeTool then
+		r.rangeCharacter, r.rangeTool = character, tool;
+		r.range, r.rangeSeenAt, r.rangeCheckedAt = nil, nil, nil;
+	end;
+	if not Q.autoCombatStats or not character or character:GetAttribute("WeaponDrawn") == false then
+		r.range, r.rangeSeenAt, r.rangeCheckedAt = nil, nil, nil;
+		return;
+	end;
+	if not force and r.rangeCheckedAt and now - r.rangeCheckedAt < .25 then return; end;
+	r.rangeCheckedAt = now;
+
+	-- Use the same attack-cone geometry the existing combat loop reads.
+	local cone = workspace:FindFirstChild("WeaponCone");
+	local detected;
+	if cone then
+		for _, part in ipairs(cone:GetChildren()) do
+			if part:IsA("BasePart") and part.Size.X < .3 and part.Size.Z > 1 then
+				detected = math.max(detected or 0, part.Size.Z);
+			end;
+		end;
+	end;
+	if detected then
+		r.range, r.rangeSeenAt = detected, now;
+	elseif r.rangeSeenAt and now - r.rangeSeenAt > 4 then
+		r.range, r.rangeSeenAt = nil, nil;
+	end;
+end;
+local function YQ()
+	local manual = tonumber(Q.fightDist) or 8;
+	if Q.autoCombatStats and r.range then
+		return math.min(r.range * .7, manual);
+	end;
+	return manual;
+end;
+local function pQ(m, G)
+	if not a or #i < 3 then
+		return true;
+	end;
+	local r, Q = g(a, m, G);
+	for m, G in ipairs({
+		{ -0.15, -0.15 },
+		{ .15, -0.15 },
+		{ -0.15, .15 },
+		{ .15, .15 },
+	}) do
+		if not V[math.floor(((r + G[1])) + .5) * 4096 + math.floor(((Q + G[2])) + .5)] then
+			return false;
+		end;
+	end;
+	return true;
+end;
+r.walkable = pQ;
+local function centerFarmAnchor(position)
+	-- A visible chest can be used even before it unlocks.
+	local saved = r.centerFarmChest;
+	if saved and pQ(saved.x, saved.z) then return saved.x, saved.z; end;
+	local chest, nearest;
+	for _, candidate in pairs(r.chestScanPlate == E and ql or {}) do
+		local distance = (candidate.x - position.X)^2 + (candidate.z - position.Z)^2;
+		if (not nearest or distance < nearest) and pQ(candidate.x, candidate.z) then
+			chest, nearest = candidate, distance;
+		end;
+	end;
+	if chest then
+		r.centerFarmChest = chest;
+		return chest.x, chest.z;
+	end;
+
+	-- Snap the midpoint of the floor bounds to a real tile, even on irregular floors.
+	if #i == 0 then return nil; end;
+	if r.centerFarmTiles ~= i then
+		local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge;
+		for _, tile in ipairs(i) do
+			minX, maxX = math.min(minX, tile.wx), math.max(maxX, tile.wx);
+			minZ, maxZ = math.min(minZ, tile.wz), math.max(maxZ, tile.wz);
+		end;
+		local midX, midZ = (minX + maxX) / 2, (minZ + maxZ) / 2;
+		local center, nearestTile;
+		for _, tile in ipairs(i) do
+			local distance = (tile.wx - midX)^2 + (tile.wz - midZ)^2;
+			if not nearestTile or distance < nearestTile then
+				center, nearestTile = tile, distance;
+			end;
+		end;
+		r.centerFarmTiles, r.centerFarmTile = i, center;
+	end;
+	return r.centerFarmTile.wx, r.centerFarmTile.wz;
+end;
+local function HQ(m, G)
+	if a and #i >= 3 then
+		local G, r = g(a, m.X, m.Z);
+		if not V[math.floor(G + .5) * 4096 + math.floor(r + .5)] then
+			return 0;
+		end;
+	end;
+	local r = 0;
+	if not pQ(m.X + G[1] * 2.5, m.Z + G[2] * 2.5) then
+		r = r + 1;
+	end;
+	if not pQ(m.X + G[1] * 5, m.Z + G[2] * 5) then
+		r = r + 1;
+	end;
+	return r;
+end;
+local function tQ()
+	local m = .7071;
+	return {
+		{ A, h },
+		{ -A, -h },
+		{ k, T },
+		{ -k, -T },
+		{ ((A + k)) * m, ((h + T)) * m },
+		{ ((A - k)) * m, ((h - T)) * m },
+		{ ((-A + k)) * m, ((-h + T)) * m },
+		{ ((-A - k)) * m, ((-h - T)) * m },
+	};
+end;
+local function PQ(m, G)
+	local r = 0;
+	for Q, e in ipairs(Fl) do
+		local N = ul(e, m, G, e.pm or Yl);
+		if N then
+			r = ((r + N)) + 1;
+			local Q = ul(e, m, G, Vl);
+			if Q then
+				r = r + ((Q + 1)) * 6;
+			end;
+		end;
+	end;
+	return r;
+end;
+local JQ;
+local function IQ(m)
+	if not inp.active() or m - ((r.lastRoll or -1000000000.0)) < yl then
+		return;
+	end;
+	local G = sQ();
+	if not G then
+		return;
+	end;
+	for r, Q in pairs(Cl) do
+		if not Q.rolled and (Q.hitAt and (Q.hitAt > m and (Q.hitAt - m < yl and ul(Q.zone, G.X, G.Z, Vl)))) then
+			return;
+		end;
+	end;
+	for Q, e in pairs(el) do
+		if e.owned and (e.strikeAt and (e.rolledFor ~= e.strikeAt and m - e.strikeAt < .15)) then
+			e.rolledFor = e.strikeAt;
+			for Q, N in ipairs(Fl) do
+				if ul(N, G.X, G.Z, Vl) then
+					if eQ(m) then
+						r.lastRoll = m;
+						f(string.format("strike roll vs %s", tostring(e.name)));
+					end;
+					return;
+				end;
+			end;
+		end;
+	end;
+	-- roll BEFORE the strike: once a mob's windup length is learned, schedule the roll from the windup start
+	if Q.windupLearn ~= false and r.windups then
+		local lead = bl + (r.pingLead or 0);
+		for _, mob in pairs(el) do
+			local dur = mob.owned and mob.phase == "windup" and mob.windupAt and mob.x and r.windups[mob.name];
+			if dur and mob.rolledForW ~= mob.windupAt then
+				local hitAt = mob.windupAt + dur;
+				if m >= hitAt - lead and m <= hitAt + .12 then
+					local dx, dz = mob.x - G.X, mob.z - G.Z;
+					local reach = math.max(vl, (CFG.dodgeLearn ~= false and tonumber(brain.mobReach[tostring(mob.name)])) or 0) + Vl;
+					if dx * dx + dz * dz <= reach * reach then
+						if eQ(m) then
+							mob.rolledForW = mob.windupAt;
+							r.lastRoll = m;
+							f(string.format("windup roll vs %s (%.2fs windup)", tostring(mob.name), dur));
+						end;
+						return;
+					end;
+				end;
+			end;
+		end;
+	end;
+end;
+local function mh(m)
+	NQ(m);
+	IQ(m);
+	if not next(Cl) then
+		JQ = nil;
+		return;
+	end;
+	local G = sQ();
+	if not G then
+		return;
+	end;
+	local Q, e = 0, 0;
+	if JQ and m - JQ.t > .001 then
+		Q, e = ((G.X - JQ.x)) / ((m - JQ.t)), ((G.Z - JQ.z)) / ((m - JQ.t));
+	end;
+	if not JQ or m - JQ.t >= .05 then
+		JQ = { x = G.X, z = G.Z, t = m };
+	end;
+	local N = bl + (r.pingLead or 0);
+	for S, w in pairs(Cl) do
+		if not w.rolled then
+			local S = (w.hitAt and m >= w.hitAt - N) or (not w.hitAt and w.p >= .9);
+			if S and ((not w.hitAt or m <= w.hitAt + .1)) then
+				local N = w.hitAt and math.max(w.hitAt - m, 0) or 0;
+				if ul(w.zone, G.X + Q * N, G.Z + e * N, Vl) and (inp.active() and m - ((r.lastRoll or -1000000000.0)) >= yl) then
+					if eQ(m) then
+						w.rolled = true;
+						r.lastRoll = m;
+						f(string.format("roll zone=%.1f,%.1f hitIn=%.2f", w.zone.x, w.zone.z, ((w.hitAt or m)) - m));
+					end;
+				end;
+			end;
+		end;
+	end;
+end;
+local Gh = {
+		3,
+		6,
+		9,
+		12,
+		16,
+		20,
+		25,
+		32,
+		40,
+		50,
+	};
+local rh = 16;
+local Qh = nil;
+local function eh(m, G, r)
+	for m, Q in ipairs(m) do
+		if ul(Q, G, r, Vl + .5) then
+			return true;
+		end;
+	end;
+	return false;
+end;
+-- ===================================================================================
+-- NAV: pathfinding over the real floor tiles
+--   * openness  = how many studs a tile is from the edge of the map (corners/walls are low)
+--   * escape    = Dijkstra from your tile to the nearest tile outside every attack zone,
+--                 paying extra for tiles inside zones, near edges, under rocks or recently stuck.
+--   This replaces the old fixed 25-stud ring search that found nothing when a boss parked a
+--   huge AOE in a corner (so the character stood still, rolled once and died).
+-- ===================================================================================
+local nav = { tiles = nil, map = nil, open = nil, cell = 4, blocked = {} };
+nav.N8 = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+local function navBuild()
+	if nav.tiles == i and nav.map then return true; end;
+	if nav.tiles == i and not nav.map then return false; end;
+	nav.tiles, nav.map, nav.open = i, nil, nil;
+	nav.blocked = {};
+	if #i < 3 then return false; end;
+	local map = {};
+	for _, t in ipairs(i) do map[t.cx * 4096 + t.cz] = t; end;
+	local cs;
+	for _, t in ipairs(i) do
+		local nb = map[(t.cx + 1) * 4096 + t.cz] or map[t.cx * 4096 + t.cz + 1];
+		if nb then
+			cs = math.sqrt((nb.wx - t.wx) ^ 2 + (nb.wz - t.wz) ^ 2);
+			break;
+		end;
+	end;
+	nav.cell = (cs and cs > .1) and cs or 4;
+	local open, queue, head = {}, {}, 1;
+	for key, t in pairs(map) do
+		local edge = false;
+		for _, dl in ipairs(nav.N8) do
+			if not map[(t.cx + dl[1]) * 4096 + t.cz + dl[2]] then edge = true; break; end;
+		end;
+		if edge then open[key] = 0; queue[#queue + 1] = t; end;
+	end;
+	while head <= #queue do
+		local t = queue[head];
+		head = head + 1;
+		local base = open[t.cx * 4096 + t.cz];
+		for _, dl in ipairs(nav.N8) do
+			local k2 = (t.cx + dl[1]) * 4096 + t.cz + dl[2];
+			if map[k2] and open[k2] == nil then
+				open[k2] = base + 1;
+				queue[#queue + 1] = map[k2];
+			end;
+		end;
+	end;
+	nav.map, nav.open = map, open;
+	return true;
+end;
+local function navCellAt(x, z)
+	if not a or #i < 3 then return nil; end;
+	local cx, cz = g(a, x, z);
+	return math.floor(cx + .5), math.floor(cz + .5);
+end;
+-- studs from the map edge at a world point (99 when the floor is unknown, 0 when off the floor)
+local function navOpenAt(x, z)
+	if not navBuild() then return 99; end;
+	local cx, cz = navCellAt(x, z);
+	if not cx then return 99; end;
+	local v = nav.open[cx * 4096 + cz];
+	if v == nil then return 0; end;
+	return (v + .5) * nav.cell;
+end;
+r.navOpenAt = navOpenAt;
+local function navBlock(x, z, now, secs)
+	local cx, cz = navCellAt(x, z);
+	if cx then nav.blocked[cx * 4096 + cz] = now + (secs or 2); end;
+end;
+-- tiny binary heap for Dijkstra
+function nav.push(h, cost, key)
+	local n = #h + 1;
+	h[n] = { cost, key };
+	while n > 1 do
+		local p = math.floor(n / 2);
+		if h[p][1] <= h[n][1] then break; end;
+		h[p], h[n] = h[n], h[p];
+		n = p;
+	end;
+end;
+function nav.pop(h)
+	local top = h[1];
+	if not top then return nil; end;
+	local last = h[#h];
+	h[#h] = nil;
+	if #h > 0 then
+		h[1] = last;
+		local n = 1;
+		while true do
+			local l2, r2, s = n * 2, n * 2 + 1, n;
+			if h[l2] and h[l2][1] < h[s][1] then s = l2; end;
+			if h[r2] and h[r2][1] < h[s][1] then s = r2; end;
+			if s == n then break; end;
+			h[s], h[n] = h[n], h[s];
+			n = s;
+		end;
+	end;
+	return top[1], top[2];
+end;
+local function navEscape(px, pz, zones, now)
+	if CFG.smartEscape == false or not navBuild() then return nil; end;
+	local map, open, cell = nav.map, nav.open, nav.cell;
+	local scx, scz = navCellAt(px, pz);
+	if not scx then return nil; end;
+	local startKey = scx * 4096 + scz;
+	if not map[startKey] then
+		local bestD;
+		for key, t in pairs(map) do
+			local dd = (t.wx - px) ^ 2 + (t.wz - pz) ^ 2;
+			if not bestD or dd < bestD then startKey, bestD = key, dd; end;
+		end;
+		if not bestD then return nil; end;
+	end;
+	-- only zones that can matter
+	local near = {};
+	for _, z in ipairs(zones) do
+		local reach = math.max(z.h1, z.h2) + 70;
+		if (z.x - px) ^ 2 + (z.z - pz) ^ 2 < reach * reach then near[#near + 1] = z; end;
+	end;
+	-- rocks block movement: tiles under ores are expensive
+	local rockCells = {};
+	for _, rock in pairs(D) do
+		if rock.cx and rock.cz then
+			for ox = -0.5, .5, 1 do
+				for oz = -0.5, .5, 1 do
+					rockCells[math.floor(rock.cx + ox + .5) * 4096 + math.floor(rock.cz + oz + .5)] = true;
+				end;
+			end;
+		end;
+	end;
+	local margin = Vl + .5 + cell * .35;
+	local dangerCache = {};
+	local function danger(key)
+		local v = dangerCache[key];
+		if v == nil then
+			v = 0;
+			local t = map[key];
+			for _, z in ipairs(near) do
+				local depth = ul(z, t.wx, t.wz, margin);
+				if depth then v = v + depth + 1; end;
+			end;
+			dangerCache[key] = v;
+		end;
+		return v;
+	end;
+	local edgeSafe = tonumber(CFG.edgeSafe) or 6;
+	local cornerOn = CFG.cornerAvoid ~= false;
+	local dist, prev, heap = { [startKey] = 0 }, {}, {};
+	nav.push(heap, 0, startKey);
+	local best, bestScore, fallback, fallbackScore = nil, nil, nil, nil;
+	local pops = 0;
+	while true do
+		local c, key = nav.pop(heap);
+		if not c then break; end;
+		pops = pops + 1;
+		if pops > 2500 then break; end;
+		if c <= (dist[key] or math.huge) + 1e-6 then
+			if bestScore and c > bestScore then break; end;
+			local t = map[key];
+			local dg = danger(key);
+			local studsOpen = ((open[key] or 0) + .5) * cell;
+			local edgeCost = cornerOn and math.max(0, edgeSafe - studsOpen) * 2.5 or 0;
+			if dg == 0 and not rockCells[key] then
+				local score = c + edgeCost;
+				if not bestScore or score < bestScore then best, bestScore = key, score; end;
+			end;
+			local fs = dg * 12 + c * .25 + edgeCost;
+			if not fallbackScore or fs < fallbackScore then fallback, fallbackScore = key, fs; end;
+			for _, dl in ipairs(nav.N8) do
+				local nx, nz = t.cx + dl[1], t.cz + dl[2];
+				local k2 = nx * 4096 + nz;
+				if map[k2] then
+					local diag = dl[1] ~= 0 and dl[2] ~= 0;
+					-- no corner cutting over the void
+					if not diag or (map[(t.cx + dl[1]) * 4096 + t.cz] and map[t.cx * 4096 + t.cz + dl[2]]) then
+						local blockedUntil = nav.blocked[k2];
+						if not (blockedUntil and blockedUntil > now) then
+							local step = (diag and 1.4142 or 1) * cell;
+							local cost = c + step + danger(k2) * cell * 3 + (rockCells[k2] and cell * 3 or 0);
+							if cost < (dist[k2] or math.huge) then
+								dist[k2], prev[k2] = cost, key;
+								nav.push(heap, cost, k2);
+							end;
+						end;
+					end;
+				end;
+			end;
+		end;
+	end;
+	local goal = best or fallback;
+	if not goal then return nil; end;
+	local path = {};
+	local k = goal;
+	while k do
+		table.insert(path, 1, k);
+		k = prev[k];
+	end;
+	local startDanger = danger(startKey);
+	-- walk straight to the farthest path tile we can reach without crossing the void or deeper danger
+	local function lineClear(t)
+		local dx, dz = t.wx - px, t.wz - pz;
+		local len = math.sqrt(dx * dx + dz * dz);
+		local steps = math.max(1, math.ceil(len / (cell * .5)));
+		for s = 1, steps do
+			local f2 = s / steps;
+			local sx, sz = px + dx * f2, pz + dz * f2;
+			if not pQ(sx, sz) then return false; end;
+			local scx2, scz2 = navCellAt(sx, sz);
+			local k2 = scx2 and (scx2 * 4096 + scz2);
+			if k2 and map[k2] and (danger(k2) > startDanger + .01 or rockCells[k2]) then return false; end;
+		end;
+		return true;
+	end;
+	local wp = map[path[math.min(#path, 2)]];
+	for j = math.min(#path, 14), 2, -1 do
+		local t = map[path[j]];
+		if lineClear(t) then wp = t; break; end;
+	end;
+	local gt = map[goal];
+	return { x = wp.wx, z = wp.wz, gx = gt.wx, gz = gt.wz, t = now, safe = best ~= nil, len = #path };
+end;
+local function Nh(m, G, r)
+	if Qh and (r - Qh.t < .25 and not eh(Fl, Qh.gx or Qh.x, Qh.gz or Qh.z)) then
+		if not Qh.gx or (Qh.x - m) ^ 2 + (Qh.z - G) ^ 2 > (nav.cell * .6) ^ 2 then
+			return Qh;
+		end;
+	end;
+	local esc = navEscape(m, G, Fl, r);
+	if esc then
+		Qh = esc;
+		return Qh;
+	end;
+	local Q = {};
+	for r, e in ipairs(Fl) do
+		local N = math.max(e.h1, e.h2) + 30;
+		if ((e.x - m)) ^ 2 + ((e.z - G)) ^ 2 < N * N then
+			Q[#Q + 1] = e;
+		end;
+	end;
+	local e = {};
+	for r, N in ipairs(Gh) do
+		for r = 0, rh - 1, 1 do
+			local S = (((r / rh)) * math.pi) * 2;
+			local w, q = m + math.cos(S) * N, G + math.sin(S) * N;
+			if pQ(w, q) and not eh(Q, w, q) then
+				e[#e + 1] = { x = w, z = q, d = N };
+			end;
+		end;
+		if #e >= 12 then
+			break;
+		end;
+	end;
+	local N, S = nil, nil;
+	for r, e in ipairs(e) do
+		local w = 0;
+		local q = math.max(1, math.floor(e.d / 1.5));
+		for r = 1, q - 1, 1 do
+			local N = r / q;
+			if eh(Q, m + ((e.x - m)) * N, G + ((e.z - G)) * N) then
+				w = w + 1;
+			end;
+		end;
+		local l = e.d + w * 5;
+		if not S or l < S then
+			N, S = e, l;
+		end;
+	end;
+	Qh = N and { x = N.x, z = N.z, t = r } or nil;
+	return Qh;
+end;
+local Sh, wh = 1, 0;
+local function qh(m, G, e, N)
+	local S = Kl(G, N);
+	local w = YQ();
+	local q, l = m.X - S.X, m.Z - S.Z;
+	local d = math.sqrt(q * q + l * l);
+	if d < .001 then
+		q, l, d = k, T, 1;
+	end;
+	local z, c = ((-l / d)) * Sh, ((q / d)) * Sh;
+	local x = {};
+	for m, r in ipairs(e) do
+		if r ~= G then
+			x[#x + 1] = Kl(r, N);
+		end;
+	end;
+	local function W(m, G)
+		local r = 0;
+		for Q, e in ipairs(x) do
+			if ((e.X - m)) ^ 2 + ((e.Z - G)) ^ 2 < 12.25 then
+				r = r + 1;
+			end;
+		end;
+		return r;
+	end;
+	local K = Q.dodge;
+	if K and eh(Fl, m.X, m.Z) then
+		local G = Nh(m.X, m.Z, N);
+		if G then
+			if not r.dodging then
+				f(string.format("escape to open ground (combat) %.1f studs away, zones=%d", math.sqrt(((G.x - m.X)) ^ 2 + ((G.z - m.Z)) ^ 2), #Fl));
+			end;
+			r.dodging = true;
+			SQ(G.x - m.X, G.z - m.Z);
+			return;
+		end;
+	end;
+	local o = tQ();
+	local F = K and PQ(m.X, m.Z) or 0;
+	local j = nil;
+	local R = F > 0 and 0 or 1;
+	-- corner avoidance: being near the map edge is penalised (much more while attacks are on the floor),
+	-- so the orbit swings to the open side of a boss instead of getting pinned in a corner
+	local cornerW = 0;
+	if CFG.cornerAvoid ~= false then
+		cornerW = (#Fl > 0) and 3 or .6;
+	end;
+	local edgeSafe = tonumber(CFG.edgeSafe) or 6;
+	local function edgePen(x, z)
+		if cornerW == 0 then return 0; end;
+		return math.max(0, edgeSafe - navOpenAt(x, z)) * cornerW;
+	end;
+	local C = ((((F * 24 + (math.abs(d - w) * .8) * R)) + .4)) + W(m.X, m.Z) * 1.5 + edgePen(m.X, m.Z);
+	for G, r in ipairs(o) do
+		local Q, e = m.X + r[1] * 2.5, m.Z + r[2] * 2.5;
+		local N, q = m.X + r[1] * 5, m.Z + r[2] * 5;
+		local l = K and ((PQ(Q, e) + PQ(N, q)) + PQ(m.X + r[1] * 7.5, m.Z + r[2] * 7.5)) or 0;
+		local d = math.sqrt(((N - S.X)) ^ 2 + ((q - S.Z)) ^ 2);
+		local f = ((((((l * 8 + HQ(m, r) * 40)) + (math.abs(d - w) * .8) * R)) - (((r[1] * z + r[2] * c)) * 1.2) * R)) + W(N, q) * 1.5 + edgePen(N, q);
+		if f < C then
+			j, C = r, f;
+		end;
+	end;
+	if j and ((j[1] * z + j[2] * c < -0.3 and N - wh > 1.5)) then
+		Sh = -Sh;
+		wh = N;
+	end;
+	if F > 0 and not r.dodging then
+		f(string.format("dodge start (combat) zones=%d danger=%.1f dir=%s", #Fl, F, j and string.format("%.2f,%.2f", j[1], j[2]) or "stay"));
+	end;
+	r.dodging = F > 0;
+	if j then
+		SQ(j[1], j[2]);
+	else
+		SQ(nil);
+	end;
+end;
+-- ===================================================================================
+-- TARGET PRIORITY ("Smart"): ores first, fight when it matters
+--   fight when: boss stage / boss on the field, the stage is a mob stage, no ores left,
+--   a mob is inside the learned threat radius (it's hitting you anyway), or you're swarmed.
+--   at low HP it stops chasing normal mobs and keeps mining/dodging instead.
+--   The threat radius is learned: mobs hitting you while you mine push it out, quiet mining pulls it in.
+-- ===================================================================================
+local function wantFight(list, pos, now)
+	local pr = CFG.mobPriority or "Smart";
+	if pr == "Always fight" or not CFG.mine then
+		r.fightWhy = "always";
+		return true;
+	end;
+	local stage = tostring(run.stage or ""):upper();
+	local boss = run.bossHud or stage:find("BOSS") ~= nil;
+	local minMax, maxMax = math.huge, 0;
+	for _, mob in ipairs(list) do
+		if mob.boss then boss = true; end;
+		local mx = tonumber(mob.max) or 0;
+		if mx > 0 then minMax, maxMax = math.min(minMax, mx), math.max(maxMax, mx); end;
+	end;
+	if #list >= 2 and maxMax > 0 and maxMax >= minMax * 5 then boss = true; end;
+	run.bossNow = boss;
+	if boss then r.fightWhy = "boss"; return true; end;
+	if stage:find("MOB") or stage:find("ENEM") or stage:find("FIGHT") or stage:find("HORDE") or stage:find("SLAY") or stage:find("KILL") or stage:find("ELITE") then
+		r.fightWhy = "mob stage";
+		return true;
+	end;
+	if next(D) == nil then r.fightWhy = "no ores"; return true; end;
+	local nearest = math.huge;
+	for _, mob in ipairs(list) do
+		local dd = math.sqrt((mob.x - pos.X) ^ 2 + (mob.z - pos.Z) ^ 2);
+		if dd < nearest then nearest = dd; end;
+	end;
+	local mode = run.modeName and run.modeName() or "waves";
+	local threat = tonumber(brain.threat[mode]) or 8;
+	if pr == "Ores first" then threat = math.min(threat, 4); end;
+	-- keep fighting a mob we already engaged until it backs off a bit (no flip-flopping)
+	if WQ == "combat" then threat = threat + 4; end;
+	local character = l.Character;
+	local hum = character and character:FindFirstChildOfClass("Humanoid");
+	local hpPct = (hum and hum.MaxHealth > 0) and hum.Health / hum.MaxHealth * 100 or 100;
+	if hpPct < (tonumber(CFG.lowHpPct) or 35) then
+		threat = math.min(threat, 4);
+	end;
+	if nearest <= threat then r.fightWhy = string.format("threat %.0f st", nearest); return true; end;
+	if pr == "Smart" and #list >= (tonumber(CFG.crowdSize) or 5) and hpPct >= (tonumber(CFG.lowHpPct) or 35) then
+		r.fightWhy = "swarmed";
+		return true;
+	end;
+	r.fightWhy = nil;
+	return false;
+end;
+local function lh(m)
+	local G = sQ();
+	if not G then
+		WQ, L, u, xQ = "idle", nil, nil, nil;
+		Pl();
+		return;
+	end;
+	B();
+	local e = inp.active();
+	local N = false;
+	for m, G in pairs(Hl) do
+		N = N or G;
+	end;
+	if inp.moveVec then
+		N = true;
+	end;
+	if N then
+		local Q = r.stuckRef;
+		if not Q or ((G.X - Q.x)) ^ 2 + ((G.Z - Q.z)) ^ 2 > .25 then
+			r.stuckRef = { x = G.X, z = G.Z, t = m };
+		elseif m - Q.t > (r.dodging and .6 or 1.2) then
+			-- stuck on a rock / wall: remember the blocked tile so the pathfinder routes around it
+			local dir = run.lastDir;
+			if dir then
+				navBlock(G.X + dir[1] * nav.cell * .8, G.Z + dir[2] * nav.cell * .8, m, 2.5);
+			end;
+			Qh = nil;
+			Pl();
+			r.stuckRef = nil;
+			r.unsticks = ((r.unsticks or 0)) + 1;
+		end;
+	else
+		r.stuckRef = nil;
+	end;
+	local S = ol();
+	r.mobCount = #S;
+	if #S > 0 and Q.combat and wantFight(S, G, m) then
+		WQ = "combat";
+	elseif Q.mine then
+		WQ = "mine";
+	else
+		WQ = "idle";
+	end;
+	xQ = nil;
+	local w, q = nil, nil;
+	for m, Q in ipairs(S) do
+		local e = math.sqrt(((Q.x - G.X)) ^ 2 + ((Q.z - G.Z)) ^ 2);
+		Q.d = e;
+		if r.keepTarget == Q.addr then
+			e = e - 4;
+		end;
+		if not q or e < q then
+			w, q = Q, e;
+		end;
+	end;
+	if WQ == "combat" and ((Q.combat and w)) then
+		xQ = w.addr;
+		r.keepTarget = w.addr;
+	else
+		r.keepTarget = nil;
+	end;
+	if WQ == "mine" then
+		if y(m) then
+			Ql(G, m);
+		else
+			L, u = nil, nil;
+		end;
+	else
+		L, u = nil, nil;
+		if y(m) then
+			a = n({});
+		end;
+	end;
+	r.mode, r.walkTo, r.aimAt = WQ, u ~= nil, L ~= nil;
+	if not e or iQ() then
+		Pl();
+		return;
+	end;
+	if Q.dodge or Q.autoRoll then
+		-- the per-frame hazard scan in r.step already refreshed Fl this frame
+		if aQ.haz ~= m then
+			Xl(G, m);
+		end;
+	elseif #Fl > 0 or next(Cl) then
+		Fl, Cl = {}, {};
+	end;
+	if WQ == "combat" then uQ(m); end;
+	if WQ == "combat" and ((Q.combat and ((Q.chase and w)))) then
+		qh(G, w, S, m);
+		return;
+	end;
+	if Q.dodge and (#Fl > 0 and eh(Fl, G.X, G.Z)) then
+		local Q = Nh(G.X, G.Z, m);
+		if Q then
+			if not r.dodging then
+				f(string.format("escape to open ground %.1f studs away, zones=%d", math.sqrt(((Q.x - G.X)) ^ 2 + ((Q.z - G.Z)) ^ 2), #Fl));
+			end;
+			r.dodging = true;
+			SQ(Q.x - G.X, Q.z - G.Z);
+			return;
+		end;
+	end;
+	if Q.dodge and #Fl > 0 then
+		local m, Q, e = 0, 0, false;
+		for r, N in ipairs(Fl) do
+			local S, w, q = ul(N, G.X, G.Z, N.pm or Yl);
+			if S then
+				e = true;
+				m, Q = m + w * S, Q + q * S;
+			end;
+		end;
+		if e then
+			local e = math.sqrt(m * m + Q * Q);
+			if e < .001 then
+				m, Q, e = k, T, 1;
+			end;
+			local N, S = nil, nil;
+			for r, w in ipairs(tQ()) do
+				local q = (PQ(G.X + w[1] * 2.5, G.Z + w[2] * 2.5) + PQ(G.X + w[1] * 5, G.Z + w[2] * 5)) + PQ(G.X + w[1] * 7.5, G.Z + w[2] * 7.5);
+				local l = ((q * 8 + HQ(G, w) * 40)) - ((((w[1] * m + w[2] * Q)) / e)) * 2;
+				if CFG.cornerAvoid ~= false then
+					l = l + math.max(0, (tonumber(CFG.edgeSafe) or 6) - navOpenAt(G.X + w[1] * 5, G.Z + w[2] * 5)) * 2;
+				end;
+				if not S or l < S then
+					N, S = w, l;
+				end;
+			end;
+			if not r.dodging then
+				f(string.format("dodge start (out of combat) zones=%d dir=%.2f,%.2f", #Fl, N[1], N[2]));
+			end;
+			SQ(N[1], N[2]);
+			r.dodging = true;
+			return;
+		end;
+	end;
+	r.dodging = false;
+	if WQ == "mine" and Q.centerFarm and E then
+		local anchorX, anchorZ = centerFarmAnchor(G);
+		if anchorX then
+			r.chestWalk = false;
+			local dx, dz = anchorX - G.X, anchorZ - G.Z;
+			local atAnchor = dx * dx + dz * dz <= 1.25^2;
+			local strays = (r.posCount or 0) > 0;
+			local cleanup = Q.centerCleanup ~= false;
+			if r.strayTrip and (not strays or not cleanup) then
+				r.strayTrip = false;
+			end;
+			if L and (atAnchor or r.strayTrip) then
+				-- something is in reach from here: stand still and mine it
+				SQ(nil);
+				return;
+			end;
+			if not L and cleanup and strays and u and (r.strayTrip or (atAnchor and r.noAimSince and m - r.noAimSince > .8)) then
+				-- ores the anchor can't reach (edge of the arena / off screen): walk to them, then head back
+				r.strayTrip = true;
+				SQ(u.X - G.X, u.Z - G.Z);
+				return;
+			end;
+			if atAnchor then
+				SQ(nil);
+			else
+				L = nil;
+				r.progressAt = m;
+				SQ(dx, dz);
+			end;
+			return;
+		end;
+	end;
+	if Q.chests and WQ ~= "combat" then
+		local m = cl(G);
+		if m then
+			local Q, e = m.x - G.X, m.z - G.Z;
+			if Q * Q + e * e > 1 then
+				r.chestWalk = true;
+				SQ(Q, e);
+				return;
+			end;
+		end;
+	end;
+	r.chestWalk = false;
+	if WQ == "mine" and ((Q.walk and u)) then
+		SQ(u.X - G.X, u.Z - G.Z);
+		return;
+	end;
+	SQ(nil);
+end;
+-- ===================================================================================
+-- DISCORD WEBHOOK: "Run Complete" post when a run ends
+--   With delve_webhook_helper.ps1 running on your PC, the post includes a screenshot of your
+--   screen (Roblox can't capture the screen itself, so the script drops a job file in the
+--   executor's workspace\DelveWebhook folder and the helper screenshots + uploads it).
+--   Without the helper it still posts the run stats as text.
+-- ===================================================================================
+r.sendRunWebhook = function(info, isTest)
+	if not isTest and CFG.webhookOn ~= true then return false; end;
+	local url = tostring(CFG.webhookUrl or "");
+	url = url:gsub("^%s+", ""):gsub("%s+$", "");
+	if not url:match("^https://[%w%.]*discord[%w]*%.com/api/webhooks/%d+/[%w%-_]+") then
+		if isTest then notify("Paste a Discord webhook URL first (https://discord.com/api/webhooks/...).", "Delve webhook"); end;
+		return false;
+	end;
+	local Hs = game:GetService("HttpService");
+	info = info or {};
+	local function money(v)
+		v = tonumber(v) or 0;
+		local sign = v < 0 and "-" or "";
+		v = math.abs(v);
+		for _, u in ipairs({ { 1e12, "T" }, { 1e9, "B" }, { 1e6, "M" }, { 1e3, "K" } }) do
+			if v >= u[1] then return string.format("%s$%.2f%s", sign, v / u[1], u[2]); end;
+		end;
+		return string.format("%s$%.0f", sign, v);
+	end;
+	local secs = tonumber(info.seconds) or 0;
+	local relicText = type(info.relics) == "table" and table.concat(info.relics, ", ") or "";
+	if relicText == "" then relicText = "none"; end;
+	if #relicText > 1000 then relicText = relicText:sub(1, 997) .. "..."; end;
+	local fields = {
+		{ name = "Mode", value = tostring(info.mode or "?"), inline = true },
+		{ name = "Score", value = string.format("%.1f (%+.2f vs avg)", tonumber(info.score) or 0, tonumber(info.z) or 0), inline = true },
+		{ name = "Time", value = string.format("%dm %02ds", math.floor(secs / 60), secs % 60), inline = true },
+		{ name = "Depth", value = tostring(info.depth or 0) .. " m", inline = true },
+		{ name = "Wave", value = tostring(info.wave or 0), inline = true },
+		{ name = "Cash gained", value = money(info.cash), inline = true },
+		{ name = "Outcome", value = (info.died and "Died" or "Survived") .. string.format(", %d hits taken", tonumber(info.hits) or 0), inline = true },
+		{ name = "Brain", value = string.format("%d runs learned, %d relics known", tonumber(brain.runCount) or 0, (function()
+			local n = 0;
+			for _ in pairs(brain.codex) do n = n + 1; end;
+			return n;
+		end)()), inline = true },
+		{ name = "Relics taken", value = relicText, inline = false },
+	};
+	local embed = {
+		title = isTest and "Webhook test" or "Run Complete",
+		color = info.died and 15158332 or 3066993,
+		fields = fields,
+		footer = { text = "Delve v3 brain | " .. tostring(l.Name) },
+	};
+	pcall(function() embed.timestamp = DateTime.now():ToIsoDate(); end);
+	-- is the screenshot helper running? (it refreshes this file every few seconds)
+	local helperAlive = false;
+	pcall(function()
+		if type(isfile) == "function" and isfile("DelveWebhook/helper_alive.txt") then
+			local t = tonumber((readfile("DelveWebhook/helper_alive.txt") or ""):match("%d+"));
+			helperAlive = t ~= nil and math.abs(os.time() - t) < 20;
+		end;
+	end);
+	if helperAlive and type(writefile) == "function" then
+		embed.image = { url = "attachment://run.png" };
+		local job = { url = url, payload = { username = "Delve Brain", embeds = { embed } } };
+		local ok = pcall(function()
+			writefile(string.format("DelveWebhook/job_%d_%d.json", os.time(), math.random(1000, 9999)), Hs:JSONEncode(job));
+		end);
+		if ok then
+			if isTest then notify("Sent to the screenshot helper. Check Discord in a few seconds.", "Delve webhook"); end;
+			return true;
+		end;
+	end;
+	local req = (type(request) == "function" and request) or (type(http_request) == "function" and http_request)
+		or (type(syn) == "table" and syn.request) or (type(http) == "table" and http.request);
+	if not req then
+		notify("This executor has no request() function, and the screenshot helper isn't running.", "Delve webhook");
+		return false;
+	end;
+	embed.footer.text = embed.footer.text .. " | start delve_webhook_helper.ps1 for screenshots";
+	local ok, res = pcall(req, {
+		Url = url,
+		Method = "POST",
+		Headers = { ["Content-Type"] = "application/json" },
+		Body = Hs:JSONEncode({ username = "Delve Brain", embeds = { embed } }),
+	});
+	local code = ok and type(res) == "table" and tonumber(res.StatusCode) or nil;
+	if isTest then
+		notify(code and code < 300 and "Webhook OK (text only: screenshot helper not running)." or ("Webhook failed: " .. tostring(code or res)), "Delve webhook");
+	end;
+	return code ~= nil and code < 300;
+end;
+pcall(function()
+	if type(makefolder) == "function" and (type(isfolder) ~= "function" or not isfolder("DelveWebhook")) then
+		makefolder("DelveWebhook");
+	end;
+end);
+-- ===================================================================================
+-- DODGE BRAIN: learns from every hit you take
+--   * hit while standing in a telegraphed zone  -> widen the safety margin (and roll earlier if
+--     the roll was already pressed, i.e. it was too late)
+--   * hit by a mob's swing from farther than expected -> remember that mob's real reach
+--   * a roll with no hit afterwards -> slowly relax the margin again
+-- ===================================================================================
+local brainTick = (function()
+	local hs = { hum = nil, conn = nil, hp = nil, rollSeen = nil, lastT = nil, saveAt = 0 };
+	local function learnFromHit(loss, now)
+		run.hits = run.hits + 1;
+		if CFG.dodgeLearn == false then return; end;
+		local pos = sQ();
+		if not pos then return; end;
+		local dd = brain.dodge;
+		dd.hits = (tonumber(dd.hits) or 0) + 1;
+		local inZone = false;
+		for _, z in ipairs(Fl) do
+			if not z.mob and ul(z, pos.X, pos.Z, Vl + 1) then inZone = true; break; end;
+		end;
+		local rolledRecently = now - (r.lastRoll or -1e9) < .7;
+		if inZone then
+			dd.extra = math.min(2.5, (tonumber(dd.extra) or 0) + (rolledRecently and .05 or .15));
+			if rolledRecently then
+				dd.leadAdj = math.min(.2, (tonumber(dd.leadAdj) or 0) + .01);
+			end;
+		end;
+		local best, bd;
+		for _, mob in pairs(el) do
+			if mob.owned and mob.x and mob.name and mob.strikeAt and now - mob.strikeAt < .6 then
+				local dist = math.sqrt((mob.x - pos.X) ^ 2 + (mob.z - pos.Z) ^ 2);
+				if (not bd or dist < bd) then best, bd = mob, dist; end;
+			end;
+		end;
+		if best and WQ == "mine" then
+			-- a mob hit us while we were mining: start fighting mobs from farther away
+			local mode = run.modeName and run.modeName() or "waves";
+			brain.threat[mode] = math.min(18, (tonumber(brain.threat[mode]) or 8) + .5);
+			run.mobHits = (run.mobHits or 0) + 1;
+			hs.lastMobHit = now;
+		end;
+		if best and bd and bd > vl and bd < 16 then
+			local key = tostring(best.name);
+			local cur = tonumber(brain.mobReach[key]) or vl;
+			brain.mobReach[key] = math.min(16, math.max(cur, bd + .75));
+			f(string.format("learned reach %s -> %.1f", key, brain.mobReach[key]));
+		end;
+		markBrain();
+		if r.sync then r.sync(); end;
+		f(string.format("hit -%.0f inZone=%s rolled=%s margin+%.2f", loss, tostring(inZone), tostring(rolledRecently), dd.extra));
+	end;
+	r.stopBrain = function()
+		if hs.conn then pcall(function() hs.conn:Disconnect(); end); hs.conn = nil; end;
+		if hs.dconn then pcall(function() hs.dconn:Disconnect(); end); hs.dconn = nil; end;
+	end;
+	return function(now)
+		local dt = hs.lastT and math.min(.25, now - hs.lastT) or 0;
+		hs.lastT = now;
+		if run.active then
+			if WQ == "combat" then run.combatT = run.combatT + dt; elseif WQ == "mine" then run.mineT = run.mineT + dt; end;
+			-- a minute of mining without mob hits: allow mobs a bit closer before stopping to fight
+			if WQ == "mine" and CFG.on then
+				hs.quietMine = (hs.quietMine or 0) + dt;
+				if hs.lastMobHit and now - hs.lastMobHit < 60 then hs.quietMine = 0; end;
+				if hs.quietMine >= 60 then
+					hs.quietMine = 0;
+					local mode = run.modeName and run.modeName() or "waves";
+					brain.threat[mode] = math.max(5, (tonumber(brain.threat[mode]) or 8) - .25);
+					markBrain();
+				end;
+			end;
+		end;
+		local character = l.Character;
+		local hum = character and character:FindFirstChildOfClass("Humanoid");
+		if hum ~= hs.hum then
+			r.stopBrain();
+			hs.hum, hs.hp = hum, hum and hum.Health;
+			if hum then
+				hs.conn = hum.HealthChanged:Connect(function(hp)
+					local old = hs.hp or hp;
+					hs.hp = hp;
+					if hp < old - .5 and CFG.on then
+						pcall(learnFromHit, old - hp, d());
+					end;
+				end);
+				hs.dconn = hum.Died:Connect(function() run.died = true; end);
+			end;
+		end;
+		-- a roll that wasn't followed by a hit = successful dodge: relax the margin a little
+		local lr = r.lastRoll;
+		if lr and lr ~= hs.rollSeen and now - lr > 1 then
+			hs.rollSeen = lr;
+			if run.hits == (hs.hitsAtRoll or run.hits) then
+				local dd = brain.dodge;
+				dd.dodges = (tonumber(dd.dodges) or 0) + 1;
+				dd.extra = math.max(0, (tonumber(dd.extra) or 0) - .02);
+				if r.sync then r.sync(); end;
+				markBrain();
+			end;
+		end;
+		if lr and lr ~= hs.rollMark then hs.rollMark, hs.hitsAtRoll = lr, run.hits; end;
+		pcall(relicAPI.runTick, now);
+		-- settings autosave (cheap: only writes when something changed)
+		if now - (hs.setAt or 0) > 2 then
+			hs.setAt = now;
+			pcall(r.saveSettings);
+		end;
+		-- farm was on last session: start it once Delve is loaded
+		if r.autoStart and now - (hs.autoAt or 0) > 1 then
+			hs.autoAt = now;
+			if not farmBlocker() then
+				r.autoStart = false;
+				N(true);
+				if r.farmToggle then pcall(function() r.farmToggle:Set(true); end); end;
+				notify("Farm auto-started (it was on when you left).", "Delve");
+			end;
+		end;
+		if now - hs.saveAt > 20 then
+			hs.saveAt = now;
+			saveBrain(false);
+		end;
+	end;
+end)();
+-- main frame step (kept in r.step so the connection below can pcall it)
+r.step = function()
+		local m = d();
+		pcall(brainTick, m);
+		local blockedInput = missingInput and Q.background ~= true;
+		if blockedInput or iQ() then
+			if not blockedInput then
+				Pl();
+				inp.clearAim();
+				NQ(m, true);
+				vQ();
+				if MQ.phase == "down" then inp.mouseUp(); end;
+				MQ.phase = "idle";
+			end;
+			if wQ and not blockedInput then zQ(); end;
+			if dQ and m - aQ.poll >= .1 then aQ.poll = m; dQ(); end;
+			return;
+		end;
+		if wQ then
+			zQ();
+			return;
+		end;
+		if Q.autoStats ~= false and not r.statsFound and ((((r.rockCount or 0)) > 0 and m - lQ > 20)) then
+			fQ(true);
+		end;
+		if m - aQ.poll >= .1 then
+			aQ.poll = m;
+			if ((Q.on and true or false)) ~= r.farmOn then
+				N(Q.on);
+			end;
+			if dQ then
+				dQ();
+			end;
+		end;
+		-- network ping (one way) so rolls are sent early enough to land before the hit
+		if m - aQ.ping >= .5 then
+			aQ.ping = m;
+			local okPing, ping = pcall(l.GetNetworkPing, l);
+			r.pingLead = (Q.pingComp ~= false and okPing and type(ping) == "number") and math.min(ping, .25) or 0;
+		end;
+		local G = Q.combat or Q.chests or (Q.on and Q.centerFarm);
+		if G then
+			if m - aQ.sweep >= .5 then
+				aQ.sweep, aQ.refresh = m, m;
+				zl(m);
+			elseif m - aQ.refresh >= .016 then
+				aQ.refresh = m;
+				xl(m);
+			end;
+			if xQ and ((el[xQ] and m - aQ.dead >= .25)) then
+				aQ.dead = m;
+				Wl(xQ, el[xQ], m);
+			end;
+		elseif next(el) then
+			el = {};
+		end;
+		-- scan attack telegraphs every frame (the slow eval loop below is too late for fast attacks)
+		if Q.dodge or Q.autoRoll then
+			if inp.active() then
+				local hazardPos = sQ();
+				if hazardPos then
+					aQ.haz = m;
+					Xl(hazardPos, m);
+				end;
+			end;
+		end;
+		if m - aQ.eval >= ((((#Fl > 0 or next(Cl))) and .033 or .1)) then
+			aQ.eval = m;
+			lh(m);
+		end;
+		if Q.autoRoll and not iQ() then
+			mh(m);
+		else
+			NQ(m);
+		end;
+		OQ(m);
+		local e = nQ(m) or LQ(m);
+		if not e and m - ((aQ.aim or 0)) >= .016666666666667 then
+			aQ.aim = m;
+			local G = nil;
+			if inp.active() and not iQ() then
+				local r = xQ and el[xQ];
+				if r and ((WQ == "combat" and Q.combat)) then
+					G = Kl(r, m);
+				elseif WQ == "mine" and ((Q.mine and ((L and a)))) then
+					if L.ore then
+						local ore = L.ore;
+						if ore and ore:IsDescendantOf(workspace) then
+							local part = orePart(ore);
+							G = part and part.Position;
+						end;
+					else
+						G = Z(a, L.ax, L.az);
+					end;
+				end;
+			end;
+			if G then
+				if inp.silent() and inp.setAim(G) then
+					-- silent aim: the game reads our target instead of the cursor, the real mouse stays put
+					CQ = nil;
+				else
+					inp.clearAim();
+					EQ(G, m);
+				end;
+			else
+				CQ = nil;
+				inp.clearAim();
+			end;
+		end;
+	end;
+local dh = false;
+do
+	local connection;
+	local handlingIdle = false;
+	r.connectAntiAfk = function()
+		connection = l.Idled:Connect(function()
+			if dh or not Q.antiAfk or handlingIdle then return; end;
+			local camera = workspace.CurrentCamera;
+			if not camera then return; end;
+
+			handlingIdle = true;
+			local ok, err = pcall(function()
+				local virtualUser = game:GetService("VirtualUser");
+				local cameraFrame = camera.CFrame;
+				virtualUser:Button2Down(Vector2.zero, cameraFrame);
+				task.wait(1);
+				virtualUser:Button2Up(Vector2.zero, cameraFrame);
+			end);
+			handlingIdle = false;
+			if ok then
+				notify("Idle input sent.", "Delve Anti-AFK");
+			else
+				notify(tostring(err), "Delve Anti-AFK error");
+			end;
+		end);
+	end;
+	r.disconnectAntiAfk = function()
+		if connection then
+			connection:Disconnect();
+			connection = nil;
+		end;
+	end;
+end;
+r.stop = function()
+		if dh then
+			return;
+		end;
+		dh = true;
+		r.disconnectAntiAfk();
+		pcall(function() r.stopBrain(); end);
+		pcall(function() relicAPI.finish(); end);
+		pcall(saveBrain, true);
+		uiNotify = nil;
+		pcall(function()
+			r.conn:Disconnect();
+		end);
+		pcall(function()
+			r.conn2:Disconnect();
+		end);
+		pcall(inp.stop);
+		pcall(Pl);
+		pcall(vQ);
+		if MQ.phase == "down" then
+			pcall(inp.mouseUp);
+		end;
+		pcall(NQ, 0, true);
+		if r.win and r.win.alive then
+			r.win:Unload();
+		end;
+		notify("Stopped.", "Delve");
+	end;
+
+-- apply settings that are cached in upvalues (and resolve keybinds); safe to call any time
+do
+	local specialKeys = { Space = 32, Shift = 16, LShift = 160, RShift = 161, Ctrl = 17, Alt = 18, Tab = 9 };
+	local function keyCode(name, fallback)
+		if type(name) ~= "string" or #name == 0 then
+			return fallback;
+		end;
+		if specialKeys[name] then
+			return specialKeys[name];
+		end;
+		if #name == 1 then
+			return string.byte(name:upper());
+		end;
+		return fallback;
+	end;
+	local function slotCode(n, fallback)
+		n = math.floor(tonumber(n) or fallback);
+		if n < 1 or n > 9 then
+			n = fallback;
+		end;
+		return 48 + n;
+	end;
+	r.sync = function()
+		dl = tonumber(Q.chestRange) or 120;
+		Yl = tonumber(Q.keepAway) or 7;
+		Vl = (tonumber(Q.hitMargin) or 1.5) + ((Q.dodgeLearn ~= false and tonumber(brain.dodge.extra)) or 0);
+		vl = tonumber(Q.meleeReach) or 5.5;
+		bl = (tonumber(Q.rollLead) or .2) + ((Q.dodgeLearn ~= false and tonumber(brain.dodge.leadAdj)) or 0);
+		yl = tonumber(Q.rollCooldown) or 1.05;
+		Jl = keyCode(Q.rollKey, 81);
+		Il = slotCode(Q.pickSlot, 1);
+		mQ = slotCode(Q.weaponSlot, 2);
+	end;
+	r.sync();
+end;
+
+(function()
+	-- Settings shared by the controls and the runtime
+	local spec = {
+		{
+			name = "General",
+			side = "L",
+			items = {
+				{ k = "antiAfk", t = "toggle", text = "Anti-AFK" },
+				{ k = "autoReplay", t = "toggle", text = "Auto Replay", f = "st_autoreplay" },
+				{ k = "dodgeLog", t = "toggle", text = "Log dodges to file" },
+				{ k = "replayDelay", t = "slider", text = "Replay delay", min = .5, max = 10, step = .5, suffix = " s", f = "st_replaydelay" },
+				{ k = "chestRange", t = "slider", text = "Chest range", min = 20, max = 300, step = 10, suffix = " st", f = "st_chestrange" },
+			},
+		},
+		{
+			name = "Mining",
+			side = "L",
+			rescan = true,
+			items = {
+				{ k = "autoStats", t = "toggle", text = "Auto-detect mining stats" },
+				{ k = "mineRange", t = "slider", text = "Rock search range", min = 10, max = 400, step = 10, suffix = " st" },
+				{ k = "reach", t = "slider", text = "Mining reach", min = .3, max = 20, step = .01, suffix = " st" },
+				{ k = "radius", t = "slider", text = "Mining radius", min = .1, max = 10, step = .01, suffix = " st" },
+				{ k = "centerOre", t = "toggle", text = "Center aim on ore" },
+				{ k = "radiusScale", t = "slider", text = "Mining radius scale", min = .4, max = 1, step = .05, suffix = "x" },
+				{ k = "reachScale", t = "slider", text = "Reach safety scale", min = .5, max = 1.5, step = .05, suffix = "x" },
+				{ k = "minTier", t = "slider", text = "Min rock tier", min = 1, max = 10, step = 1, suffix = "" },
+				{ k = "skipAfter", t = "slider", text = "Skip stuck rock after", min = 3, max = 30, step = 1, suffix = " s" },
+			},
+		},
+		{
+			name = "Features",
+			side = "L",
+			items = {
+				{ k = "mine", t = "feat", text = "Mine rocks" },
+				{ k = "walk", t = "feat", text = "Walk to rocks" },
+				{ k = "combat", t = "feat", text = "Fight mobs" },
+				{ k = "chase", t = "feat", text = "Chase and orbit target" },
+				{ k = "dodge", t = "feat", text = "Dodge attacks" },
+				{ k = "autoRoll", t = "feat", text = "Auto roll" },
+				{ k = "chests", t = "feat", text = "Collect chests" },
+			},
+		},
+		{
+			name = "Combat & dodging",
+			side = "R",
+			items = {
+				{ k = "autoCombatStats", t = "toggle", text = "Auto-detect sword range" },
+				{ k = "fightDist", t = "slider", text = "Orbit distance", min = 2, max = 30, step = 1, suffix = " st", f = "st_fight" },
+				{ k = "keepAway", t = "slider", text = "Keep away from attacks", min = 1, max = 12, step = .5, suffix = " st", f = "st_keepaway" },
+				{ k = "hitMargin", t = "slider", text = "Hit margin (body size)", min = .5, max = 3, step = .1, suffix = " st", f = "st_hitmargin" },
+				{ k = "meleeReach", t = "slider", text = "Melee reach", min = 2, max = 12, step = .5, suffix = " st", f = "st_meleereach" },
+				{ k = "rollLead", t = "slider", text = "Roll before hit (higher = earlier)", min = .05, max = .6, step = .05, suffix = " s", f = "st_rolllead" },
+				{ k = "rollCooldown", t = "slider", text = "Roll cooldown", min = .3, max = 2, step = .05, suffix = " s" },
+				{ k = "pingComp", t = "toggle", text = "Ping compensation" },
+				{ k = "windupLearn", t = "toggle", text = "Learn mob windups (roll before strike)" },
+			},
+		},
+		{
+			name = "Brain",
+			side = "R",
+			items = {
+				{ k = "cardPick", t = "toggle", text = "Auto-pick relic cards" },
+				{ k = "relicLearn", t = "toggle", text = "Learn relics from my runs and picks" },
+				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd relic (to learn)" },
+				{ k = "relicNotify", t = "toggle", text = "Announce relic choice" },
+				{ k = "relicDelay", t = "slider", text = "Relic pick delay", min = .2, max = 5, step = .1, suffix = " s" },
+				{ k = "relicCodexNotify", t = "toggle", text = "Announce newly discovered relics" },
+				{ k = "dodgeLearn", t = "toggle", text = "Learn from hits (margins, mob reach, roll timing)" },
+				{ k = "smartEscape", t = "toggle", text = "Pathfind out of attacks (tile map)" },
+				{ k = "cornerAvoid", t = "toggle", text = "Avoid corners and map edges" },
+				{ k = "edgeSafe", t = "slider", text = "Preferred distance from edge", min = 0, max = 20, step = 1, suffix = " st" },
+			},
+		},
+		{
+			name = "Targeting",
+			side = "L",
+			items = {
+				{ k = "mobPriority", t = "combo", text = "Mob priority", items = { "Smart", "Ores first", "Always fight" } },
+				{ k = "lowHpPct", t = "slider", text = "Low HP: stop chasing below", min = 0, max = 90, step = 5, suffix = " %" },
+				{ k = "crowdSize", t = "slider", text = "Fight when this many mobs are up", min = 2, max = 20, step = 1, suffix = "" },
+			},
+		},
+		{
+			name = "Webhook",
+			side = "R",
+			items = {
+				{ k = "webhookOn", t = "toggle", text = "Post to Discord when a run is done" },
+				{ k = "webhookUrl", t = "input", text = "Discord webhook URL" },
+				{ k = "webhookDelay", t = "slider", text = "Screenshot delay after run ends", min = 0, max = 10, step = .5, suffix = " s" },
+			},
+		},
+		{
+			name = "Controls",
+			side = "R",
+			items = {
+				{ k = "autoEquip", t = "toggle", text = "Auto-equip tools" },
+				{ k = "pickSlot", t = "slider", text = "Pickaxe slot", min = 1, max = 9, step = 1, suffix = "" },
+				{ k = "weaponSlot", t = "slider", text = "Weapon slot", min = 1, max = 9, step = 1, suffix = "" },
+				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
+			},
+		},
+		{
+			name = "Background",
+			side = "R",
+			items = {
+				{ k = "background", t = "toggle", text = "Background mode (work while tabbed out)" },
+				{ k = "silentAim", t = "toggle", text = "Silent aim (don't move my mouse)" },
+				{ k = "bgKeyMethod", t = "combo", text = "Background key method", items = { "Auto", "VirtualInputManager", "Input connections" } },
+				{ k = "bgMoveMethod", t = "combo", text = "Background walk method", items = { "Both", "Humanoid:Move", "Velocity" } },
+				{ k = "useLearned", t = "toggle", text = "Use learned equip remotes in background" },
+				{ k = "autoStartFarm", t = "toggle", text = "Turn the farm back on if it was on last time" },
+			},
+		},
+	};
+
+	local function apply(it, value)
+		local key = it.k;
+		if it.t == "feat" then
+			Q.feat[key] = value and true or false;
+			if Q.on then
+				Q[key] = Q.feat[key];
+			end;
+		elseif it.t == "toggle" then
+			Q[key] = value and true or false;
+			if key == "autoStats" and value then
+				r.statsFound = false;
+				fQ(true);
+			end;
+			if key == "background" or key == "silentAim" then
+				if value then
+					inp.ensureSilent();
+				end;
+				Pl();
+				inp.clearAim();
+			end;
+		elseif it.t == "slider" then
+			local num = tonumber(value);
+			if not num then
+				return;
+			end;
+			Q[key] = num;
+		elseif it.t == "input" then
+			Q[key] = tostring(value or "");
+		elseif it.t == "combo" then
+			if type(value) == "number" then
+				value = it.items[value];
+			end;
+			if type(value) == "string" then
+				Q[key] = value;
+			end;
+		end;
+		if r.sync then
+			r.sync();
+		end;
+	end;
+
+	-- scan the game's stats and apply them (reach/radius), using a safe reach scale
+	local function rescan()
+		Q.autoStats = true;
+		Q.reachScale = 1;
+		r.statsFound = false;
+		if r.sync then
+			r.sync();
+		end;
+		fQ(false);
+		if dQ then
+			dQ();
+		end;
+	end;
+
+	notify("Loading WindUI…", "Delve v3");
+	local url = "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua";
+	local downloaded, source = pcall(function() return game:HttpGet(url); end);
+	assert(downloaded, "WindUI download failed: " .. tostring(source));
+	local chunk, compileError = loadstring(source, "WindUI");
+	assert(chunk, "WindUI compile failed: " .. tostring(compileError));
+	local WindUI = chunk();
+	assert(type(WindUI) == "table" and type(WindUI.CreateWindow) == "function", "WindUI did not return its window API");
+	if type(WindUI.Notify) == "function" then
+		uiNotify = function(message, title)
+			WindUI:Notify({ Title = title, Content = message, Duration = 6 });
+		end;
+	end;
+
+	local window = WindUI:CreateWindow({
+		Title = "Delve v3 | Brain",
+		Folder = "DelveV3",
+		Icon = "pickaxe",
+		Size = UDim2.fromOffset(620, 480),
+		ToggleKey = Enum.KeyCode.RightShift,
+		OpenButton = {
+			Title = "Open Delve",
+			Enabled = true,
+			Draggable = true,
+			OnlyMobile = false,
+		},
+	});
+	local visible = true;
+	r.win = {
+		alive = true,
+		IsVisible = function() return visible; end,
+		Unload = function(self)
+			self.alive = false;
+			window:Destroy();
+		end,
+	};
+	window:OnOpen(function() visible = true; end);
+	window:OnClose(function() visible = false; end);
+	window:OnDestroy(function()
+		r.win.alive = false;
+		visible = false;
+		r.stop();
+	end);
+
+	local main = window:Tab({ Title = "Farm", Icon = "pickaxe" });
+	main:Paragraph({
+		Title = "Delve",
+		Desc = "Enable the farm, then close this panel. Right Shift reopens it.",
+	});
+	local farmToggle;
+	farmToggle = main:Toggle({
+		Title = "Farm enabled",
+		Value = false,
+		Callback = function(enabled)
+			r.autoStart = false;
+			local blocker = enabled and farmBlocker();
+			if blocker then
+				notify(blocker, "Delve");
+				if farmToggle then farmToggle:Set(false); end;
+				return;
+			end;
+			N(enabled);
+		end,
+	});
+	r.farmToggle = farmToggle;
+	main:Toggle({
+		Title = "Mine from chest / arena center",
+		Desc = "Walk to the chest or center tile, then aim at ores from that spot.",
+		Value = Q.centerFarm == true,
+		Callback = function(enabled)
+			Q.centerFarm = enabled == true;
+			if not Q.centerFarm then r.centerFarmChest = nil; r.strayTrip = false; end;
+		end,
+	});
+	main:Toggle({
+		Title = "Chase stray ores (center farm)",
+		Desc = "If ores are out of reach from the center, walk to them, then return.",
+		Value = Q.centerCleanup ~= false,
+		Callback = function(enabled)
+			Q.centerCleanup = enabled == true;
+		end,
+	});
+	main:Toggle({
+		Title = "Background mode (work while tabbed out)",
+		Desc = "Walks, rolls and aims without touching your keyboard or mouse, so Roblox can sit behind other windows. Don't minimize it.",
+		Value = Q.background == true,
+		Callback = function(enabled)
+			Q.background = enabled == true;
+			if enabled then inp.ensureSilent(); end;
+			Pl();
+			inp.clearAim();
+			if dQ then dQ(); end;
+		end,
+	});
+	main:Button({ Title = "Close settings", Callback = function() window:Close(); end });
+	main:Button({ Title = "Stop and unload", Callback = r.stop });
+
+	local synced = {};
+	local function current(item)
+		if item.t == "feat" then return Q.feat[item.k] ~= false; end;
+		return Q[item.k];
+	end;
+	for _, group in ipairs(spec) do
+		local tab = window:Tab({ Title = group.name });
+		for _, item in ipairs(group.items) do
+			local it = item;
+			local value = current(it);
+			local widget;
+			local function changed(newValue)
+				apply(it, newValue);
+				if synced[it.k] then synced[it.k].value = current(it); end;
+			end;
+			if it.t == "input" then
+				local okInput, inputWidget = pcall(function()
+					return tab:Input({
+						Title = it.text,
+						Placeholder = "https://discord.com/api/webhooks/...",
+						Value = tostring(value or ""),
+						Callback = changed,
+					});
+				end);
+				widget = okInput and inputWidget or nil;
+			elseif it.t == "slider" then
+				widget = tab:Slider({
+					Title = it.text,
+					Step = it.step,
+					Value = { Min = it.min, Max = it.max, Default = tonumber(value) or it.min },
+					Callback = changed,
+				});
+			elseif it.t == "combo" then
+				widget = tab:Dropdown({
+					Title = it.text,
+					Values = it.items,
+					Value = value,
+					AllowNone = false,
+					Callback = changed,
+				});
+			else
+				widget = tab:Toggle({ Title = it.text, Value = value == true, Callback = changed });
+			end;
+			synced[it.k] = { widget = widget, value = value, item = it };
+		end;
+		if group.rescan then tab:Button({ Title = "Scan mining stats", Callback = rescan }); end;
+		if group.name == "Background" then
+			tab:Button({
+				Title = "Test background support",
+				Callback = function()
+					notify(inp.report(), "Delve background");
+				end,
+			});
+			tab:Button({
+				Title = "Background status",
+				Callback = function()
+					notify(inp.status(), "Delve background");
+				end,
+			});
+			tab:Button({
+				Title = "Test walking (1s)",
+				Callback = function()
+					task.spawn(inp.testWalk);
+				end,
+			});
+			tab:Button({
+				Title = "Test pickaxe equip key",
+				Callback = function()
+					task.spawn(inp.testEquip, Il, "PickaxeOut", "Pickaxe");
+				end,
+			});
+			tab:Button({
+				Title = "Test weapon equip key",
+				Callback = function()
+					task.spawn(inp.testEquip, mQ, "WeaponDrawn", "Weapon");
+				end,
+			});
+			tab:Button({
+				Title = "Learn weapon equip (then press the key in game)",
+				Callback = function()
+					inp.learn("weapon", mQ);
+				end,
+			});
+			tab:Button({
+				Title = "Learn pickaxe equip (then press the key in game)",
+				Callback = function()
+					inp.learn("pickaxe", Il);
+				end,
+			});
+			tab:Button({
+				Title = "Forget learned equips",
+				Callback = function()
+					inp.learned.weapon, inp.learned.pickaxe = nil, nil;
+					notify("Learned equip remotes cleared.", "Delve learn");
+				end,
+			});
+		end;
+		if group.name == "Webhook" then
+			tab:Button({
+				Title = "Send test post",
+				Callback = function()
+					task.spawn(function()
+						r.sendRunWebhook({ mode = run.modeName and run.modeName() or "?", score = 0, z = 0, depth = run.depth, wave = run.wave, cash = 0, seconds = 0, relics = {} }, true);
+					end);
+				end,
+			});
+			tab:Paragraph({
+				Title = "Screenshots",
+				Desc = "Run delve_webhook_helper.ps1 on your PC to attach a screenshot. Without it, runs are posted as text.",
+			});
+		end;
+		if group.name == "Brain" then
+			tab:Button({
+				Title = "Show last relic draft scores",
+				Callback = function()
+					notify(r.lastDraft and table.concat(r.lastDraft, "\n") or "No relic draft seen yet.", "Delve relic");
+				end,
+			});
+			tab:Button({
+				Title = "Show what the brain learned",
+				Callback = function()
+					local dd = brain.dodge;
+					local reach = {};
+					for name, v in pairs(brain.mobReach) do reach[#reach + 1] = string.format("%s %.1f", name, tonumber(v) or 0); end;
+					local threat = {};
+					for mode, v in pairs(brain.threat) do threat[#threat + 1] = string.format("%s %.1f st", mode, tonumber(v) or 0); end;
+					notify(relicAPI.report() .. string.format("\nDodge: +%.2f st margin, roll %+.2fs earlier, %d hits / %d clean rolls\nRuns learned from: %d",
+						tonumber(dd.extra) or 0, tonumber(dd.leadAdj) or 0, tonumber(dd.hits) or 0, tonumber(dd.dodges) or 0, tonumber(brain.runCount) or 0)
+						.. (#reach > 0 and ("\nMob reach: " .. table.concat(reach, ", ")) or "")
+						.. (#threat > 0 and ("\nFight mobs within: " .. table.concat(threat, ", ")) or ""), "Delve brain");
+				end,
+			});
+			tab:Button({
+				Title = "Show relic codex (every relic seen)",
+				Callback = function()
+					local list = {};
+					for _, cx in pairs(brain.codex) do
+						if type(cx) == "table" then list[#list + 1] = cx; end;
+					end;
+					table.sort(list, function(x, y) return (tonumber(x.lastScore) or 0) > (tonumber(y.lastScore) or 0); end);
+					local out = {};
+					for k = 1, math.min(15, #list) do
+						local cx = list[k];
+						local cats = type(cx.cats) == "table" and table.concat(cx.cats, "/") or "?";
+						out[#out + 1] = string.format("%s [%s] %s, seen %dx", tostring(cx.name), tostring(cx.tier), cats, tonumber(cx.seen) or 0);
+					end;
+					notify(#list .. " relics known.\n" .. table.concat(out, "\n"), "Delve codex");
+				end,
+			});
+			tab:Button({
+				Title = "Save brain now",
+				Callback = function()
+					saveBrain(true);
+					notify(type(writefile) == "function" and "Saved to DelveBrain.json" or "This executor has no writefile; learning lasts until you rejoin.", "Delve brain");
+				end,
+			});
+			tab:Button({
+				Title = "Reset everything the brain learned",
+				Callback = function()
+					brain.relics, brain.cat, brain.sets, brain.runs, brain.mobReach = {}, {}, {}, {}, {};
+					brain.dodge = { extra = 0, leadAdj = 0, hits = 0, dodges = 0 };
+					if r.sync then r.sync(); end;
+					saveBrain(true);
+					notify("Brain reset.", "Delve brain");
+				end,
+			});
+		end;
+		if group.name == "Combat & dodging" then
+			tab:Button({
+				Title = "Report sword range",
+				Callback = function()
+					uQ(d(), true);
+					local message = r.range
+						and string.format("Estimated sword range: %.2f studs. Orbit distance: %.2f studs.", r.range, YQ())
+						or string.format("No sword range detected. Manual orbit distance: %.2f studs.", YQ());
+					notify(message, "Delve combat");
+				end,
+			});
+			tab:Button({
+				Title = "Report learned mob windups",
+				Callback = function()
+					local parts = {};
+					for name, dur in pairs(r.windups or {}) do
+						parts[#parts + 1] = string.format("%s %.2fs", name, dur);
+					end;
+					notify(#parts > 0 and table.concat(parts, ", ") or "No windups learned yet. Fight a few mobs first.", "Delve windups");
+				end,
+			});
+		end;
+	end;
+	dQ = function()
+		for _, setting in pairs(synced) do
+			local value = current(setting.item);
+			if value ~= setting.value and setting.widget and type(setting.widget.Set) == "function" then
+				setting.value = value;
+				pcall(setting.widget.Set, setting.widget, value);
+			end;
+		end;
+	end;
+	window:Open();
+end)();
+
+inp.ensureSilent();
+r.runStep = function()
+		local ok, err = pcall(r.step);
+		if not ok then
+			pcall(Pl);
+			pcall(NQ, 0, true);
+			pcall(vQ);
+			if MQ.phase == "down" then pcall(inp.mouseUp); end;
+			MQ.phase = "idle";
+			local now = d();
+			if now - (r.errAt or -1000) > 5 then
+				r.errAt = now;
+				notify(tostring(err), "Delve error");
+			end;
+		end;
+	end;
+r.lastRender = d();
+r.conn = q.RenderStepped:Connect(function()
+		r.lastRender = d();
+		r.runStep();
+	end);
+-- RenderStepped stops firing when the window is minimized or throttled in the background;
+-- in background mode Heartbeat keeps the farm running whenever rendering has stalled
+r.conn2 = q.Heartbeat:Connect(function()
+		if Q.background == true and d() - r.lastRender > .1 then
+			r.runStep();
+		end;
+	end);
+
+r.connectAntiAfk();
+if Q.autoStats ~= false then
+	fQ(true);
+end;
+notify("Settings opened. Use Right Shift or Open Delve to reopen them.", "Delve v3");
+end;
+
+local ok, err = xpcall(start, function(message)
+	return debug.traceback(tostring(message), 2);
+end);
+if not ok then
+	local env = type(getgenv) == "function" and getgenv();
+	local state = env and env.Delve;
+	if state and state.stop then pcall(state.stop); end;
+	notify(err, "Delve startup error");
+end;
