@@ -4291,7 +4291,9 @@ local function IQ(m)
 		end;
 	end;
 	for Q, e in pairs(el) do
-		if e.owned and (e.strikeAt and (e.rolledFor ~= e.strikeAt and m - e.strikeAt < .15)) then
+		-- in a boss fight, don't spend the roll on small mobs' swings: the boss's attacks are the ones that kill
+		if e.owned and (e.strikeAt and (e.rolledFor ~= e.strikeAt and m - e.strikeAt < .15))
+			and not (r.bossFight and tostring(e.name) ~= r.bossFight) then
 			e.rolledFor = e.strikeAt;
 			for Q, N in ipairs(Fl) do
 				if ul(N, G.X, G.Z, Vl) then
@@ -4308,7 +4310,8 @@ local function IQ(m)
 	if Q.windupLearn ~= false and r.windups then
 		local lead = bl + (r.pingLead or 0);
 		for _, mob in pairs(el) do
-			local dur = mob.owned and mob.phase == "windup" and mob.windupAt and mob.x and r.windups[mob.name];
+			local dur = mob.owned and mob.phase == "windup" and mob.windupAt and mob.x and r.windups[mob.name]
+				and not (r.bossFight and tostring(mob.name) ~= r.bossFight);
 			if dur and mob.rolledForW ~= mob.windupAt then
 				local hitAt = mob.windupAt + dur;
 				if m >= hitAt - lead and m <= hitAt + .12 then
@@ -4438,7 +4441,9 @@ local function mh(m)
 	if not JQ or m - JQ.t >= .05 then
 		JQ = { x = G.X, z = G.Z, t = m };
 	end;
-	local N = bl + (r.pingLead or 0);
+	-- boss attacks land a bit earlier than their telegraph suggests (the killing Worldheart hit came
+	-- 90 ms before the roll): roll a little earlier in boss fights
+	local N = bl + (r.pingLead or 0) + (r.bossFight and .08 or 0);
 	for S, w in pairs(Cl) do
 		if not w.rolled then
 			local S = (w.hitAt and m >= w.hitAt - N - (w.zone and w.zone.sl or 0)) or (not w.hitAt and w.p >= .9);
@@ -5016,10 +5021,10 @@ end;
 local bossStudy = { at = -1e9, notes = {} };
 function bossStudy.rateOf(hist)
 	local h1, h2 = hist[1], hist[#hist];
-	if not (h1 and h2) or h2.t - h1.t < 2 then return nil; end;
+	if not (h1 and h2) or h2.t - h1.t < 1.5 then return nil; end;
 	local on = 0;
 	for _, h in ipairs(hist) do if h.on then on = on + 1; end; end;
-	if on < #hist * .7 then return nil; end;
+	if on < #hist * .5 then return nil; end;
 	return math.max(0, (h1.hp - h2.hp) / (h2.t - h1.t));
 end;
 function bossStudy.tick(list, pos, now)
@@ -5071,7 +5076,8 @@ function bossStudy.tick(list, pos, now)
 			end;
 		end;
 	end;
-	if not boss then bossStudy.cur = nil; return; end;
+	if not boss then bossStudy.cur = nil; r.bossFight = nil; return; end;
+	r.bossFight = tostring(boss.name);
 	local cur = bossStudy.cur;
 	if not cur or cur.addr ~= boss.addr then
 		cur = { addr = boss.addr, name = tostring(boss.name), hist = {}, adds = {} };
@@ -5120,7 +5126,7 @@ function bossStudy.tick(list, pos, now)
 	cur.adds = alive;
 	-- 4 s after an add died: did the boss start taking more damage?
 	local pend = cur.pending;
-	if pend and now - pend.at > 4 then
+	if pend and now - pend.at > 6 then
 		cur.pending = nil;
 		local after = cur.rate;
 		if after then
@@ -5146,9 +5152,57 @@ function bossStudy.tick(list, pos, now)
 	end;
 end;
 -- how much closer (in studs) a mob should count when picking a target
+-- is the straight walk to this mob free of attack zones, burning floor and void? (cached 0.3 s per mob)
+-- 5 of 6 Worldheart deaths came seconds after crossing the arena to a pylon 33-100 studs away.
+function bossStudy.pathSafe(mob)
+	bossStudy.safeCache = bossStudy.safeCache or {};
+	local now = d();
+	local c = bossStudy.safeCache[mob.addr];
+	if c and now - c.t < .3 then return c.ok, c.why; end;
+	local pos = sQ();
+	local ok, why = true, nil;
+	if pos and mob.x then
+		local dx, dz = mob.x - pos.X, mob.z - pos.Z;
+		local len = math.sqrt(dx * dx + dz * dz);
+		local steps = math.min(40, math.floor(len / 2));
+		for k = 1, steps do
+			local f = k / (steps + 1);
+			local x, z = pos.X + dx * f, pos.Z + dz * f;
+			if r.navOpenAt then
+				local okO, open = pcall(r.navOpenAt, x, z);
+				if okO and (tonumber(open) or 99) < 1 then ok, why = false, "path leaves the floor"; break; end;
+			end;
+			for _, zone in ipairs(Fl) do
+				if ul(zone, x, z, Vl) then
+					ok, why = false, zone.floor and "burning floor on the way" or "attack zones on the way";
+					break;
+				end;
+			end;
+			if not ok then break; end;
+		end;
+	end;
+	bossStudy.safeCache[mob.addr] = { t = now, ok = ok, why = why };
+	return ok, why;
+end;
 function bossStudy.bias(mob)
 	local cur = bossStudy.cur;
 	if not cur or mob.addr == cur.addr then return 0; end;
+	local b = bossStudy.biasRaw(mob, cur);
+	if b > 0 and (tonumber(mob.d) or 0) > 12 then
+		local ok, why = bossStudy.pathSafe(mob);
+		if not ok then
+			-- not now: stay on safe ground (fight what's near) and go when the way is clear
+			local key = tostring(mob.addr) .. tostring(why);
+			if r.why and bossStudy.lastUnsafe ~= key then
+				bossStudy.lastUnsafe = key;
+				r.why("boss", string.format("%s is %.0f st away but %s: holding safe ground for now", tostring(mob.name), tonumber(mob.d) or 0, why));
+			end;
+			return 0;
+		end;
+	end;
+	return b;
+end;
+function bossStudy.biasRaw(mob, cur)
 	local book = type(brain.bossAdds) == "table" and brain.bossAdds[cur.name];
 	local rec = type(book) == "table" and book[tostring(mob.name)];
 	if type(rec) == "table" and (tonumber(rec.score) or 0) >= 1 then return 60; end;
@@ -5295,6 +5349,25 @@ local function lh(m)
 	end;
 	local S = ol();
 	pcall(bossStudy.tick, S, G, m);
+	-- black box: a small sample every 0.25 s, last 5 s kept, written out only when you die
+	if m - (r.boxAt or 0) >= .25 then
+		r.boxAt = m;
+		r.box = r.box or {};
+		local hum = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+		local inZ = {};
+		for _, z in ipairs(Fl) do
+			if z.sig and ul(z, G.X, G.Z, 0) then inZ[#inZ + 1] = z.sig; if #inZ >= 4 then break; end; end;
+		end;
+		local tgt;
+		for _, mob in ipairs(S) do if mob.addr == xQ then tgt = mob; break; end; end;
+		table.insert(r.box, {
+			t = math.floor(m * 100) / 100, hp = hum and math.floor(hum.Health) or nil, mode = WQ,
+			x = math.floor(G.X), z = math.floor(G.Z), zones = #Fl, inZones = inZ,
+			target = tgt and tostring(tgt.name) or nil, dist = tgt and tgt.d and math.floor(tgt.d * 10) / 10 or nil,
+			rollReady = m - (r.lastRoll or -1e9) >= yl, why = r.fightWhy, timer = run.timeLeft, stuck = r.stuckStreak,
+		});
+		while #r.box > 20 do table.remove(r.box, 1); end;
+	end;
 	-- the "move closer" adjustment wears off when not fighting
 	if WQ ~= "combat" and (tonumber(r.orbitShrink) or 0) > 0 then
 		r.orbitShrink = math.max(0, r.orbitShrink - .01);
@@ -6994,6 +7067,17 @@ local brainTick = (function()
 		dd.extra = math.min(2.5, (tonumber(dd.extra) or 0) + .1);
 		markBrain();
 		saveBrain(true);
+		-- write the black box (last 5 s) so every death can be explained afterwards
+		local box = r.box or {};
+		task.delay(1.2, function()
+			pcall(function()
+				if type(appendfile) ~= "function" then return; end;
+				appendfile("DelveDeaths.jsonl", game:GetService("HttpService"):JSONEncode({
+					t = os.time(), depth = run.depth, killer = run.killer, lastHit = hs.lastHitSigs, lastMob = hs.lastHitMob,
+					boss = r.bossFight, samples = box,
+				}) .. "\n");
+			end);
+		end);
 		notify("Died to " .. (#what > 0 and table.concat(what, ", ") or "something unseen")
 			.. ". Next time: more distance from it and earlier rolls.", "Delve danger");
 	end;
@@ -7609,7 +7693,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.4.1 | Brain",
+		Title = "Delve v5.5 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

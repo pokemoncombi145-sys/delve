@@ -1,6 +1,16 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.4.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.5 | Brain`).
+
+## v5.5: Learning audit, stage 2 (Worldheart)
+**Evidence:** 6 of 8 recorded deaths are Worldheart at 9,060 m. In 5 of 6, the script switched to a Heart Pylon 33-100 studs away, crossed the arena, got stuck, and was one-shot (268-380 damage vs 230-264 max HP) with no roll. In the latest one the roll fired 90 ms after the hit.
+
+| Change | Why |
+|---|---|
+| A priority target (pylon, learned add, still mob) more than 12 studs away is only chased when the straight way there is free of attack zones, burning floor and void. Otherwise it holds safe ground and fights what's near, and goes when the way is clear (logged as "holding safe ground"). | The deaths came from the crossing, not from fighting the pylon. |
+| In a boss fight, small mobs' swings no longer use up the roll, and zone rolls start 0.08 s earlier. | The killing blows landed with no roll, or just before it. |
+| "Did killing that add help?" needs 1.5 s of boss damage (was 2 s) with half the samples hitting (was 70%), measured over 6 s after the kill (was 4 s). | The verdict was never reached for Heart Pylons. |
+| Death black box: a small sample every 0.25 s (HP, position, mode, target and distance, zones you're in, roll ready, timer, stuck count) for the last 5 s, written to `DelveDeaths.jsonl` only when you die. | So every death can be explained from data, not guessed. |
 
 ## v5.4.1: Stage 1 check-up (2 runs on v5.4)
 **What the v5.4 logs showed**
