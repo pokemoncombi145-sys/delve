@@ -1,6 +1,9 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.0 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.0.1 | Brain`).
+
+## v4.0.1
+- The first scan after launch now starts after **10 s** instead of 20 s.
 
 ## v4.0: Instant relic picks, works tabbed out, clean Index sources
 **Fixed**

@@ -5362,7 +5362,7 @@ local indexAPI = (function()
 		if not addConn then hook(); end;
 		pcall(gearTick);
 		-- one scan per launch, outside a run, once Roblox is focused; then it's done
-		if not done and not busy and CFG.autoIndexScan ~= false and now - startedAt > 20
+		if not done and not busy and CFG.autoIndexScan ~= false and now - startedAt > 10
 			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10 then
 			r.scanTryAt = now;
 			task.spawn(scan, "launch");
@@ -5912,7 +5912,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.0 | Brain",
+		Title = "Delve v4.0.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
