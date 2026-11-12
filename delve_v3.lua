@@ -135,6 +135,10 @@ local m = {
 		webhookOn = false,
 		webhookUrl = "",
 		webhookDelay = 1.5,
+		dropWebhook = true,
+		rareDropOdds = 500,
+		autoIndexScan = true,
+		rareTopPct = 3,
 		-- new settings
 		mineRange = 150,
 		autoStats = false,
@@ -2298,6 +2302,7 @@ local aQ = {
 		ping = 0,
 	};
 local function iQ()
+	if r.scanning then return true; end;
 	-- in background mode nothing touches the mouse/keyboard, so an open menu doesn't need to pause the farm
 	if Q.background == true then
 		return false;
@@ -3304,8 +3309,12 @@ local relicAPI = (function()
 		local score = depth + wave * 15 + (value > 1 and math.log10(value) * 8 or 0)
 			+ math.min(40, ((res and res.rocks) or 0) * .05)
 			- (died and 30 or 0) - snap.hits * .5 + math.min(dur, 900) / 30;
-		local st = brain.runs[mode];
-		if type(st) ~= "table" then st = { n = 0, mean = 0, m2 = 0 }; brain.runs[mode] = st; end;
+		-- compare a run against runs made with similar gear power, so upgrading gear
+		-- doesn't make every relic from older runs look bad
+		local pw = brain.player and tonumber(brain.player.power);
+		local statKey = pw and pw > 0 and string.format("%s:p%d", mode, math.floor(math.log10(pw) * 4)) or mode;
+		local st = brain.runs[statKey];
+		if type(st) ~= "table" then st = { n = 0, mean = 0, m2 = 0 }; brain.runs[statKey] = st; end;
 		local std = st.n >= 3 and math.sqrt(st.m2 / (st.n - 1)) or 10;
 		std = math.max(std, 3);
 		local z = st.n >= 1 and (score - st.mean) / std or 0;
@@ -3354,6 +3363,7 @@ local relicAPI = (function()
 			level = (res and res.level) or lv1, levelUp = (snap.level0 and lv1) and (lv1 - snap.level0) or nil,
 			died = died, hits = snap.hits, seconds = math.floor(dur), relics = names,
 			title = res and res.title, source = res and "results screen" or "live tracking",
+			power = brain.player and brain.player.power, luck = brain.player and brain.player.luck,
 			combatPct = (snap.combatT + snap.mineT) > 0 and math.floor(snap.combatT / (snap.combatT + snap.mineT) * 100 + .5) or nil,
 		};
 		pcall(function()
@@ -3491,8 +3501,10 @@ local function uQ(now, force)
 end;
 local function YQ()
 	local manual = tonumber(Q.fightDist) or 8;
-	if Q.autoCombatStats and r.range then
-		return math.min(r.range * .7, manual);
+	-- live range from the attack cone, else the range learned for the sword you hold
+	local rg = r.range or r.swordLearnedRange;
+	if Q.autoCombatStats and rg then
+		return math.min(rg * .7, manual);
 	end;
 	return manual;
 end;
@@ -4034,6 +4046,10 @@ local function qh(m, G, e, N)
 			j, C = r, f;
 		end;
 	end;
+	-- already at the right distance with nothing to dodge: stand and swing (no wasted orbiting)
+	if j and F == 0 and #Fl == 0 and math.abs(d - w) < 1.2 then
+		j = nil;
+	end;
 	if j and ((j[1] * z + j[2] * c < -0.3 and N - wh > 1.5)) then
 		Sh = -Sh;
 		wh = N;
@@ -4346,6 +4362,17 @@ r.sendRunWebhook = function(info, isTest)
 	add("Run score", string.format("%.1f (%+.2f vs avg)", tonumber(info.score) or 0, tonumber(info.z) or 0));
 	add("Fighting", info.combatPct and (tostring(info.combatPct) .. "% of the time") or "?");
 	add("Brain", string.format("%d runs, %d relics known", tonumber(brain.runCount) or 0, known));
+	if type(brain.player) == "table" and brain.player.power then
+		add("Gear", string.format("power %s, luck %s, dmg %s", tostring(brain.player.power), tostring(brain.player.luck or "?"), tostring(brain.player.damage or "?")));
+	end;
+	if type(brain.lifetime) == "table" and next(brain.lifetime) then
+		local lines = {};
+		for k2, v2 in pairs(brain.lifetime) do lines[#lines + 1] = k2 .. ": " .. v2; end;
+		table.sort(lines);
+		local lt = table.concat(lines, "\n");
+		if #lt > 1000 then lt = lt:sub(1, 997) .. "..."; end;
+		add("Lifetime stats", lt, false);
+	end;
 	add("Relics taken (" .. tostring(type(info.relics) == "table" and #info.relics or 0) .. ")", relicText, false);
 	local title = isTest and "Webhook test" or "Run Complete";
 	if not isTest and info.mode == "delve" then
@@ -4404,6 +4431,700 @@ pcall(function()
 		makefolder("DelveWebhook");
 	end;
 end);
+-- generic Discord post (used by rare-drop alerts); screenshot attached when the helper is running
+r.postEmbed = function(embed)
+	local url = tostring(CFG.webhookUrl or ""):gsub("^%s+", ""):gsub("%s+$", "");
+	if CFG.webhookOn ~= true or not url:match("^https://[%w%.]*discord[%w]*%.com/api/webhooks/%d+/[%w%-_]+") then return false; end;
+	local Hs = game:GetService("HttpService");
+	pcall(function() embed.timestamp = DateTime.now():ToIsoDate(); end);
+	local helperAlive = false;
+	pcall(function()
+		if type(isfile) == "function" and isfile("DelveWebhook/helper_alive.txt") then
+			local t = tonumber((readfile("DelveWebhook/helper_alive.txt") or ""):match("%d+"));
+			helperAlive = t ~= nil and math.abs(os.time() - t) < 20;
+		end;
+	end);
+	if helperAlive and type(writefile) == "function" then
+		embed.image = { url = "attachment://run.png" };
+		local ok = pcall(function()
+			writefile(string.format("DelveWebhook/job_%d_%d.json", os.time(), math.random(1000, 9999)),
+				Hs:JSONEncode({ url = url, payload = { username = "Delve Brain", embeds = { embed } } }));
+		end);
+		if ok then return true; end;
+		embed.image = nil;
+	end;
+	local req = (type(request) == "function" and request) or (type(http_request) == "function" and http_request)
+		or (type(syn) == "table" and syn.request) or (type(http) == "table" and http.request);
+	if not req then return false; end;
+	local ok, res = pcall(req, {
+		Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" },
+		Body = Hs:JSONEncode({ username = "Delve Brain", embeds = { embed } }),
+	});
+	return ok and type(res) == "table" and (tonumber(res.StatusCode) or 999) < 300;
+end;
+-- ===================================================================================
+-- INDEX + EQUIPMENT KNOWLEDGE
+--   * on launch: opens the T menu, reads every Index entry (name, zone, "1 in N", found or not)
+--     straight from the GUI (entries scrolled out of view are still readable, no scrolling needed)
+--   * selects each FOUND entry it hasn't studied yet to read which rocks drop it and how often
+--     (Field Stone 1 in 1.4, Copper Vein 1 in 33...). Already-studied entries are skipped next time.
+--     Studying happens outside a run; during a run only the quick read is done.
+--   * reads Equipment stats (luck, power, damage, health, selected item stats). Never clicks
+--     anything in Equipment, so it can't equip or sell by accident.
+--   * learns from drop pop-ups as you play; rare drops / new index entries go to Discord
+--   * uses the drop tables to rate rocks: rocks that drop rare or still-missing ores get mined first
+-- ===================================================================================
+local indexAPI = (function()
+	brain.index = type(brain.index) == "table" and brain.index or {};
+	brain.rocks = type(brain.rocks) == "table" and brain.rocks or {};
+	brain.player = type(brain.player) == "table" and brain.player or {};
+	local TIERS = { COMMON = 1, UNCOMMON = 2, RARE = 3, EPIC = 4, LEGENDARY = 5, MYTHIC = 6, EXOTIC = 6, DIVINE = 7, SECRET = 7 };
+	local function trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")); end;
+	local function txt(o)
+		local ok, v = pcall(function() return o.ContentText; end);
+		if ok and type(v) == "string" and v ~= "" then return v; end;
+		return o.Text or "";
+	end;
+	local function shown(o)
+		while o and o ~= game do
+			if o:IsA("LayerCollector") then return o.Enabled ~= false; end;
+			if o:IsA("GuiObject") and not o.Visible then return false; end;
+			o = o.Parent;
+		end;
+		return false;
+	end;
+	local function norm(s) return (tostring(s or ""):lower():gsub("[^%w]", "")); end;
+	local function oddsOf(t)
+		local n = trim(t):upper():match("^1%s+IN%s+([%d,%.]+)$");
+		return n and tonumber((n:gsub(",", ""))) or nil;
+	end;
+	local function numOf(t)
+		local v = tostring(t or ""):gsub("[^%d%.]", "");
+		return tonumber(v);
+	end;
+	local function pgui() return l:FindFirstChild("PlayerGui"); end;
+	local function labelsIn(root, visibleOnly)
+		local out = {};
+		for _, o in ipairs(root:GetDescendants()) do
+			if (o:IsA("TextLabel") or o:IsA("TextButton")) and (not visibleOnly or o.Visible) then
+				local raw = trim(txt(o));
+				if raw ~= "" then
+					local p, sz = o.AbsolutePosition, o.AbsoluteSize;
+					out[#out + 1] = { o = o, raw = raw, t = raw:upper(), x = p.X + sz.X / 2, y = p.Y + sz.Y / 2, w = sz.X, h = sz.Y };
+				end;
+			end;
+		end;
+		return out;
+	end;
+	local function sizedAncestor(o, minX, minY, maxX)
+		local a = o.Parent;
+		while a and a:IsA("GuiObject") do
+			local s = a.AbsoluteSize;
+			if s.X >= minX and s.Y >= minY and (not maxX or s.X <= maxX) then return a; end;
+			a = a.Parent;
+		end;
+		return nil;
+	end;
+	local function findShownLabel(pred)
+		local pg = pgui();
+		if not pg then return nil; end;
+		for _, o in ipairs(pg:GetDescendants()) do
+			if o:IsA("TextLabel") and pred(trim(txt(o)):upper()) and shown(o) then return o; end;
+		end;
+		return nil;
+	end;
+	-- ---------------------------------------------------------------- menu control
+	local function indexWindow()
+		local found = findShownLabel(function(u) return u == "FOUND"; end);
+		return found and sizedAncestor(found, 600, 400) or nil;
+	end;
+	local function equipWindow()
+		local lbl = findShownLabel(function(u) return u == "EQUIPPED ITEMS"; end);
+		return lbl and lbl:FindFirstAncestorWhichIsA("LayerCollector") or nil;
+	end;
+	local function menuOpen()
+		return findShownLabel(function(u) return u == "BACKPACK" or u == "EQUIPMENT" or u == "INDEX"; end) ~= nil;
+	end;
+	local function pressT()
+		-- never type into another window: only when Roblox is focused or background input is on
+		if not (Q.background == true or inp.focused()) then return false; end;
+		inp.key(84, true);
+		task.wait(.06);
+		inp.key(84, false);
+		return true;
+	end;
+	local function clickTab(name)
+		local pg = pgui();
+		if not pg then return false; end;
+		for _, o in ipairs(pg:GetDescendants()) do
+			if (o:IsA("TextLabel") or o:IsA("TextButton")) and trim(txt(o)):upper() == name and shown(o) then
+				local btn = o:IsA("GuiButton") and o or o:FindFirstAncestorWhichIsA("GuiButton");
+				if btn and inp.clickGui(btn) then return true; end;
+			end;
+		end;
+		return false;
+	end;
+	local function waitFor(fn, secs)
+		local t0 = d();
+		while d() - t0 < secs do
+			local v = fn();
+			if v then return v; end;
+			task.wait(.1);
+		end;
+		return nil;
+	end;
+	-- ---------------------------------------------------------------- index reading
+	local function detailRootOf(labels, win)
+		for _, L in ipairs(labels) do
+			if L.t:match("^MINED%s+[%d,]+%s+TIMES?$") then
+				return sizedAncestor(L.o, 150, 250, win.AbsoluteSize.X * .6), L;
+			end;
+		end;
+		return nil, nil;
+	end;
+	local function readGrid(win)
+		local labels = labelsIn(win, true);
+		local detail = detailRootOf(labels, win);
+		local headers = {};
+		for _, L in ipairs(labels) do
+			local a, b = L.t:match("^(%d+)%s*/%s*(%d+)$");
+			if a and L.w < 120 then
+				-- zone header: a word label on the same row to the left ("GRASSLANDS   22/23")
+				local best, bd;
+				for _, M in ipairs(labels) do
+					if M ~= L and math.abs(M.y - L.y) < 12 and M.x < L.x and M.t:match("^[%u%s'%-]+$") then
+						local dd = L.x - M.x;
+						if not bd or dd < bd then best, bd = M, dd; end;
+					end;
+				end;
+				if best and best.t == "INDEX" then
+					brain.indexTotals = { found = tonumber(a), total = tonumber(b) };
+				elseif best and best.t ~= "FOUND" and not (detail and L.o:IsDescendantOf(detail)) then
+					headers[#headers + 1] = { name = best.raw, y = L.y, found = tonumber(a), total = tonumber(b) };
+				end;
+			end;
+		end;
+		table.sort(headers, function(x, y) return x.y < y.y; end);
+		local entries, seen = {}, {};
+		for _, L in ipairs(labels) do
+			local odds = oddsOf(L.t);
+			if odds and not (detail and L.o:IsDescendantOf(detail)) then
+				local tile = sizedAncestor(L.o, 60, 60, 260);
+				if tile and not seen[tile] then
+					seen[tile] = true;
+					local name, ny;
+					for _, M in ipairs(labelsIn(tile, true)) do
+						if not oddsOf(M.t) and M.t:match("%a") and (not ny or M.y < ny) then name, ny = M.raw, M.y; end;
+					end;
+					local ty = tile.AbsolutePosition.Y;
+					local zone;
+					for _, h in ipairs(headers) do
+						if h.y <= ty + 5 then zone = h.name; end;
+					end;
+					local found = name ~= nil and not name:find("%?");
+					local btn = tile:IsA("GuiButton") and tile or tile:FindFirstChildWhichIsA("GuiButton", true) or L.o:FindFirstAncestorWhichIsA("GuiButton");
+					entries[#entries + 1] = { name = name or "???", odds = odds, zone = zone, found = found, button = btn };
+				end;
+			end;
+		end;
+		brain.zones = brain.zones or {};
+		for _, h in ipairs(headers) do brain.zones[h.name] = { found = h.found, total = h.total }; end;
+		for i2, e in ipairs(entries) do
+			local key = e.found and e.name:upper() or string.format("??? %s 1 IN %s #%d", tostring(e.zone or "?"), tostring(e.odds), i2);
+			local rec = type(brain.index[key]) == "table" and brain.index[key] or {};
+			rec.name, rec.odds, rec.zone, rec.found = e.name, e.odds, e.zone or rec.zone, e.found or rec.found == true;
+			brain.index[key] = rec;
+			e.key = key;
+		end;
+		brain.indexScannedAt = os.time();
+		return entries, labels;
+	end;
+	local function readDetail(win)
+		local labels = labelsIn(win, true);
+		local droot, minedL = detailRootOf(labels, win);
+		if not droot then return nil; end;
+		local dl = {};
+		for _, L in ipairs(labels) do
+			if L.o:IsDescendantOf(droot) then dl[#dl + 1] = L; end;
+		end;
+		local tierL;
+		for _, L in ipairs(dl) do
+			if L.t:match("^%u+%s+ORE$") or L.t:match("^%u+%s+%u+$") and TIERS[L.t:match("^(%u+)")] then tierL = L; break; end;
+		end;
+		local name;
+		if tierL then
+			local bd;
+			for _, L in ipairs(dl) do
+				local dy = tierL.y - L.y;
+				if dy > 0 and dy < 80 and L.t:match("%a") and not oddsOf(L.t) and (not bd or dy < bd) then name, bd = L.raw, dy; end;
+			end;
+		end;
+		if not name then return nil; end;
+		local headOdds, headY;
+		for _, L in ipairs(dl) do
+			local o2 = oddsOf(L.t);
+			if o2 and L.y < minedL.y and (not headY or L.y > headY) then headOdds, headY = o2, L.y; end;
+		end;
+		local sources = {};
+		for _, L in ipairs(dl) do
+			local o2 = oddsOf(L.t);
+			if o2 and L.y > minedL.y then
+				local rock, bd;
+				for _, M in ipairs(dl) do
+					if M ~= L and math.abs(M.y - L.y) < math.max(10, L.h) and M.x < L.x and M.t:match("%a") and not oddsOf(M.t) then
+						local dd = L.x - M.x;
+						if not bd or dd < bd then rock, bd = M, dd; end;
+					end;
+				end;
+				if rock then
+					local zone, zd;
+					for _, M in ipairs(dl) do
+						local dy = M.y - rock.y;
+						if dy > 4 and dy < 30 and math.abs((M.x - M.w / 2) - (rock.x - rock.w / 2)) < 40 and not oddsOf(M.t) then
+							if not zd or dy < zd then zone, zd = M.raw, dy; end;
+						end;
+					end;
+					sources[#sources + 1] = { rock = rock.raw, zone = zone, odds = o2 };
+				end;
+			end;
+		end;
+		local key = name:upper();
+		local rec = type(brain.index[key]) == "table" and brain.index[key] or { name = name, found = true };
+		rec.tier = tierL and tierL.raw or rec.tier;
+		rec.odds = headOdds or rec.odds;
+		rec.mined = numOf(minedL.t);
+		rec.sources = sources;
+		rec.studied = os.time();
+		brain.index[key] = rec;
+		for _, sv in ipairs(sources) do
+			local rk = sv.rock:upper();
+			local rrec = type(brain.rocks[rk]) == "table" and brain.rocks[rk] or { name = sv.rock, drops = {} };
+			rrec.zone = sv.zone or rrec.zone;
+			rrec.drops = type(rrec.drops) == "table" and rrec.drops or {};
+			rrec.drops[key] = sv.odds;
+			brain.rocks[rk] = rrec;
+		end;
+		return rec;
+	end;
+	-- ---------------------------------------------------------------- equipment reading
+	local function readEquipment()
+		local gui = equipWindow();
+		if not gui then return false; end;
+		local labels = labelsIn(gui, true);
+		local equippedL;
+		for _, L in ipairs(labels) do if L.t == "EQUIPPED ITEMS" then equippedL = L; break; end; end;
+		local panel = equippedL and sizedAncestor(equippedL.o, 250, 300);
+		local function near(key, scope)
+			for _, L in ipairs(labels) do
+				if L.t == key and (not scope or L.o:IsDescendantOf(scope)) then
+					local best, bd;
+					for _, M in ipairs(labels) do
+						if M ~= L and M.t:find("%d") and (not scope or M.o:IsDescendantOf(scope)) then
+							local dy, dx = L.y - M.y, math.abs(M.x - L.x);
+							if dx < 120 and dy > 0 and dy < 45 then
+								if not bd or dy < bd then best, bd = M, dy; end;
+							end;
+						end;
+					end;
+					if best then return numOf(best.t), best.raw; end;
+				end;
+			end;
+			return nil;
+		end;
+		local p = brain.player;
+		p.luck = near("LUCK", panel) or p.luck;
+		p.power = near("POWER", panel) or p.power;
+		p.damage = near("DAMAGE", panel) or p.damage;
+		p.health = near("HEALTH", panel) or p.health;
+		-- the item shown in the detail card (outside the equipped panel)
+		local _, swingRaw = near("SWING SPEED");
+		if swingRaw then
+			p.swing = numOf(swingRaw);
+			p.range = near("RANGE");
+			p.crit = near("CRIT CHANCE");
+			for _, L in ipairs(labels) do
+				if L.t:match("^[%u%s']+%s+%+%d+$") and not (panel and L.o:IsDescendantOf(panel)) and L.h >= 14 then
+					p.item = L.raw;
+				end;
+				if L.t:match("%u+%s+SWORD$") or L.t:match("%u+%s+PICKAXE$") then p.itemTier = L.raw; end;
+			end;
+		end;
+		p.t = os.time();
+		return true;
+	end;
+	-- ---------------------------------------------------------------- lifetime stats (Stats tab)
+	local function readStats()
+		local title;
+		local pg = pgui();
+		for _, o2 in ipairs(pg and pg:GetDescendants() or {}) do
+			if o2:IsA("TextLabel") and trim(txt(o2)):upper() == "STATS" and shown(o2) and not o2:FindFirstAncestorWhichIsA("GuiButton") then
+				title = o2;
+				break;
+			end;
+		end;
+		local win = title and sizedAncestor(title, 500, 300);
+		if not win then return false; end;
+		local labels = labelsIn(win, true);
+		local out, n = {}, 0;
+		for _, L in ipairs(labels) do
+			if L.t:match("%a") and not L.t:find("%d") and L.t ~= "STATS" and not L.o:FindFirstAncestorWhichIsA("GuiButton") then
+				local best, bd;
+				for _, M in ipairs(labels) do
+					if M ~= L and M.t:find("%d") and math.abs(M.y - L.y) < math.max(10, L.h * .7) and M.x > L.x then
+						local dd = M.x - L.x;
+						if not bd or dd < bd then best, bd = M, dd; end;
+					end;
+				end;
+				if best then
+					out[L.raw] = best.raw;
+					n = n + 1;
+				end;
+			end;
+		end;
+		if n > 0 then
+			brain.lifetime = out;
+			brain.lifetimeAt = os.time();
+		end;
+		return n > 0;
+	end;
+	-- ---------------------------------------------------------------- gear tracking
+	-- remembers mining radius/reach per pickaxe and attack range per sword, so a swap is
+	-- handled instantly (no re-learning) and orbit/mining distances match the tool you hold
+	brain.gear = type(brain.gear) == "table" and brain.gear or {};
+	local gear = { pick = nil, sword = nil };
+	local function gearTick(now)
+		local character = l.Character;
+		if not character then return; end;
+		local tool = character:FindFirstChildOfClass("Tool");
+		local name = tool and tool.Name;
+		if not name then return; end;
+		if character:GetAttribute("PickaxeOut") == true then
+			local g = type(brain.gear[name]) == "table" and brain.gear[name] or { kind = "pickaxe" };
+			brain.gear[name] = g;
+			if gear.pick ~= name then
+				local prev = gear.pick;
+				gear.pick = name;
+				r.pickName = name;
+				if prev then
+					if g.radius and g.reach then
+						Q.radius, Q.reach = g.radius, g.reach;
+						if r.sync then r.sync(); end;
+					end;
+					-- new pickaxe: re-read mining stats from the game
+					if r.readStats then task.delay(1, function() pcall(r.readStats, true); end); end;
+					notify(string.format("Pickaxe changed to %s%s", name, g.radius and string.format(" (radius %.2f, reach %.2f known)", g.radius, g.reach) or ", learning its stats"), "Delve gear");
+					r.indexPending = true;
+				end;
+			end;
+			if r.statsFound then g.radius, g.reach = Q.radius, Q.reach; end;
+		elseif character:GetAttribute("WeaponDrawn") == true then
+			local g = type(brain.gear[name]) == "table" and brain.gear[name] or { kind = "sword" };
+			brain.gear[name] = g;
+			if gear.sword ~= name then
+				local prev = gear.sword;
+				gear.sword = name;
+				r.swordName = name;
+				if prev then
+					notify(string.format("Sword changed to %s%s", name, g.coneRange and string.format(" (range %.1f known)", g.coneRange) or ", learning its range"), "Delve gear");
+					r.indexPending = true;
+				end;
+			end;
+			if r.range then g.coneRange = r.range; end;
+			r.swordLearnedRange = g.coneRange;
+		end;
+	end;
+	-- ---------------------------------------------------------------- rarity ranking from the Index
+	-- (mining stays the same: every rock is mined. The Index only decides what counts as rare.)
+	local oddsSorted = {};
+	local function rebuild()
+		local list = {};
+		for _, rec in pairs(brain.index) do
+			local od = type(rec) == "table" and tonumber(rec.odds);
+			if od then list[#list + 1] = od; end;
+		end;
+		table.sort(list, function(x, y) return x > y; end);
+		oddsSorted = list;
+	end;
+	-- rank 1 = rarest entry in your Index; returns rank, total
+	local function rarityRank(odds)
+		if not odds or #oddsSorted == 0 then return nil, #oddsSorted; end;
+		local rank = 1;
+		for _, v in ipairs(oddsSorted) do
+			if v > odds then rank = rank + 1; else break; end;
+		end;
+		return rank, #oddsSorted;
+	end;
+	-- ---------------------------------------------------------------- scan
+	local busy = false;
+	local function scan(reason, studyAllowed)
+		if busy then return; end;
+		busy = true;
+		r.scanning = true;
+		local ok, err = pcall(function()
+			local opened = false;
+			if not menuOpen() then
+				if not pressT() then
+					r.indexPending = true;
+					return;
+				end;
+				opened = true;
+				if not waitFor(menuOpen, 2) then return; end;
+			end;
+			clickTab("INDEX");
+			local win = waitFor(indexWindow, 2);
+			if win then
+				local entries = readGrid(win);
+				local studied = 0;
+				if studyAllowed then
+					for _, e in ipairs(entries) do
+						local rec = brain.index[e.key];
+						if e.found and e.button and not (type(rec) == "table" and type(rec.sources) == "table" and #rec.sources > 0) then
+							if relicAPI.hasDraft() or run.active then break; end;
+							inp.clickGui(e.button);
+							task.wait(.18);
+							if readDetail(win) then studied = studied + 1; end;
+						end;
+					end;
+				end;
+				r.indexStudied = studied;
+			end;
+			if clickTab("EQUIPMENT") then
+				task.wait(.5);
+				readEquipment();
+			end;
+			if clickTab("STATS") then
+				task.wait(.5);
+				readStats();
+			end;
+			if opened then
+				pressT();
+				task.wait(.4);
+				if menuOpen() then pressT(); end;
+			end;
+		end);
+		r.scanning = false;
+		busy = false;
+		rebuild();
+		markBrain();
+		saveBrain(true);
+		if not ok then
+			notify("Index scan error: " .. tostring(err), "Delve index");
+		elseif not r.indexPending then
+			local t = brain.indexTotals;
+			notify(string.format("Index read%s: %s found. Studied %d new entries.",
+				reason and (" (" .. reason .. ")") or "", t and (t.found .. "/" .. t.total) or "?",
+				r.indexStudied or 0), "Delve index");
+		end;
+	end;
+	-- ---------------------------------------------------------------- drop pop-ups
+	local seenToast = setmetatable({}, { __mode = "k" });
+	local lastPost = -1e9;
+	local function onDrop(name, odds, tier, count, fromChat)
+		local key = name:upper();
+		local rec = brain.index[key];
+		local isNew = brain.indexScannedAt ~= nil and (type(rec) ~= "table" or rec.found ~= true);
+		rec = type(rec) == "table" and rec or { name = name };
+		rec.found, rec.odds = true, odds or rec.odds;
+		rec.drops = (tonumber(rec.drops) or 0) + 1;
+		rec.lastDrop = os.time();
+		brain.index[key] = rec;
+		markBrain();
+		local tierRank = TIERS[tostring(tier or ""):upper()] or 0;
+		local rank, totalRanked = rarityRank(odds);
+		local topPct = tonumber(CFG.rareTopPct) or 3;
+		local inTop = rank and totalRanked >= 20 and topPct > 0 and rank <= math.max(1, math.ceil(totalRanked * topPct / 100));
+		local rare = (odds or 0) >= (tonumber(CFG.rareDropOdds) or 500) or tierRank >= 4 or isNew or inTop or fromChat == true;
+		if not rare then return; end;
+		pcall(function()
+			if type(appendfile) == "function" then
+				appendfile("DelveDrops.jsonl", game:GetService("HttpService"):JSONEncode({
+					t = os.time(), name = name, odds = odds, tier = tier, count = count, new = isNew, depth = run.depth,
+				}) .. "\n");
+			end;
+		end);
+		notify(string.format("%s %s (1 in %s)%s", isNew and "NEW INDEX ENTRY:" or "Rare drop:", name, tostring(odds or "?"), tier and (" [" .. tier .. "]") or ""), "Delve drop");
+		if CFG.dropWebhook ~= false and d() - lastPost > 3 then
+			lastPost = d();
+			local fields = {
+				{ name = "Odds", value = odds and ("1 in " .. tostring(odds)) or "?", inline = true },
+				{ name = "Rarity", value = tostring(tier or (rec.tier or "?")), inline = true },
+				{ name = "Amount", value = count and ("x" .. count) or "x1", inline = true },
+				{ name = "Where", value = tostring(rec.zone or "?") .. (run.depth > 0 and string.format(" | depth %d m", run.depth) or ""), inline = true },
+				{ name = "Index", value = brain.indexTotals and (brain.indexTotals.found .. "/" .. brain.indexTotals.total) or "?", inline = true },
+				{ name = "Rarity rank", value = rank and string.format("#%d rarest of %d known", rank, totalRanked) or "?", inline = true },
+			};
+			if fromChat then fields[#fields + 1] = { name = "Seen in", value = "Roblox chat", inline = true }; end;
+			task.spawn(r.postEmbed, {
+				title = (isNew and "NEW INDEX ENTRY: " or "Rare drop: ") .. name,
+				color = isNew and 16766720 or (tierRank >= 5 and 15844367 or 10181046),
+				fields = fields,
+				footer = { text = "Delve v3 brain | " .. tostring(l.Name) },
+			});
+		end;
+		if isNew then task.delay(3, function() r.indexPending = true; end); end;
+		rebuild();
+	end;
+	local function checkToast(lbl, silent)
+		if not (lbl and lbl.Parent and lbl:IsA("TextLabel")) then return; end;
+		local odds = oddsOf(txt(lbl));
+		if not odds or not shown(lbl) or lbl:FindFirstAncestorWhichIsA("ScrollingFrame") then return; end;
+		-- climb to the pop-up box (small), never into a big menu window
+		local box = lbl.Parent;
+		while box and box.Parent and box.Parent:IsA("GuiObject") and box.Parent.AbsoluteSize.Y <= 140 and box.Parent.AbsoluteSize.X <= 520 do
+			box = box.Parent;
+		end;
+		if not box or not box:IsA("GuiObject") or box.AbsoluteSize.X > 520 then return; end;
+		local name, tier, count;
+		for _, M in ipairs(labelsIn(box, true)) do
+			if not oddsOf(M.t) then
+				if TIERS[M.t] then
+					tier = M.raw;
+				elseif M.t:match("%a") and not name then
+					count = M.t:match("[X×]%s*(%d+)%s*$");
+					name = trim(M.raw:gsub("%s*[xX×]%s*%d+%s*$", ""));
+				end;
+			end;
+		end;
+		if not name or name == "" then return; end;
+		if seenToast[box] == name then return; end;
+		seenToast[box] = name;
+		if not silent then onDrop(name, odds, tier, tonumber(count)); end;
+	end;
+	local function sweep(silent)
+		local pg = pgui();
+		if not pg then return; end;
+		local win = indexWindow();
+		for _, o2 in ipairs(pg:GetDescendants()) do
+			if o2:IsA("TextLabel") and not (win and o2:IsDescendantOf(win)) then pcall(checkToast, o2, silent); end;
+		end;
+	end;
+	local conn, chatConn;
+	local chatSeen = {};
+	local function onChat(text)
+		local plain = tostring(text or ""):gsub("<[^>]->", "");
+		local up = plain:upper();
+		local oddsStr = up:match("1%s+OUT%s+OF%s+([%d,]+)") or up:match("1%s+IN%s+([%d,]+)") or up:match("1/([%d,]+)");
+		local odds = oddsStr and tonumber((oddsStr:gsub(",", "")));
+		if not odds then return; end;
+		-- only your own finds
+		local me1, me2 = tostring(l.Name):upper(), tostring(l.DisplayName):upper();
+		if not (up:find(me1, 1, true) or up:find(me2, 1, true)) then return; end;
+		local key = up .. "|" .. math.floor(os.time() / 10);
+		if chatSeen[key] then return; end;
+		chatSeen[key] = true;
+		local item = plain:match("[Ff]ound%s+(.-)%s*[%(%[]") or plain:match("[Gg]ot%s+(.-)%s*[%(%[]")
+			or plain:match("[Oo]btained%s+(.-)%s*[%(%[]") or plain:match("[Mm]ined%s+(.-)%s*[%(%[]");
+		item = trim(item and item:gsub("^[Aa]n?%s+", "") or plain:sub(1, 60));
+		local tier;
+		for t2 in pairs(TIERS) do
+			if up:find("%f[%a]" .. t2 .. "%f[%A]") then tier = t2; end;
+		end;
+		pcall(onDrop, item, odds, tier, nil, true);
+	end;
+	local function hookChat()
+		pcall(function()
+			local tcs = game:GetService("TextChatService");
+			chatConn = tcs.MessageReceived:Connect(function(msg)
+				pcall(onChat, msg and msg.Text);
+			end);
+		end);
+		if not chatConn then
+			pcall(function()
+				local events = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents");
+				local ev = events and events:FindFirstChild("OnMessageDoneFiltering");
+				if ev then
+					chatConn = ev.OnClientEvent:Connect(function(data)
+						pcall(onChat, type(data) == "table" and data.Message);
+					end);
+				end;
+			end);
+		end;
+	end;
+	local function start()
+		local pg = pgui();
+		if not pg then return false; end;
+		sweep(true); -- pop-ups already on screen at launch don't count as new drops
+		hookChat();
+		conn = pg.DescendantAdded:Connect(function(o2)
+			if o2:IsA("TextLabel") then
+				task.delay(.15, function() pcall(checkToast, o2, false); end);
+			end;
+		end);
+		return true;
+	end;
+	r.stopIndex = function()
+		if conn then pcall(function() conn:Disconnect(); end); conn = nil; end;
+		if chatConn then pcall(function() chatConn:Disconnect(); end); chatConn = nil; end;
+	end;
+	local tickAt, sweepAt, startedAt = -1e9, -1e9, nil;
+	local function tick(now)
+		if now - tickAt < 1 then return; end;
+		tickAt = now;
+		pcall(gearTick, now);
+		startedAt = startedAt or now;
+		if not conn and not start() then return; end;
+		if now - sweepAt > 4 then
+			sweepAt = now;
+			sweep(false);
+		end;
+		-- you opened the Index yourself: learn from it (and from whatever entry you select)
+		if not busy and now - (r.passiveIdxAt or 0) > 3 then
+			r.passiveIdxAt = now;
+			local win = indexWindow();
+			if win then
+				pcall(readGrid, win);
+				pcall(readDetail, win);
+			end;
+			if equipWindow() then pcall(readEquipment); end;
+			pcall(readStats);
+		end;
+		if CFG.autoIndexScan ~= false and not busy and not relicAPI.hasDraft() then
+			if not r.indexLaunchDone and now - startedAt > 4 then
+				r.indexLaunchDone = true;
+				task.spawn(scan, "launch", not run.active);
+			elseif r.indexPending and not run.active then
+				r.indexPending = false;
+				task.spawn(scan, "update", true);
+			end;
+		end;
+	end;
+	pcall(rebuild);
+	local function report()
+		local found, total, studied, missingByZone = 0, 0, 0, {};
+		for _, rec in pairs(brain.index) do
+			if type(rec) == "table" then
+				total = total + 1;
+				if rec.found then found = found + 1; else
+					local z = tostring(rec.zone or "?");
+					missingByZone[z] = (missingByZone[z] or 0) + 1;
+				end;
+				if type(rec.sources) == "table" and #rec.sources > 0 then studied = studied + 1; end;
+			end;
+		end;
+		local miss = {};
+		for z, n in pairs(missingByZone) do miss[#miss + 1] = z .. " " .. n; end;
+		local rocks = 0;
+		for _ in pairs(brain.rocks) do rocks = rocks + 1; end;
+		local p = brain.player;
+		local gearList = {};
+		for gname, g in pairs(brain.gear) do
+			if type(g) == "table" then
+				if g.kind == "pickaxe" and g.radius then
+					gearList[#gearList + 1] = string.format("%s r%.2f/%.2f", gname, g.radius, g.reach or 0);
+				elseif g.kind == "sword" and g.coneRange then
+					gearList[#gearList + 1] = string.format("%s range %.1f", gname, g.coneRange);
+				end;
+			end;
+		end;
+		local life = 0;
+		for _ in pairs(type(brain.lifetime) == "table" and brain.lifetime or {}) do life = life + 1; end;
+		return string.format("Index: %d entries read, %d found, %d with drop sources. %d rocks known.\nMissing by zone: %s\nYou: luck %s, power %s, damage %s, health %s%s\nGear learned: %s\nLifetime stats read: %d",
+			total, found, studied, rocks, #miss > 0 and table.concat(miss, ", ") or "none",
+			tostring(p.luck or "?"), tostring(p.power or "?"), tostring(p.damage or "?"), tostring(p.health or "?"),
+			p.item and (", item " .. p.item) or "", #gearList > 0 and table.concat(gearList, ", ") or "none yet", life);
+	end;
+	return { tick = tick, scan = scan, report = report, rebuild = rebuild };
+end)();
 -- ===================================================================================
 -- DODGE BRAIN: learns from every hit you take
 --   * hit while standing in a telegraphed zone  -> widen the safety margin (and roll earlier if
@@ -4506,6 +5227,7 @@ local brainTick = (function()
 		end;
 		if lr and lr ~= hs.rollMark then hs.rollMark, hs.hitsAtRoll = lr, run.hits; end;
 		pcall(relicAPI.runTick, now);
+		pcall(indexAPI.tick, now);
 		-- settings autosave (cheap: only writes when something changed)
 		if now - (hs.setAt or 0) > 2 then
 			hs.setAt = now;
@@ -4678,6 +5400,7 @@ r.stop = function()
 		dh = true;
 		r.disconnectAntiAfk();
 		pcall(function() r.stopBrain(); end);
+		pcall(function() r.stopIndex(); end);
 		pcall(function() relicAPI.finish(); end);
 		pcall(saveBrain, true);
 		uiNotify = nil;
@@ -4804,6 +5527,8 @@ end;
 				{ k = "relicNotify", t = "toggle", text = "Announce relic choice" },
 				{ k = "relicDelay", t = "slider", text = "Relic pick delay", min = .2, max = 5, step = .1, suffix = " s" },
 				{ k = "relicCodexNotify", t = "toggle", text = "Announce newly discovered relics" },
+				{ k = "autoIndexScan", t = "toggle", text = "Read Index + Equipment on launch (T menu)" },
+				{ k = "rareTopPct", t = "slider", text = "Also rare: top % rarest in your Index", min = 0, max = 25, step = 1, suffix = " %" },
 				{ k = "dodgeLearn", t = "toggle", text = "Learn from hits (margins, mob reach, roll timing)" },
 				{ k = "smartEscape", t = "toggle", text = "Pathfind out of attacks (tile map)" },
 				{ k = "cornerAvoid", t = "toggle", text = "Avoid corners and map edges" },
@@ -4826,6 +5551,8 @@ end;
 				{ k = "webhookOn", t = "toggle", text = "Post to Discord when a run is done" },
 				{ k = "webhookUrl", t = "input", text = "Discord webhook URL" },
 				{ k = "webhookDelay", t = "slider", text = "Screenshot delay after run ends", min = 0, max = 10, step = .5, suffix = " s" },
+				{ k = "dropWebhook", t = "toggle", text = "Post rare drops and new index entries" },
+				{ k = "rareDropOdds", t = "slider", text = "Rare drop = 1 in at least", min = 50, max = 10000, step = 50, suffix = "" },
 			},
 		},
 		{
@@ -4922,7 +5649,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v3 | Brain",
+		Title = "Delve v3.6 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -5134,6 +5861,18 @@ end;
 						tonumber(dd.extra) or 0, tonumber(dd.leadAdj) or 0, tonumber(dd.hits) or 0, tonumber(dd.dodges) or 0, tonumber(brain.runCount) or 0)
 						.. (#reach > 0 and ("\nMob reach: " .. table.concat(reach, ", ")) or "")
 						.. (#threat > 0 and ("\nFight mobs within: " .. table.concat(threat, ", ")) or ""), "Delve brain");
+				end,
+			});
+			tab:Button({
+				Title = "Scan Index + Equipment now",
+				Callback = function()
+					task.spawn(indexAPI.scan, "manual", not run.active);
+				end,
+			});
+			tab:Button({
+				Title = "Show index knowledge",
+				Callback = function()
+					notify(indexAPI.report(), "Delve index");
 				end,
 			});
 			tab:Button({
