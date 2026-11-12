@@ -347,6 +347,16 @@ do
 		if type(brain[key]) ~= "table" then brain[key] = {}; end;
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
+	if (tonumber(brain.learnV) or 0) < 2 then
+		-- v5.4 audit: every attack shared one bucket ("Hazards/Part") so its numbers sat at their caps,
+		-- category weights were all at the 2.5 cap, the run baseline mixed abandoned 40 s runs with real
+		-- ones, and a sword reach of 119 studs was learned from proc damage. Start those fresh.
+		brain.learnV = 2;
+		brain.attacks, brain.patterns, brain.swordHit, brain.runs = {}, {}, {}, {};
+		brain.cat, brain.catMode = {}, {};
+		brain.dodge.iframe = .35;
+		brain.dodge.leadAdj = 0;
+	end;
 	brain.dodge.extra = tonumber(brain.dodge.extra) or 0;
 	brain.dodge.leadAdj = tonumber(brain.dodge.leadAdj) or 0;
 	brain.dodge.hits = tonumber(brain.dodge.hits) or 0;
@@ -1948,8 +1958,15 @@ local dangerMem = { floorZones = {}, refreshAt = -1e9 };
 function dangerMem.tag(z, part, kind)
 	if type(z) ~= "table" then return; end;
 	if not z.sig then
+		-- almost every attack in the game is a part called "Part" in "Hazards", so the name alone
+		-- lumped all attacks together. Shape, size class and colour tell them apart.
 		local pn = part and part.Parent and part.Parent.Name or "";
-		z.sig = tostring(kind or "zone") .. ":" .. pn .. "/" .. tostring(part and part.Name or "?");
+		local size = z.circle and (z.h1 or 0) or math.max(z.h1 or 0, z.h2 or 0);
+		local bucket = size < 2 and "XS" or size < 4 and "S" or size < 8 and "M" or size < 16 and "L" or "XL";
+		local col = "";
+		pcall(function() col = part.BrickColor.Name; end);
+		z.sig = tostring(kind or "zone") .. ":" .. pn .. "/" .. tostring(part and part.Name or "?") .. ":"
+			.. (z.circle and "circle" or "rect") .. "-" .. bucket .. (col ~= "" and (":" .. col) or "");
 	end;
 	local a = type(brain.attacks) == "table" and brain.attacks[z.sig];
 	z.sx = type(a) == "table" and tonumber(a.extra) or 0;
@@ -2065,7 +2082,14 @@ function dangerMem.onAttack(z, now)
 		if type(tr) == "table" and (tonumber(tr.n) or 0) > bestN then nextSig, bestN, gap = ns, tonumber(tr.n), tr.gap / tr.n; end;
 	end;
 	dangerMem.live = { boss = key, sig = z.sig, at = now };
-	dangerMem.predict = (nextSig and bestN >= 2) and { boss = key, sig = nextSig, at = now + gap, info = pt.sigs[nextSig] } or nil;
+	local totalN = 0;
+	for _, tr in pairs(type(pt.trans[z.sig]) == "table" and pt.trans[z.sig] or {}) do
+		if type(tr) == "table" then totalN = totalN + (tonumber(tr.n) or 0); end;
+	end;
+	local conf = totalN > 0 and bestN / totalN or 0;
+	-- only act on a prediction seen 5+ times that comes true most of the time
+	dangerMem.predict = (nextSig and bestN >= 5 and conf >= .6)
+		and { boss = key, sig = nextSig, at = now + gap, info = pt.sigs[nextSig], conf = conf } or nil;
 end;
 local function Xl(m, G)
 	Fl = {};
@@ -3879,6 +3903,12 @@ local relicAPI = (function()
 	end);
 	local function runStart(now)
 		run.active, run.startAt = true, now;
+		for _, a in pairs(brain.attacks or {}) do
+			if type(a) == "table" then
+				a.extra = (tonumber(a.extra) or 0) * .9;
+				a.lead = (tonumber(a.lead) or 0) * .9;
+			end;
+		end;
 		run.mechs, run.newMechs = {}, {};
 		run.relics, run.depth, run.wave, run.died, run.hits = {}, 0, 0, false, 0;
 		run.combatT, run.mineT = 0, 0;
@@ -3918,17 +3948,27 @@ local relicAPI = (function()
 		-- doesn't make every relic from older runs look bad
 		local pw = brain.player and tonumber(brain.player.power);
 		local statKey = pw and pw > 0 and string.format("%s:p%d", mode, math.floor(math.log10(pw) * 4)) or mode;
+		-- only real runs teach: a death, a results screen, or 2+ minutes. Quick exits and runs cut off by
+		-- a disconnect are recorded but don't change what it has learned.
+		local learnable = died or res ~= nil or dur >= 120;
+		-- compare with your last 20 runs at similar gear power (not with every run ever)
 		local st = brain.runs[statKey];
-		if type(st) ~= "table" then st = { n = 0, mean = 0, m2 = 0 }; brain.runs[statKey] = st; end;
-		local std = st.n >= 3 and math.sqrt(st.m2 / (st.n - 1)) or 10;
-		std = math.max(std, 3);
-		local z = st.n >= 1 and (score - st.mean) / std or 0;
-		st.n = st.n + 1;
-		local delta = score - st.mean;
-		st.mean = st.mean + delta / st.n;
-		st.m2 = st.m2 + delta * (score - st.mean);
-		local zc = math.max(-2.5, math.min(2.5, z));
-		if Q.relicLearn ~= false then
+		if type(st) ~= "table" or type(st.recent) ~= "table" then st = { recent = {} }; brain.runs[statKey] = st; end;
+		local recent = st.recent;
+		local mean, var = 0, 0;
+		for _, v in ipairs(recent) do mean = mean + v; end;
+		mean = #recent > 0 and mean / #recent or 0;
+		for _, v in ipairs(recent) do var = var + (v - mean) ^ 2; end;
+		local std = #recent >= 3 and math.sqrt(var / (#recent - 1)) or 0;
+		-- the score is mostly depth: differences under ~10% of a typical run aren't meaningful
+		std = math.max(std, 50, math.abs(mean) * .1);
+		local z = #recent >= 3 and (score - mean) / std or 0;
+		if learnable then
+			recent[#recent + 1] = score;
+			while #recent > 20 do table.remove(recent, 1); end;
+		end;
+		local zc = learnable and math.max(-2.5, math.min(2.5, z)) or 0;
+		if Q.relicLearn ~= false and learnable and zc ~= 0 then
 			brain.catMode[mode] = type(brain.catMode[mode]) == "table" and brain.catMode[mode] or {};
 			local cm = brain.catMode[mode];
 			for idx, pick in ipairs(snap.relics) do
@@ -3954,7 +3994,17 @@ local relicAPI = (function()
 				end;
 			end;
 		end;
-		for key in pairs(type(snap.mechs) == "table" and snap.mechs or {}) do
+		-- category weights are relative: keep their average at 1 so they can't all drift to the cap
+		local function normalize(t)
+			local sum, n = 0, 0;
+			for _, v in pairs(t) do if tonumber(v) then sum, n = sum + v, n + 1; end; end;
+			if n < 2 or sum <= 0 then return; end;
+			local avg = sum / n;
+			for k, v in pairs(t) do if tonumber(v) then t[k] = math.max(.4, math.min(2.5, v / avg)); end; end;
+		end;
+		normalize(brain.cat);
+		if type(brain.catMode[mode]) == "table" then normalize(brain.catMode[mode]); end;
+		for key in pairs((learnable and type(snap.mechs) == "table") and snap.mechs or {}) do
 			local m = brain.mech[key];
 			if type(m) == "table" then
 				m.n, m.zsum = (tonumber(m.n) or 0) + 1, (tonumber(m.zsum) or 0) + zc;
@@ -3978,6 +4028,7 @@ local relicAPI = (function()
 			combatPct = (snap.combatT + snap.mineT) > 0 and math.floor(snap.combatT / (snap.combatT + snap.mineT) * 100 + .5) or nil,
 		};
 		record.rareDrops, record.closeCalls, record.newMechanics = snap.rare, snap.close, snap.newMechs;
+		record.learned = learnable;
 		pcall(function()
 			local line = Http:JSONEncode(record) .. "\n";
 			if type(appendfile) == "function" and type(isfile) == "function" and isfile("DelveRuns.jsonl") then
@@ -4124,6 +4175,7 @@ local function YQ()
 	if r.liveHitMax == nil and type(brain.swordHit) == "table" and brain.player then
 		r.liveHitMax = tonumber(brain.swordHit[tostring(brain.player.sword or "?")]);
 	end;
+	if r.liveHitMax and r.liveHitMax > 20 then r.liveHitMax = nil; end;
 	if r.liveHitMax then out = math.max(out, math.min(manual, r.liveHitMax * .9)); end;
 	return math.max(2, out - (tonumber(r.orbitShrink) or 0));
 end;
@@ -4368,7 +4420,8 @@ end;
 local function mh(m)
 	NQ(m);
 	IQ(m);
-	pcall(prePosition, m);
+	-- (v5.4) pattern-based pre-moves are paused: with the old lumped attack data they forced 591
+	-- meaningless "step out" moves. They come back once the new attack fingerprints prove reliable.
 	pcall(attackRoll, m);
 	if not next(Cl) then
 		JQ = nil;
@@ -4441,23 +4494,20 @@ local function navBuild()
 	if nav.tiles == i and not nav.map then return false; end;
 	-- the tile list gets refreshed all the time; only a different floor (other size or position) is a new map.
 	-- Rebuilding every refresh wiped the blocked pillars, so it walked into the same pillar again and again.
-	local sig = nil;
-	if #i >= 3 then
-		local a1, b1 = math.huge, math.huge;
-		for _, t in ipairs(i) do
-			if t.cx < a1 then a1 = t.cx; end;
-			if t.cz < b1 then b1 = t.cz; end;
-		end;
-		local t1 = i[1];
-		sig = string.format("%d|%d|%d|%d|%d", #i, a1, b1, math.floor(t1.wx / 4 + .5), math.floor(t1.wz / 4 + .5));
-	end;
-	if sig and sig == nav.sig and nav.map then
+	-- the tile list is refreshed all the time and shrinks as the floor collapses. Rebuild the map at most
+	-- once a second, and only forget blocked pillars when it's a different floor (run id + depth).
+	local fkey = tostring(l:GetAttribute("RunId")) .. "|" .. tostring(run.depth);
+	if nav.map and fkey == nav.fkey and d() - (nav.builtAt or 0) < 1 then
 		nav.tiles = i;
 		return true;
 	end;
-	nav.sig = sig;
+	local newFloor = fkey ~= nav.fkey;
+	nav.fkey, nav.builtAt = fkey, d();
 	nav.tiles, nav.map, nav.open = i, nil, nil;
-	nav.blocked = {};
+	if newFloor then
+		nav.blocked = {};
+		nav.needScan = true;
+	end;
 	if #i < 3 then return false; end;
 	local map = {};
 	for _, t in ipairs(i) do map[t.cx * 4096 + t.cz] = t; end;
@@ -4491,8 +4541,11 @@ local function navBuild()
 		end;
 	end;
 	nav.map, nav.open = map, open;
-	-- new floor: find the pillars on it right away
-	task.defer(function() pcall(nav.scanPillars); end);
+	-- new floor: find the pillars on it once
+	if nav.needScan then
+		nav.needScan = false;
+		task.defer(function() pcall(nav.scanPillars); end);
+	end;
 	return true;
 end;
 local function navCellAt(x, z)
@@ -4996,13 +5049,15 @@ function bossStudy.tick(list, pos, now)
 			-- LIVE SWORD RANGE: the farthest distance your hits really land at (relics/gear change it)
 			local n2 = #tg.hist;
 			local prevH = n2 >= 2 and tg.hist[n2 - 1] or nil;
-			if prevH and tg.hist[n2].hp < prevH.hp - .5 then
-				r.liveHitMax = math.max((tonumber(r.liveHitMax) or dd) * .995, dd);
+			-- damage from procs/flames/lightning can land anywhere: only count hits within believable sword reach
+			local plausible = math.min(20, ((r.range or r.swordLearnedRange or tonumber(CFG.fightDist) or 8)) * 1.5);
+			if prevH and tg.hist[n2].hp < prevH.hp - .5 and dd <= plausible then
+				r.liveHitMax = math.min(20, math.max((tonumber(r.liveHitMax) or dd) * .995, dd));
 				r.noHitSince = now;
 				r.orbitShrink = math.max(0, (tonumber(r.orbitShrink) or 0) - .1);
 				brain.swordHit = type(brain.swordHit) == "table" and brain.swordHit or {};
 				brain.swordHit[tostring(brain.player and brain.player.sword or "?")] = r.liveHitMax;
-			elseif WQ == "combat" and now - (r.noHitSince or now) > 2.5 then
+			elseif WQ == "combat" and dd <= (tonumber(CFG.fightDist) or 8) + 2 and now - (r.noHitSince or now) > 2.5 then
 				-- swinging but nothing lands: get closer
 				r.orbitShrink = math.min(4, (tonumber(r.orbitShrink) or 0) + .5);
 				r.noHitSince = now;
@@ -6795,9 +6850,14 @@ local brainTick = (function()
 						else
 							a.lead = math.min(.3, (tonumber(a.lead) or 0) + .02); -- still hit inside the roll: roll earlier
 							a.late = (tonumber(a.late) or 0) + 1;
+							-- and the i-frames are shorter than believed
+							brain.dodge.iframe = math.max(.15, iw * .9 + since * .1);
 						end;
-					else
-						a.lead = math.min(.3, (tonumber(a.lead) or 0) + .04); -- didn't roll in time at all
+					elseif now - (r.lastRoll or -1e9) >= yl and z.seenAt and now - z.seenAt >= .25 then
+						-- the roll was ready and the attack was visible in time, but it didn't roll: roll earlier.
+						-- (No warning or roll on cooldown = not a timing problem, so timing is left alone.)
+						a.lead = math.min(.3, (tonumber(a.lead) or 0) + .03);
+						a.missed = (tonumber(a.missed) or 0) + 1;
 					end;
 					if z.hole and math.sqrt((pos.X - z.x) ^ 2 + (pos.Z - z.z) ^ 2) < z.hole then
 						-- hit while standing in the "safe" inner circle: it isn't safe for this attack
@@ -6975,12 +7035,15 @@ local brainTick = (function()
 				local a = r.lastRollSig and brain.attacks[r.lastRollSig];
 				if type(a) == "table" then
 					a.extra = math.max(0, (tonumber(a.extra) or 0) - .03);
+					a.lead = (tonumber(a.lead) or 0) * .97; -- a clean dodge eases the timing back too
 					a.perfect = (tonumber(a.perfect) or 0) + 1;
 				end;
-				-- a clean roll through an attack that landed mid-roll: the i-frames last at least that long
+				-- a clean roll through an attack that landed mid-roll: the i-frames last at least about that long.
+				-- Moves slowly (it may also have just missed), instead of ratcheting to the cap.
 				local hitIn = r.lastRollHitIn;
-				if hitIn and hitIn > 0 and hitIn < .8 then
-					brain.dodge.iframe = math.min(.6, math.max((tonumber(brain.dodge.iframe) or .35) * .98, hitIn + .05));
+				local iw0 = tonumber(brain.dodge.iframe) or .35;
+				if hitIn and hitIn > 0 and hitIn < .8 and hitIn + .05 > iw0 then
+					brain.dodge.iframe = math.min(.6, iw0 * .95 + (hitIn + .05) * .05);
 				end;
 				r.lastRollHitIn = nil;
 				local dd = brain.dodge;
@@ -7536,7 +7599,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.3 | Brain",
+		Title = "Delve v5.4 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

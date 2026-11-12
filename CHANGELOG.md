@@ -1,6 +1,21 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.3 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.4 | Brain`).
+
+## v5.4: Learning audit, stage 1 (fix the learning data)
+Based on an audit of 30 runs, the brain file, ~15,000 reasoning-log lines and the dodge log. No new features; this makes the existing learning trustworthy.
+
+| Problem found | Evidence | Change |
+|---|---|---|
+| Every attack shared one learning bucket | nearly all hazards are named `Hazards/Part`; that bucket sat at its caps (+2.84 st, roll 0.35 s early) | Attacks are fingerprinted by shape, size class and colour, so each type learns separately. Old attack and boss-pattern data reset. |
+| Dodge timing only moved one way | roll timing at its cap despite 157 clean dodges; i-frame estimate stuck at the 0.6 s cap | Clean dodges ease timing back; a hit inside the roll shortens the i-frame estimate; i-frames move slowly instead of ratcheting; a missed roll only counts when the roll was ready and the attack was visible in time; every attack lesson fades 10% per run. |
+| Relic category weights all at the 2.5 cap | 6 of 9 categories at exactly 2.5 | Weights are kept relative (average 1), so they keep telling categories apart. Reset. |
+| Quick exits taught it wrong lessons | runs of 38-64 s at 340-550 m counted as bad runs (z -1.7 to -2.5) | Only runs that died, showed a results screen or lasted 2+ minutes teach it. Each run is compared with your last 20 real runs at similar gear power, not every run ever. Replaying the 30 runs: deep runs now range 1.1-2.1 instead of all hitting the 2.5 cap. |
+| Pillar blocks still wiped | "floor mapped" logged 13,126 times | The floor map is tied to the floor (run id + depth); it rebuilds at most once a second, and blocked pillars are kept until the next floor. Pillars are scanned once per floor. |
+| Sword reach learned as 119 studs | proc/lightning damage counted as sword hits; "hits not landing at 187 st" | Only hits within believable sword reach count (max 20 st), "not landing" only within fighting distance, bad value reset. |
+| Boss "predictions" forced bad moves | 591 forced "step out" moves from the lumped attack data | Pattern-based pre-moves paused; the roll is only held for a prediction seen 5+ times that comes true 60%+ of the time. |
+
+Kept as-is: saved learning across restarts, relic learning with confidence weighting, relic/draft reading, depth fix, death-screen reader, reasoning log.
 
 ## v5.3: Stationary boss mechanics
 - While a boss is up, any other "mob" near it that hasn't moved for 3 seconds (pylons, totems, crystals) is treated as part of the boss mechanic and attacked first. A pop-up and the reasoning log say which one.
