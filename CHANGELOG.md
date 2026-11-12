@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v4.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v4.3 | Brain`).
+
+## v4.3: Delve timer danger zone, forks, blessings
+- **Floor timer.** Reads the delve countdown under DELVE ("0:30"). At **10 s or less** it stops chasing mobs and spends the time on ores, unless the floor needs mobs dead (boss, guardian, or an objective like slay / kill / defeat / clear / elites). Adjustable: **Delve timer danger zone** slider (0-30 s, Targeting tab).
+- **Tunnel forks** ("THE TUNNEL FORKS"). Smart mode takes the **Cursed Path** (+luck, more elites) when healthy, and the **Safe Path** (slower collapse) when HP is under 70%, you're taking lots of hits, the timer got under 10 s twice this run, or past runs show the cursed path going badly. Setting: **Tunnel fork path** (Smart / Safe / Cursed).
+- "-15% COLLAPSE" now counts as good (slower collapse); it used to score as a minus.
+- **Blessing shrines** are picked like relics, ranked by what each blessing does.
+- **Rare drop spam fixed.** Each rare item alerts (pop-up and Discord) once per run; repeats are counted. The Run Complete post lists **Rare drops** with totals (e.g. Emerald x6) and **Timer close calls**.
+- The first time a delve timer is seen, the HUD layout is saved to `DelveGuiDump_hud.txt` so floor objectives can be read exactly.
 
 ## v4.2: Second relic slides and traders
 - **Second slides.** Deeper runs show a new set of relics right after the first pick, in the same window. It used to count as the same draft (same card slots and tiers) and nothing was picked. Each card's name is now part of the check, so every new slide gets picked too.

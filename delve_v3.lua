@@ -119,6 +119,8 @@ local m = {
 		-- brain / learning
 		relicLearn = true,
 		relicExplore = true,
+		dangerTime = 10,
+		forkPath = "Smart",
 		traderBuy = true,
 		traderMinScore = 5,
 		relicDelay = .3,
@@ -2487,7 +2489,7 @@ local relicAPI = (function()
 	local VIMr;
 	pcall(function() VIMr = game:GetService("VirtualInputManager"); end);
 	local Http = game:GetService("HttpService");
-	local TIER_VALUE = { COMMON = 0, UNCOMMON = 10, RARE = 20, EPIC = 45, LEGENDARY = 80, MYTHIC = 150, EXOTIC = 160, DIVINE = 180, SECRET = 200 };
+	local TIER_VALUE = { BLESSING = 20, COMMON = 0, UNCOMMON = 10, RARE = 20, EPIC = 45, LEGENDARY = 80, MYTHIC = 150, EXOTIC = 160, DIVINE = 180, SECRET = 200 };
 	local CATS = {
 		{ "range", { "MINING RANGE", "MINE RANGE", "RADIUS", "REACH" } },
 		{ "mining", { "MINE POWER", "MINING POWER", "MINING SPEED", "MINE SPEED", "MINING", "PICKAXE", " ORE", "ROCK" } },
@@ -2549,7 +2551,10 @@ local relicAPI = (function()
 		local sign = 1;
 		if neg and not goodWhenLow then sign = -1; end;
 		if not neg and u:find("TAKEN", 1, true) and not aimsEnemy then sign = -1; end;
-		if u:find("COLLAPSE", 1, true) and u:find("FASTER", 1, true) then sign = -1; end;
+		if u:find("COLLAPSE", 1, true) then
+			sign = (u:find("FASTER", 1, true) or (not neg and not u:find("SLOWER", 1, true))) and -1 or 1;
+			cat = "survival";
+		end;
 		return sign * mag, cat;
 	end;
 	local function runMode()
@@ -2642,7 +2647,7 @@ local relicAPI = (function()
 				local function tierOf(raw)
 					local u = trim(raw or ""):upper();
 					if TIER_VALUE[u] then return u; end;
-					for _, w in ipairs({ "UNCOMMON", "COMMON", "LEGENDARY", "MYTHIC", "EXOTIC", "DIVINE", "SECRET", "EPIC", "RARE" }) do
+					for _, w in ipairs({ "UNCOMMON", "COMMON", "LEGENDARY", "MYTHIC", "EXOTIC", "DIVINE", "SECRET", "EPIC", "RARE", "BLESSING" }) do
 						if u:find(w, 1, true) then return w; end;
 					end;
 					return u ~= "" and u or "COMMON";
@@ -3012,6 +3017,36 @@ local relicAPI = (function()
 		draft.walkOn = walk;
 		draft.trader = (walk and shown(walk)) or (heading and shown(heading) and txt(heading):upper():find("TRADER") ~= nil)
 			or (timerL and txt(timerL):upper():find("TRADER") ~= nil) or false;
+		-- "THE TUNNEL FORKS": SAFE PATH (slower collapse) vs CURSED PATH (+luck, more elites) for the next rooms
+		local safeC, cursedC;
+		for _, c in ipairs(scored) do
+			local tu = (c.name .. " " .. tostring(c.tier)):upper();
+			if tu:find("SAFE") then safeC = c; elseif tu:find("CURSE") then cursedC = c; end;
+		end;
+		draft.fork = safeC ~= nil and cursedC ~= nil;
+		if draft.fork then
+			local want = Q.forkPath or "Smart";
+			local why = want;
+			if want == "Smart" then
+				local hum = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+				local hp = (hum and hum.MaxHealth > 0) and hum.Health / hum.MaxHealth or 1;
+				local mins = math.max(1, (now - (run.startAt or now)) / 60);
+				local learned = 0;
+				for _, pc in ipairs({ { cursedC, 1 }, { safeC, -1 } }) do
+					local rec = brain.relics[pc[1].key];
+					local ms = type(rec) == "table" and type(rec.modes) == "table" and rec.modes.delve;
+					if type(ms) == "table" and (tonumber(ms.n) or 0) >= 2 then
+						learned = learned + pc[2] * math.max(-2, math.min(2, (tonumber(ms.zsum) or 0) / tonumber(ms.n)));
+					end;
+				end;
+				local risky = hp < .7 or run.hits / mins > 3 or (run.dangerCount or 0) >= 2 or learned < -.5;
+				want = risky and "Safe" or "Cursed";
+				why = risky and string.format("HP %d%%, %d hits, %d close calls", math.floor(hp * 100), run.hits, run.dangerCount or 0)
+					or "healthy, going for luck";
+			end;
+			choice = want == "Safe" and safeC or cursedC;
+			draft.forkWhy = why;
+		end;
 		if draft.trader then
 			r.traderBought = (type(r.traderBought) == "table" and now - (r.traderVisitAt or -1e9) < 30) and r.traderBought or {};
 			r.traderVisitAt = now;
@@ -3023,7 +3058,7 @@ local relicAPI = (function()
 				end;
 			end;
 			draft.walk = choice == nil;
-		elseif Q.relicExplore ~= false and #scored >= 2 and scored[2].score > -1e5 and scored[2].score >= scored[1].score - 25 then
+		elseif not draft.fork and Q.relicExplore ~= false and #scored >= 2 and scored[2].score > -1e5 and scored[2].score >= scored[1].score - 25 then
 			local rec2 = brain.relics[scored[2].key];
 			local n2 = type(rec2) == "table" and (tonumber(rec2.n) or 0) or 0;
 			if n2 < 3 and math.random() < .08 then
@@ -3037,7 +3072,9 @@ local relicAPI = (function()
 			lines[#lines + 1] = string.format("%s [%s] = %.0f  (%s)", c.name, c.tier, c.score, table.concat(c.parts, ", "));
 		end;
 		r.lastDraft = lines;
-		if Q.relicNotify ~= false and draft.trader then
+		if Q.relicNotify ~= false and draft.fork and choice then
+			notify(string.format("Fork: taking %s (%s)", choice.name, tostring(draft.forkWhy)), "Delve path");
+		elseif Q.relicNotify ~= false and draft.trader then
 			notify(choice and string.format("Trader: buying %s%s (%.0f)", choice.name,
 				choice.price and (" for $" .. tostring(choice.price)) or "", choice.score) or "Trader: nothing worth buying, walking on by", "Delve trader");
 		elseif Q.relicNotify ~= false and choice then
@@ -3366,9 +3403,16 @@ local relicAPI = (function()
 			local pg = l:FindFirstChild("PlayerGui");
 			if pg then
 				hud.boss, hud.delve = nil, nil;
+				local vpY = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize.Y or 1080;
+				if not (hud.timer and hud.timer.Parent and shown(hud.timer)) then hud.timer = nil; end;
 				for _, o in ipairs(pg:GetDescendants()) do
 					if o:IsA("TextLabel") then
 						local u = trim(txt(o)):upper();
+						-- the delve floor countdown ("0:30") sits at the top of the screen under DELVE
+						if not hud.timer and u:match("^%d+:%d%d$") and o.AbsolutePosition.Y < vpY * .3 and shown(o)
+							and not o:FindFirstAncestorWhichIsA("ScrollingFrame") then
+							hud.timer = o;
+						end;
 						if u:find("^DEPTH%s*%d") then hud.depth = o; end;
 						if u:find("WAVE%s*%d") then hud.wave = o; end;
 						if u == "DELVE" then hud.delve = o; end;
@@ -3389,6 +3433,37 @@ local relicAPI = (function()
 			run.stage = trim(wt:match("WAVE%s*%d+%s*[%-:]%s*(.+)$") or "");
 		end;
 		if hud.delve and hud.delve.Parent and shown(hud.delve) then run.isDelve = true; end;
+		-- floor timer: under the danger time it stops chasing mobs (unless the floor needs them dead)
+		run.timeLeft = nil;
+		if hud.timer and hud.timer.Parent and shown(hud.timer) then
+			local mm, ss = trim(txt(hud.timer)):match("^(%d+):(%d%d)$");
+			if mm then
+				local tl = tonumber(mm) * 60 + tonumber(ss);
+				run.timeLeft, run.timeAt = tl, now;
+				local dz = tonumber(Q.dangerTime) or 10;
+				if tl <= dz and not run.inDanger then
+					run.inDanger = true;
+					run.dangerCount = (run.dangerCount or 0) + 1;
+				elseif tl > dz + 5 then
+					run.inDanger = false;
+				end;
+			end;
+			-- floor objective: other short labels next to the timer ("SLAY THE GUARDIAN", "KILL 10"...)
+			local box = hud.timer.Parent;
+			local obj = {};
+			for _, o in ipairs(box and box:GetChildren() or {}) do
+				if o:IsA("TextLabel") and o ~= hud.timer and shown(o) then
+					local u = trim(txt(o)):upper();
+					if u ~= "DELVE" and u:match("%a") and #u <= 48 and not u:find("^DEPTH") then obj[#obj + 1] = u; end;
+				end;
+			end;
+			run.objective = table.concat(obj, " | ");
+			if not r.hudDumped and r.dumpGui then
+				r.hudDumped = true;
+				local lc = hud.timer:FindFirstAncestorWhichIsA("LayerCollector");
+				task.spawn(function() pcall(r.dumpGui, lc, "hud"); end);
+			end;
+		end;
 		run.bossHud = (hud.boss and hud.boss.Parent and shown(hud.boss)) and true or false;
 	end;
 	local function runStart(now)
@@ -3396,6 +3471,7 @@ local relicAPI = (function()
 		run.relics, run.depth, run.wave, run.died, run.hits = {}, 0, 0, false, 0;
 		run.combatT, run.mineT = 0, 0;
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
+		run.timeLeft, run.inDanger, run.dangerCount, run.objective, run.rareSeen = nil, false, 0, "", {};
 		run.cash0 = cashNow();
 		run.cashExact0 = exactCash(now);
 		run.level0 = leaderRead().level;
@@ -3477,6 +3553,7 @@ local relicAPI = (function()
 			power = brain.player and brain.player.power, luck = brain.player and brain.player.luck,
 			combatPct = (snap.combatT + snap.mineT) > 0 and math.floor(snap.combatT / (snap.combatT + snap.mineT) * 100 + .5) or nil,
 		};
+		record.rareDrops, record.closeCalls = snap.rare, snap.close;
 		pcall(function()
 			local line = Http:JSONEncode(record) .. "\n";
 			if type(appendfile) == "function" and type(isfile) == "function" and isfile("DelveRuns.jsonl") then
@@ -3507,7 +3584,7 @@ local relicAPI = (function()
 		local snap = {
 			relics = run.relics, depth = run.depth, wave = run.wave, died = run.died, hits = run.hits,
 			cash0 = run.cash0, cashExact0 = run.cashExact0, level0 = run.level0, isDelve = run.isDelve,
-			combatT = run.combatT, mineT = run.mineT,
+			combatT = run.combatT, mineT = run.mineT, rare = run.rareSeen, close = run.dangerCount,
 		};
 		if dur < 20 then return; end;
 		task.spawn(function()
@@ -4188,8 +4265,8 @@ local function wantFight(list, pos, now)
 		r.fightWhy = "always";
 		return true;
 	end;
-	local stage = tostring(run.stage or ""):upper();
-	local boss = run.bossHud or stage:find("BOSS") ~= nil;
+	local stage = (tostring(run.stage or "") .. " " .. tostring(run.objective or "")):upper();
+	local boss = run.bossHud or stage:find("BOSS") ~= nil or stage:find("GUARDIAN") ~= nil;
 	local minMax, maxMax = math.huge, 0;
 	for _, mob in ipairs(list) do
 		if mob.boss then boss = true; end;
@@ -4199,10 +4276,19 @@ local function wantFight(list, pos, now)
 	if #list >= 2 and maxMax > 0 and maxMax >= minMax * 5 then boss = true; end;
 	run.bossNow = boss;
 	if boss then r.fightWhy = "boss"; return true; end;
-	if stage:find("MOB") or stage:find("ENEM") or stage:find("FIGHT") or stage:find("HORDE") or stage:find("SLAY") or stage:find("KILL") or stage:find("ELITE") then
+	if stage:find("MOB") or stage:find("ENEM") or stage:find("FIGHT") or stage:find("HORDE") or stage:find("SLAY") or stage:find("KILL")
+		or stage:find("ELITE") or stage:find("DEFEAT") or stage:find("CLEAR") then
 		r.fightWhy = "mob stage";
 		return true;
 	end;
+	-- delve floor timer in the danger zone: ignore mobs, every second goes to ores / getting down
+	local tl = tonumber(run.timeLeft);
+	if tl and tl <= (tonumber(CFG.dangerTime) or 10) and now - (tonumber(run.timeAt) or -1e9) < 2 then
+		r.fightWhy = nil;
+		r.danger = true;
+		return false;
+	end;
+	r.danger = false;
 	if next(D) == nil then r.fightWhy = "no ores"; return true; end;
 	local nearest = math.huge;
 	for _, mob in ipairs(list) do
@@ -4472,6 +4558,13 @@ r.sendRunWebhook = function(info, isTest)
 	add("Outcome", (info.died and "Died" or "Survived") .. string.format(", %d hits", tonumber(info.hits) or 0));
 	add("Run score", string.format("%.1f (%+.2f vs avg)", tonumber(info.score) or 0, tonumber(info.z) or 0));
 	add("Fighting", info.combatPct and (tostring(info.combatPct) .. "% of the time") or "?");
+	if info.closeCalls then add("Timer close calls", tostring(info.closeCalls)); end;
+	if type(info.rareDrops) == "table" and next(info.rareDrops) then
+		local rl = {};
+		for nm, n in pairs(info.rareDrops) do rl[#rl + 1] = string.format("%s x%d", nm, n); end;
+		table.sort(rl);
+		add("Rare drops", table.concat(rl, ", "):sub(1, 1000), false);
+	end;
 	add("Brain", string.format("%d runs, %d relics known", tonumber(brain.runCount) or 0, known));
 	if type(brain.player) == "table" and brain.player.power then
 		add("Gear", string.format("power %s, luck %s, dmg %s", tostring(brain.player.power), tostring(brain.player.luck or "?"), tostring(brain.player.damage or "?")));
@@ -5362,6 +5455,10 @@ local indexAPI = (function()
 				}) .. "\n");
 			end;
 		end);
+		run.rareSeen = type(run.rareSeen) == "table" and run.rareSeen or {};
+		local already = run.rareSeen[name];
+		run.rareSeen[name] = (already or 0) + 1;
+		if already and not isNew then return; end;
 		notify(string.format("%s %s (1 in %s)%s", isNew and "NEW INDEX ENTRY:" or "Rare drop:", name, tostring(odds or "?"), tier and (" [" .. tier .. "]") or ""), "Delve drop");
 		if CFG.dropWebhook ~= false and d() - lastPost > 3 then
 			lastPost = d();
@@ -5914,6 +6011,7 @@ end;
 				{ k = "relicLearn", t = "toggle", text = "Learn relics from my runs and picks" },
 				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd relic (to learn)" },
 				{ k = "traderBuy", t = "toggle", text = "Buy from traders (else walk on by)" },
+				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
 				{ k = "traderMinScore", t = "slider", text = "Trader: only buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
 				{ k = "relicNotify", t = "toggle", text = "Announce relic choice" },
 				{ k = "relicDelay", t = "slider", text = "Relic pick delay", min = .2, max = 5, step = .1, suffix = " s" },
@@ -5932,6 +6030,7 @@ end;
 			side = "L",
 			items = {
 				{ k = "mobPriority", t = "combo", text = "Mob priority", items = { "Smart", "Ores first", "Always fight" } },
+				{ k = "dangerTime", t = "slider", text = "Delve timer danger zone (ignore mobs below)", min = 0, max = 30, step = 1, suffix = " s" },
 				{ k = "lowHpPct", t = "slider", text = "Low HP: stop chasing below", min = 0, max = 90, step = 5, suffix = " %" },
 				{ k = "crowdSize", t = "slider", text = "Fight when this many mobs are up", min = 2, max = 20, step = 1, suffix = "" },
 			},
@@ -6041,7 +6140,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v4.2 | Brain",
+		Title = "Delve v4.3 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
