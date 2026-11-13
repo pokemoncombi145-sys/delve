@@ -9266,7 +9266,14 @@ end;
 		local credits = window:Tab({ Title = "Credits", Icon = "heart" });
 		credits:Paragraph({
 			Title = "Delve Brain",
-			Desc = "Created for Delve. Ideas, testing, every farming hour and all the boss knowledge behind this script.",
+			Desc = "GitHub: github.com/pokemoncombi145-sys/delve\nSource, README and the full changelog live there.",
+		});
+		credits:Button({
+			Title = "Copy GitHub link",
+			Callback = function()
+				local okC = pcall(function() setclipboard("https://github.com/pokemoncombi145-sys/delve"); end);
+				notify(okC and "GitHub link copied." or "Couldn't copy: github.com/pokemoncombi145-sys/delve", "Delve");
+			end,
 		});
 		credits:Paragraph({
 			Title = "Built with Claude",
