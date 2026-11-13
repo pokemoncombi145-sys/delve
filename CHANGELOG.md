@@ -1,6 +1,16 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.20 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.21 | Brain`).
+
+## v5.21: Bigger window, fish icon, Credits, relic study (not yet verified in gameplay)
+- **Window:** 760 x 640 (was 620 x 480), so options fit on one line and more show at once.
+- **Window font** setting (Settings tab) replaces the old on/off toggle:
+  - **Mixed** (default): the game's pixel font for the title and big headings, clean Builder Sans one size up for all option text, so long lines are easy to read.
+  - **Game font**: pixel font everywhere (the old look). **Clean**: Builder Sans everywhere.
+- **Icon:** the window and the Open Delve button use a fish (the Delve anglerfish) instead of the pickaxe.
+- **Credits tab:** GitHub link (with a copy button) and build info.
+- **Relic study:** a relic it has never taken gets picked half the time when it scores within 80 of the best card, so the whole relic index gets learned. It never does this instead of a second chance, a luck relic or a set completion, and never at forks or the trader. The old "close 2nd" tries (8%) stay for relics tried fewer than 3 times. Log/pop-up says `never taken before: trying it to learn what it does`.
+- Final check: syntax, scope and local-count checks pass; no clicks on reroll/buy/Robux/spin/gift; nothing sells to Vesper; your Discord user ID stays only in your local settings.
 
 ## v5.20: Disconnect pings, scan count per session (not yet verified in gameplay)
 - **Disconnect ping:** when Roblox shows the "Disconnected" / kick prompt (e.g. Error Code 277), you get pinged on Discord with the message and the depth. With the screenshot helper running, the alert is retried every 15 s for up to 30 minutes, so it still arrives once your internet is back.

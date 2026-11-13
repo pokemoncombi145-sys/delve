@@ -129,6 +129,7 @@ local m = {
 		exploreForMobs = true,
 		rangedFirst = true,
 		uiGameFont = true,
+		uiFont = "Mixed",
 		mechNotify = true,
 		dangerTime = 10,
 		forkPath = "Smart",
@@ -3670,12 +3671,32 @@ local relicAPI = (function()
 				end;
 			end;
 			draft.walk = choice == nil;
-		elseif not draft.fork and Q.relicExplore ~= false and #scored >= 2 and scored[2].score > -1e5 and scored[2].score >= scored[1].score - 25 then
-			local rec2 = brain.relics[scored[2].key];
-			local n2 = type(rec2) == "table" and (tonumber(rec2.n) or 0) or 0;
-			if n2 < 3 and math.random() < .08 then
+		elseif not draft.fork and Q.relicExplore ~= false and #scored >= 2 then
+			-- LEARN THE INDEX: a relic it has never taken gets a real chance (half the time) when it isn't far
+			-- behind, so every relic gets studied. Never instead of a second chance, a luck relic or a set
+			-- completion. Otherwise, now and then, a close 2nd that's been tried fewer than 3 times.
+			local best = scored[1];
+			local protected = best.life or best.completes;
+			for _, ef in ipairs(best.effects or {}) do
+				if ef.cat == "luck" and ef.v > 0 then protected = true; end;
+			end;
+			local function timesTaken(c)
+				local rec = brain.relics[c.key];
+				return type(rec) == "table" and (tonumber(rec.n) or 0) or 0;
+			end;
+			local untried;
+			if not protected then
+				for i = 2, #scored do
+					local c = scored[i];
+					if not c.taken and c.score > -1e5 and c.score >= best.score - 80 and timesTaken(c) == 0 then untried = c; break; end;
+				end;
+			end;
+			if untried and math.random() < .5 then
+				choice = untried;
+				draft.explored = "never taken before: trying it to learn what it does";
+			elseif scored[2].score > -1e5 and scored[2].score >= best.score - 25 and timesTaken(scored[2]) < 3 and math.random() < .08 then
 				choice = scored[2];
-				draft.explored = true;
+				draft.explored = "exploring a close 2nd";
 			end;
 		end;
 		draft.choice = choice;
@@ -3688,7 +3709,7 @@ local relicAPI = (function()
 			local head;
 			if draft.fork then head = "fork: " .. (choice and choice.name or "?") .. " (" .. tostring(draft.forkWhy) .. ")";
 			elseif draft.trader then head = choice and ("trader: buy " .. choice.name) or "trader: nothing worth buying, walk on by";
-			else head = "pick " .. (choice and choice.name or "?") .. (draft.explored and " (exploring a close 2nd)" or " (highest score)"); end;
+			else head = "pick " .. (choice and choice.name or "?") .. (draft.explored and (" (" .. tostring(draft.explored) .. ")") or " (highest score)"); end;
 			r.why("relic", string.format("%s | %s", tostring(draft.room or "draft"), head));
 			for _, ln in ipairs(lines) do r.why("relic", "   " .. ln); end;
 		end;
@@ -3699,7 +3720,7 @@ local relicAPI = (function()
 				choice.price and (" for $" .. tostring(choice.price)) or "", choice.score) or "Trader: nothing worth buying, walking on by", "Delve trader");
 		elseif Q.relicNotify ~= false and choice then
 			notify(string.format("%s %s (%.0f)%s", Q.cardPick and "Picking" or "I'd pick", choice.name, choice.score,
-				draft.explored and " [exploring a close 2nd]" or ""), "Delve relic");
+				draft.explored and (" [" .. tostring(draft.explored) .. "]") or ""), "Delve relic");
 		end;
 	end;
 
@@ -8531,7 +8552,7 @@ end;
 			icon = "gem",
 			items = {
 				{ k = "cardPick", t = "toggle", text = "Pick relics and blessings" },
-				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd (to learn)" },
+				{ k = "relicExplore", t = "toggle", text = "Try relics it has never taken (to learn the index)" },
 				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
 				{ k = "afterBossPath", t = "combo", text = "After Worldheart", items = { "Descend", "Ascend", "Let the brain decide" } },
 				{ k = "afterUnmaker", t = "combo", text = "After the Unmaker (portal)", items = { "Prestige I", "Rare shop (?????)", "Don't enter" } },
@@ -8568,7 +8589,7 @@ end;
 			items = {
 				{ k = "startClosed", t = "toggle", text = "Start with this window closed" },
 				{ k = "niceToasts", t = "toggle", text = "Game-style pop-ups" },
-				{ k = "uiGameFont", t = "toggle", text = "Use the game's font in this window" },
+				{ k = "uiFont", t = "combo", text = "Window font", items = { "Mixed", "Game font", "Clean" } },
 				{ k = "relicNotify", t = "toggle", text = "Pop-ups: relic, trader and path choices" },
 				{ k = "mechNotify", t = "toggle", text = "Pop-ups: new relics and mechanics" },
 				{ k = "background", t = "toggle", text = "Background mode (work while tabbed out)" },
@@ -8623,6 +8644,7 @@ end;
 			if type(value) == "string" then
 				Q[key] = value;
 			end;
+			if key == "uiFont" and r.applyGameFont then task.spawn(r.applyGameFont); end;
 		end;
 		if r.sync then
 			r.sync();
@@ -8950,10 +8972,10 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.20 | Brain",
+		Title = "Delve v5.21 | Brain",
 		Folder = "DelveV3",
-		Icon = "pickaxe",
-		Size = UDim2.fromOffset(620, 480),
+		Icon = "fish",
+		Size = UDim2.fromOffset(760, 640),
 		ToggleKey = Enum.KeyCode.RightShift,
 		OpenButton = {
 			Title = "Open Delve",
@@ -9240,6 +9262,21 @@ end;
 			});
 		end;
 	end;
+	do
+		local credits = window:Tab({ Title = "Credits", Icon = "heart" });
+		credits:Paragraph({
+			Title = "Delve Brain",
+			Desc = "Created for Delve. Ideas, testing, every farming hour and all the boss knowledge behind this script.",
+		});
+		credits:Paragraph({
+			Title = "Built with Claude",
+			Desc = "Code, the learning brain and log reviews written with Claude (Anthropic), shaped by real runs and feedback.",
+		});
+		credits:Paragraph({
+			Title = "Updates",
+			Desc = "The version is in the window title. Every change, with the evidence behind it, is in CHANGELOG.md on GitHub.",
+		});
+	end;
 	dQ = function()
 		for _, setting in pairs(synced) do
 			local value = current(setting.item);
@@ -9275,25 +9312,38 @@ end;
 			end;
 			return nil;
 		end;
+		local origSize = setmetatable({}, { __mode = "k" });
+		local clean = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Medium);
+		local function fontMode()
+			local m = tostring(CFG.uiFont or "Mixed");
+			if CFG.uiGameFont == false and CFG.uiFont == nil then m = "Clean"; end;
+			return m;
+		end;
 		local function setOne(o, ff)
 			if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
-				if original[o] == nil then original[o] = o.FontFace; end;
-				if ff then
+				if original[o] == nil then original[o], origSize[o] = o.FontFace, o.TextSize; end;
+				local mode = fontMode();
+				local size0 = origSize[o] or o.TextSize;
+				local isTitle = size0 >= 18 or tostring(o.Text):find("Delve v", 1, true) ~= nil or o.Text == "Open Delve";
+				if mode == "Game font" and ff then
 					o.FontFace = Font.new(ff.Family, original[o].Weight, original[o].Style);
+					o.TextSize = size0;
+				elseif mode == "Mixed" and ff and isTitle then
+					o.FontFace = Font.new(ff.Family, original[o].Weight, original[o].Style);
+					o.TextSize = size0;
 				else
-					o.FontFace = original[o];
+					o.FontFace = Font.new(clean.Family, original[o].Weight == Enum.FontWeight.Bold and Enum.FontWeight.Bold or Enum.FontWeight.Medium, original[o].Style);
+					o.TextSize = size0 + 1;
 				end;
 			end;
 		end;
 		r.applyGameFont = function()
 			local g = findRoot();
 			if not g then return; end;
-			local ff = CFG.uiGameFont ~= false and r.gameFont and r.gameFont() or nil;
+			local ff = r.gameFont and r.gameFont() or nil;
 			for _, o in ipairs(g:GetDescendants()) do pcall(setOne, o, ff); end;
 			if conn then conn:Disconnect(); conn = nil; end;
-			if ff then
-				conn = g.DescendantAdded:Connect(function(o) pcall(setOne, o, ff); end);
-			end;
+			conn = g.DescendantAdded:Connect(function(o) task.defer(function() pcall(setOne, o, ff); end); end);
 		end;
 		task.delay(.5, function() pcall(r.applyGameFont); end);
 		-- the game's HUD may not be fully loaded yet: try again once it is

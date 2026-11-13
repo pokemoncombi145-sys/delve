@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.20** (shown in the window title, `Delve v5.20 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.21** (shown in the window title, `Delve v5.21 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
