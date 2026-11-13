@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.32.1** (shown in the window title, `Delve v5.32.1 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.33** (shown in the window title, `Delve v5.33 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -23,9 +23,10 @@ Made for the **Volt** executor at 1920x1080; it falls back to the virtual input 
   4. survivability and floor time.
 
   Manageable downsides on luck relics count half. Everything is adjusted by what it learned from past runs (per relic, per combo, per category), and it builds the sets you already have going.
-- **Paths.** Tunnel forks are chosen by how the run is going; after Worldheart it takes **Descend** (or Ascend, your choice), and relic picks then favour combat boosts on Descend (unless the run is short on mining or a massive mining relic shows up) or mining power/range on Ascend, and after the Unmaker it walks into the **Prestige** portal as soon as its sign appears (or the **Rare shop (?????)** portal, where Vesper buys Mythic/Forsaken items for Strange Orbs; the script never sells there, or neither).
+- **Paths.** Tunnel forks are chosen by how the run is going; after Worldheart it takes **Descend** (or Ascend, your choice), and relic picks then favour combat boosts on Descend (unless the run is short on mining or a massive mining relic shows up) or mining power/range on Ascend, and after the Unmaker it walks into the **Prestige** portal as soon as it sees one (the nearest, by its tag, model or sign; it walks through the ring if standing in it does nothing, and keeps walking past the last floor tile until a portal is in sight), or the **Rare shop (?????)** portal, where Vesper buys Mythic/Forsaken items for Strange Orbs (the script never sells there), or neither.
 - **Index, Stats and Equipment.** Every few runs it returns to the hub and scans the T menu there (with "in progress / finished in" notices) to learn drop odds, your gear and your lifetime stats, then starts the next run.
-- **Attack plans and rooms.** Listens to the game's own attack plans (what lands where, and exactly when) so escapes and roll landings are checked against the moment you'd be there, and reads the chamber layout so "forward" is always the current chamber's exit.
+- **Attack plans and rooms.** Listens to the game's own attack plans (what lands where, and exactly when) so escapes and roll landings are checked against the moment you'd be there (it leaves a spot that gets hit in the next 2.2 s straight away, so big rings like the Worldheart's donut are walked out of in time), and reads the chamber layout so "forward" is always the current chamber's exit.
+- **Never stands still for long.** If it hasn't moved and nothing has changed for 25 s while farming a Delve, it writes down what it was doing (`DelveReasoning.txt`, `DelveStall.txt`), skips the ores there and walks on; still stuck after 3 minutes, one Discord alert.
 - **Discord.** A Run Complete post with the end-screen screenshot and real stats, alerts with a screenshot for Mythic-or-higher drops (including Forsaken and Eternal), and an optional ping.
 - **Learning curve.** A graph window (Brain tab) for Delve and Mines separately: the last 100 runs, a 10-run average, and the last 50 runs against the 50 before.
 - **Autosave.** Settings and everything learned are saved and restored; the brain file is backed up automatically.
@@ -61,7 +62,7 @@ Put `delve_autoexec.lua` in `%LOCALAPPDATA%\Volt\autoexec`. Every time you join 
 ## Discord posts and screenshots
 1. In Discord: Server Settings → Integrations → Webhooks → New Webhook → pick the channel → **Copy Webhook URL**.
 2. In the script's **Discord** tab: paste the URL, turn posting on, and press **Send test post**.
-3. Optional: put your Discord user ID in **Discord user ID to ping** to get pinged on Run Complete, rare drops, and if you disconnect or Roblox closes while farming (no bot needed; the Roblox-closed ping needs the screenshot helper running).
+3. Optional: put your Discord user ID in **Discord user ID to ping** to get pinged on Run Complete, rare drops, if you disconnect or Roblox closes while farming (no bot needed; the Roblox-closed ping needs the screenshot helper running), and if the bot has been stuck in place for 3 minutes.
 4. For screenshots, keep `delve_webhook_helper.ps1` and `Start Delve Screenshots.bat` in the same folder (with Volt they're in `%LOCALAPPDATA%\Volt\scripts`), double-click **Start Delve Screenshots.bat** and leave that window open while you play.
 
 Roblox scripts can't take screenshots, so the helper does it: the script asks for a picture the moment the end screen shows, and Auto Replay waits a few seconds for it. Without the helper, posts are sent as text. If Windows asks about running the file, choose **More info → Run anyway** (it's a plain text script you can open in Notepad). Manual start:
@@ -89,6 +90,7 @@ Nothing is uploaded, and the recorder never affects movement or dodging. Options
 | `DelveMechanics.jsonl` | one line per new mechanic discovered |
 | `DelveReasoning.txt` | why it fought, mined or picked each relic (older part in `DelveReasoning_old.txt`) |
 | `dodge_log.txt` | every dodge, roll and hit, if "Log dodges to file" is on (older part in `dodge_log_old.txt`) |
+| `DelveStall.txt` | the latest "standing still" report: what it was doing, the floor, the portals it can see, the last decisions |
 | `DelveGuiDump_*.txt` | layouts of game screens, used to fix the readers |
 
 ## Safety

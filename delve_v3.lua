@@ -6280,10 +6280,10 @@ end;
 -- v5.28 used the middle of all loaded tiles, which lies behind you when old segments are still loaded,
 -- and sent it running back into the cave-in. No signal = no push (it just keeps mining).
 r.forwardInfoRaw = function(px, pz)
-	if not navBuild() or not nav.map then return nil; end;
+	local haveMap = navBuild() and nav.map ~= nil;
 	-- 0. (v5.30) the chamber layout: a safe tile at the current chamber's exit row (never past it), only when
 	--    the chamber and your row agree. Otherwise the signals below (collapse, depth marks, learned direction).
-	do
+	if haveMap then
 		local okR, gzR, rowR, cR, srcR, myRow, why = pcall(function() return r.room.goal(px, pz); end);
 		if okR and gzR then
 			local fzR = gzR < pz and -1 or 1;
@@ -6295,7 +6295,8 @@ r.forwardInfoRaw = function(px, pz)
 				end;
 			end;
 			if best then
-				return 0, fzR, best.wx, best.wz, math.abs(best.wz - pz),
+				-- (v5.33) signed: past the last floor tile the goal tile is behind you, and it used to walk back to it
+				return 0, fzR, best.wx, best.wz, (best.wz - pz) * fzR,
 					string.format("chamber %d %s, row %d (%s; you're at row %.0f)", cR, why, rowR, srcR, myRow);
 			end;
 		end;
@@ -6332,6 +6333,9 @@ r.forwardInfoRaw = function(px, pz)
 		end;
 	end;
 	if not fx then return nil; end;
+	-- (v5.33) no floor map (tiles not loaded, or a room that isn't built from shaft tiles): a point 30 st that
+	-- way; the walk checks the floor at every step. Before, no map meant no forward signal at all.
+	if not haveMap then return fx, fz, px + fx * 30, pz + fz * 30, 30, src .. ", no floor map"; end;
 	-- farthest safe tile that way, staying in the corridor (not a side pocket)
 	local best, bp;
 	for _, t in pairs(nav.map) do
@@ -6400,8 +6404,10 @@ local function navEscape(px, pz, zones, now)
 		if not z.plan and (z.x - px) ^ 2 + (z.z - pz) ^ 2 < reach * reach then near[#near + 1] = z; end;
 	end;
 	-- (v5.30) planned attacks are checked at the time you'd reach each tile (walk speed), and the tile you
-	-- stop on has to stay clear for 1.2 s after you get there. Arriving after a slab lands is fine; being
-	-- there when it lands is not.
+	-- stop on has to stay clear for 2.2 s after you get there. Arriving after a slab lands is fine; being
+	-- there when it lands is not. (v5.33: was 1.2 s. The Worldheart's donut was announced 3 s ahead, the spot
+	-- it stood on counted as safe until 1.2 s before it landed, and walking out of a ring that size took
+	-- longer than that: escape picked 0.02 s before the hit, dead.)
 	local Pq = r.plan;
 	local usePlan = Pq ~= nil and Pq.hooked == true and CFG.planFeed ~= false and (#Pq.hz + #Pq.shots) > 0;
 	local srv0 = usePlan and Pq.srv() or 0;
@@ -6415,7 +6421,7 @@ local function navEscape(px, pz, zones, now)
 		local v = pdMemo[mk];
 		if v == nil then
 			local t = map[key];
-			v = Pq.hitAt(t.wx, t.wz, ta - .15, ta + (stay and 1.2 or .25)) and 4 or 0;
+			v = Pq.hitAt(t.wx, t.wz, ta - .15, ta + (stay and 2.2 or .25)) and 4 or 0;
 			pdMemo[mk] = v;
 		end;
 		return v;
@@ -6586,7 +6592,7 @@ local function openGround(px, pz, now)
 					for _, z in ipairs(Fl) do
 						if not z.plan and ul(z, cx, cz, Vl + .5) then hits = hits + 1; end;
 					end;
-					if usePlan and Pq.hitAt(cx, cz, srv0 + dist / wsp - .1, srv0 + dist / wsp + 1.2) then hits = hits + 1; end;
+					if usePlan and Pq.hitAt(cx, cz, srv0 + dist / wsp - .1, srv0 + dist / wsp + 2.2) then hits = hits + 1; end;
 					-- walls/void around it (corners score worst)
 					local edge = 0;
 					for _, dv in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { .7, .7 }, { -.7, .7 }, { .7, -.7 }, { -.7, -.7 } }) do
@@ -7196,6 +7202,310 @@ r.dangerView = function(now)
 	end;
 	for k = n + 1, #r.viewPool do r.viewPool[k].Transparency = 1; end;
 end;
+-- ===================================================================================
+-- (v5.33) AFTER THE UNMAKER + STALL WATCHDOG
+--   On 2026-11-13 it killed the Unmaker, took the Tithe relic and then stood still for 48 minutes at
+--   17,760 m without one log line: the portal note is only written once per session (the second portal
+--   was silent), and with no portal, no floor map or no forward goal it just stopped. Now:
+--   * portalFind: the nearest portal (tag, model name or sign), aimed at its core ("Deep")
+--   * portalWalk: says where it's going every 8 s, walks through the ring if standing in it does
+--     nothing, gives up on a portal it can't get closer to (the walk up the road takes over)
+--   * floorHeading: a heading close to the one wanted with floor under the next 3 and 6 studs
+--   * stallTick: farming in a Delve, out of combat, not moved 4 studs and no ore/mob change for 25 s:
+--     logs what it was doing (DelveReasoning.txt + DelveStall.txt), skips the ores right there for 30 s
+--     and walks on for 6 s; still stuck after 3 minutes, one Discord alert (with the disconnect ping on)
+-- ===================================================================================
+do
+	local CS = game:GetService("CollectionService");
+	-- the portal's core (the dark disc in the ring) when it has one, else its pivot / position
+	local function corePos(o)
+		local deep = o:FindFirstChild("Deep");
+		if deep and deep:IsA("BasePart") then return deep.Position; end;
+		if o:IsA("BasePart") then return o.Position; end;
+		if o:IsA("Model") then return o:GetPivot().Position; end;
+		return nil;
+	end;
+	r.portalFind = function(G, wantShop)
+		local tag = wantShop and "VesperInGate" or "PrestigePortal";
+		local now = d();
+		local best;
+		local function consider(o, how)
+			if not (o and o.Parent) then return; end;
+			local bad = r.portalBad and r.portalBad[o];
+			if bad and now < bad then return; end;
+			local okC, pos = pcall(corePos, o);
+			if not (okC and pos) then return; end;
+			local dd = (pos.X - G.X) ^ 2 + (pos.Z - G.Z) ^ 2;
+			if dd < 640000 and (not best or dd < best.dd) then
+				local axis;
+				pcall(function() if o:IsA("Model") then axis = o:GetPivot().RightVector; end; end);
+				best = { inst = o, pos = pos, how = how, dd = dd, axis = axis };
+			end;
+		end;
+		pcall(function()
+			for _, o in ipairs(CS:GetTagged(tag)) do consider(o, tag .. " tag"); end;
+		end);
+		for o, nm in pairs(r.portalModels or {}) do
+			if nm == tag and o.Parent and o:FindFirstChild("Deep") then consider(o, "a model named " .. nm); end;
+		end;
+		-- the sign over it: the main signal for the rare shop (garbled label), a fallback for prestige
+		local bb = r.portalSigns and (wantShop and r.portalSigns.mystery or r.portalSigns.prestige);
+		if bb and bb.Parent and (wantShop or not best) then
+			local sp;
+			pcall(function()
+				local holder = bb.Adornee or bb.Parent;
+				if holder:IsA("Attachment") then sp = holder.WorldPosition;
+				elseif holder:IsA("BasePart") then sp = holder.Position;
+				else
+					local part = holder:FindFirstChildWhichIsA("BasePart", true) or holder:FindFirstAncestorWhichIsA("BasePart");
+					sp = part and part.Position;
+				end;
+			end);
+			local bad = r.portalBad and r.portalBad[bb];
+			if sp and not (bad and now < bad) then
+				local dd = (sp.X - G.X) ^ 2 + (sp.Z - G.Z) ^ 2;
+				if dd < 62500 then best = { inst = bb, pos = sp, how = "sign text", dd = dd }; end;
+			end;
+		end;
+		if not best then return nil; end;
+		best.dist = math.sqrt(best.dd);
+		return best;
+	end;
+	local function ignorePortal(inst, m)
+		r.portalBad = r.portalBad or setmetatable({}, { __mode = "k" });
+		r.portalBad[inst] = m + 60;
+		r.portalState = nil;
+	end;
+	r.portalWalk = function(G, m, tg, wantShop)
+		local name = wantShop and "rare shop" or "prestige";
+		local st = r.portalState;
+		if not st or st.inst ~= tg.inst then
+			st = { inst = tg.inst, best = tg.dist, bestAt = m };
+			r.portalState = st;
+		end;
+		if tg.dist < st.best - 3 then st.best, st.bestAt = tg.dist, m; end;
+		if m - (r.portalNoteAt or -1e9) > 8 then
+			r.portalNoteAt = m;
+			if r.why then r.why("move", string.format("walking into the %s portal: %.0f st away (found by %s)", name, tg.dist, tg.how)); end;
+			if not st.told then
+				st.told = true;
+				notify("Taking the " .. name .. " portal.", "Delve run");
+			end;
+			if not r.portalDumped and type(writefile) == "function" then
+				r.portalDumped = true;
+				pcall(function()
+					local root = tg.inst:IsA("Model") and tg.inst or tg.inst:FindFirstAncestorWhichIsA("Model") or tg.inst;
+					local lines = { "Delve portal " .. os.date("%Y-%m-%d %H:%M:%S"), root.ClassName .. " " .. root:GetFullName() };
+					for _, d0 in ipairs(root:GetDescendants()) do
+						if #lines > 120 then break; end;
+						if d0:IsA("BasePart") or d0:IsA("TextLabel") then
+							lines[#lines + 1] = string.format("  %s '%s'%s", d0.ClassName, d0.Name, d0:IsA("TextLabel") and (" text=\"" .. d0.Text .. "\"") or "");
+						end;
+					end;
+					writefile("DelveGuiDump_portals.txt", table.concat(lines, "\n"));
+				end);
+			end;
+		end;
+		-- not 3 st closer in 25 s: leave it for a minute (the walk up the road takes over)
+		if m - st.bestAt > 25 then
+			ignorePortal(tg.inst, m);
+			if r.why then r.why("move", string.format("not getting closer to the %s portal (%.0f st away for 25 s): leaving it for a minute", name, tg.dist)); end;
+			return false;
+		end;
+		local tx, tz = tg.pos.X, tg.pos.Z;
+		if tg.dist <= 4.5 or (st.nearAt and tg.dist <= 9) then
+			-- in the ring and nothing happened: walk through it along its axis, the other side every 3 s
+			st.nearAt = st.nearAt or m;
+			local held = m - st.nearAt;
+			if held > 15 then
+				ignorePortal(tg.inst, m);
+				if r.why then r.why("move", string.format("the %s portal didn't take me in after 15 s at it: leaving it for a minute", name)); end;
+				return false;
+			end;
+			if held > 1.5 then
+				local ax, az = 0, 0;
+				if tg.axis then ax, az = tg.axis.X, tg.axis.Z; end;
+				local al = math.sqrt(ax * ax + az * az);
+				if al < .3 and st.fromX then
+					ax, az = tx - st.fromX, tz - st.fromZ;
+					al = math.sqrt(ax * ax + az * az);
+				end;
+				if al > .1 then
+					local side = (math.floor((held - 1.5) / 3) % 2 == 0) and 1 or -1;
+					tx, tz = tg.pos.X + ax / al * 7 * side, tg.pos.Z + az / al * 7 * side;
+					if side ~= st.side then
+						st.side = side;
+						if r.why then r.why("move", "at the portal and nothing happened: walking through the ring"); end;
+					end;
+				end;
+			end;
+		else
+			st.nearAt, st.side = nil, nil;
+			st.fromX, st.fromZ = G.X, G.Z;
+		end;
+		-- around pillars and attacks; after 8 s without getting closer, straight at it
+		local wp;
+		if m - st.bestAt <= 8 then
+			local okRt, path = pcall(r.routeTo, { addr = "portal" .. name, x = tx, z = tz }, G, 2);
+			if okRt and path then
+				for _, p0 in ipairs(path) do
+					if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+				end;
+			end;
+		end;
+		if wp then
+			SQ(wp.x - G.X, wp.z - G.Z);
+		else
+			local okS, sx, sz = pcall(r.steerDir, G, tx, tz);
+			if okS and sx then SQ(sx, sz); else SQ(tx - G.X, tz - G.Z); end;
+		end;
+		return true;
+	end;
+	-- a heading close to (dx, dz) with floor under the next 3 and 6 studs and no attack 4 studs ahead
+	r.floorHeading = function(G, dx, dz)
+		local len = math.sqrt(dx * dx + dz * dz);
+		if len < .01 then return nil; end;
+		dx, dz = dx / len, dz / len;
+		local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+		if not hrp then return nil; end;
+		local y0 = hrp.Position.Y;
+		local rp = RaycastParams.new();
+		rp.FilterType = Enum.RaycastFilterType.Exclude;
+		rp.FilterDescendantsInstances = { l.Character };
+		local function floorAt(x, z)
+			local hit = workspace:Raycast(Vector3.new(x, y0 + 3, z), Vector3.new(0, -14, 0), rp);
+			return hit ~= nil and hit.Position.Y > y0 - 7 and hit.Position.Y < y0 + 1.5;
+		end;
+		for pass = 1, 2 do
+			for _, deg in ipairs({ 0, 25, -25, 50, -50, 75, -75 }) do
+				local a = math.rad(deg);
+				local ca, sa = math.cos(a), math.sin(a);
+				local hx, hz = dx * ca - dz * sa, dx * sa + dz * ca;
+				if floorAt(G.X + hx * 3, G.Z + hz * 3) and floorAt(G.X + hx * 6, G.Z + hz * 6)
+					and (pass == 2 or not eh(Fl, G.X + hx * 4, G.Z + hz * 4)) then
+					return hx, hz;
+				end;
+			end;
+		end;
+		return nil;
+	end;
+	r.stallReport = function(G, S, m, secs)
+		local parts = {};
+		local function add(x) parts[#parts + 1] = x; end;
+		add("last step: " .. tostring(r.lhBranch or "?"));
+		add(L and "an ore in reach" or "no ore in reach");
+		add(u and string.format("ore to walk to %.0f st away", math.sqrt((u.X - G.X) ^ 2 + (u.Z - G.Z) ^ 2)) or "no ore to walk to");
+		add(string.format("%d ores known, %d mobs, %d attack zones", tonumber(r.rockCount) or 0, #S, #Fl));
+		add(string.format("%d floor tiles, floor map %s", #i, nav.map and "yes" or "no"));
+		local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
+		add(okF and (fx and string.format("forward goal: %s, %.0f st", tostring(fsrc), tonumber(gp) or 0) or "forward goal: none") or ("forward check error: " .. tostring(fx)));
+		local okR, c, src = pcall(function() return r.room.current(G.Z); end);
+		add(okR and (c and string.format("chamber %s (%s)", tostring(c), tostring(src)) or ("chamber: " .. tostring(src))) or "chamber check failed");
+		local okP, tg = pcall(r.portalFind, G, false);
+		add(okP and (tg and string.format("prestige portal %.0f st away (%s)", tg.dist, tg.how) or "no prestige portal found") or ("portal check error: " .. tostring(tg)));
+		add(string.format("depth %s m", tostring(run.curDepth or run.depth)));
+		local line = string.format("standing still for %d s (%s). Skipping the ores here and moving on.", secs, table.concat(parts, "; "));
+		if r.why then r.why("move", line); end;
+		if type(writefile) ~= "function" then return; end;
+		pcall(function()
+			local out = { "Delve stall " .. os.date("%Y-%m-%d %H:%M:%S") .. " (v5.33)", line,
+				string.format("position %.1f, %.1f, %.1f; mode %s; farm %s, walk %s, mine %s", G.X, G.Y, G.Z, tostring(WQ), tostring(Q.on), tostring(Q.walk), tostring(Q.mine)) };
+			local function put(x) out[#out + 1] = x; end;
+			put(string.format("objective '%s', timer %s, depth %s (deepest %s), prestige %s", tostring(run.objective or ""), tostring(run.timeLeft), tostring(run.curDepth), tostring(run.depth), tostring(run.prestige)));
+			pcall(function()
+				local rp = RaycastParams.new();
+				rp.FilterType = Enum.RaycastFilterType.Exclude;
+				rp.FilterDescendantsInstances = { l.Character };
+				local hit = workspace:Raycast(G + Vector3.new(0, 2, 0), Vector3.new(0, -14, 0), rp);
+				put("standing on: " .. (hit and (hit.Instance:GetFullName() .. string.format(" (y %.1f)", hit.Position.Y)) or "nothing within 14 st"));
+			end);
+			pcall(function()
+				local sp = workspace:FindFirstChild("StrataPlate");
+				local gr = sp and sp:FindFirstChild("Ground");
+				local lo, hi, n = math.huge, -math.huge, 0;
+				for _, t in ipairs(gr and gr:GetChildren() or {}) do
+					local row = tonumber((t.Name:match("^Tile_(%-?%d+)_")));
+					if row then n, lo, hi = n + 1, math.min(lo, row), math.max(hi, row); end;
+				end;
+				put(string.format("shaft tiles: %d (rows %s to %s)", n, n > 0 and tostring(lo) or "-", n > 0 and tostring(hi) or "-"));
+			end);
+			pcall(function()
+				local kv = {};
+				for k, v in pairs(r.room and r.room.s or {}) do kv[#kv + 1] = tostring(k) .. "=" .. tostring(v); end;
+				table.sort(kv);
+				put("session: " .. (#kv > 0 and table.concat(kv, ", ") or "none (inactive)"));
+			end);
+			for _, tag in ipairs({ "PrestigePortal", "VesperInGate" }) do
+				pcall(function()
+					for _, o in ipairs(CS:GetTagged(tag)) do
+						local okC, pp = pcall(corePos, o);
+						local bad = r.portalBad and r.portalBad[o];
+						put(string.format("tag %s: %s at %s, %.0f st away%s", tag, o:GetFullName(),
+							(okC and pp) and string.format("%.0f, %.0f, %.0f", pp.X, pp.Y, pp.Z) or "?",
+							(okC and pp) and math.sqrt((pp.X - G.X) ^ 2 + (pp.Z - G.Z) ^ 2) or -1,
+							(bad and m < bad) and " (ignored for now)" or ""));
+					end;
+				end);
+			end;
+			for o, nm in pairs(r.portalModels or {}) do
+				pcall(function() put(string.format("model %s: %s", nm, o:GetFullName())); end);
+			end;
+			for k, bb in pairs(r.portalSigns or {}) do
+				pcall(function() put(string.format("sign %s: %s", tostring(k), bb:GetFullName())); end);
+			end;
+			pcall(function()
+				local names = {};
+				for _, c0 in ipairs(workspace:GetChildren()) do
+					if #names >= 80 then break; end;
+					names[#names + 1] = c0.Name .. "(" .. c0.ClassName .. ")";
+				end;
+				put("workspace: " .. table.concat(names, ", "));
+				local pl = workspace:FindFirstChild("Plates");
+				if pl then
+					local pn = {};
+					for _, c0 in ipairs(pl:GetChildren()) do
+						if #pn >= 40 then break; end;
+						local okV, pv = pcall(function() return c0:IsA("Model") and c0:GetPivot().Position or (c0:IsA("BasePart") and c0.Position) or nil; end);
+						pn[#pn + 1] = c0.Name .. ((okV and pv) and string.format(" at %.0f, %.0f", pv.X, pv.Z) or "");
+					end;
+					put("Plates: " .. table.concat(pn, ", "));
+				end;
+			end);
+			put("recent log:");
+			local wl = r.whyLines or {};
+			for k = math.max(1, #wl - 15), #wl do put("  " .. tostring(wl[k])); end;
+			writefile("DelveStall.txt", table.concat(out, "\n"));
+		end);
+	end;
+	r.stallTick = function(G, S, m)
+		local hum0 = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+		local on = Q.on and run.isDelve and hum0 ~= nil and hum0.Health > 0 and WQ ~= "combat" and not r.f2Paused;
+		local sr = r.stallRef;
+		local rc = tonumber(r.rockCount) or 0;
+		if not on or not sr or (G.X - sr.x) ^ 2 + (G.Z - sr.z) ^ 2 > 16 or rc ~= sr.rocks or #S ~= sr.mobs then
+			r.stallRef = { x = G.X, z = G.Z, t = m, rocks = rc, mobs = #S, since = m };
+			return;
+		end;
+		if m - sr.t < 25 then return; end;
+		sr.t = m;
+		local secs = math.floor(m - sr.since);
+		r.stallKick = { untilT = m + 6 };
+		-- the ores right here are skipped for 30 s (one that never breaks kept it in place)
+		for _, rock in pairs(D) do
+			if rock.wx and rock.wz and (rock.wx - G.X) ^ 2 + (rock.wz - G.Z) ^ 2 < 144 then rock.skipUntil = m + 30; end;
+		end;
+		pcall(r.stallReport, G, S, m, secs);
+		if secs >= 180 and not sr.pinged and CFG.pingDisconnect ~= false and r.postEmbed then
+			sr.pinged = true;
+			pcall(r.postEmbed, {
+				title = "Delve: stuck",
+				description = string.format("Standing still for %d min at depth %s m (last step: %s). It keeps trying to move on; details in DelveStall.txt.",
+					math.floor(secs / 60), tostring(run.curDepth or run.depth), tostring(r.lhBranch or "?")),
+				color = 15105570,
+			}, "alert");
+		end;
+	end;
+end;
 local function lh(m)
 	pcall(r.dangerView, m);
 	local G = sQ();
@@ -7386,7 +7696,16 @@ local function lh(m)
 		end;
 	end;
 	r.mode, r.walkTo, r.aimAt = WQ, u ~= nil, L ~= nil;
+	-- (v5.33) what it's doing (for the stall report) and the stall watchdog; while it kicks in (6 s), no ore
+	-- targets so the walk up the road takes over
+	r.lhBranch = WQ == "combat" and "fighting" or WQ;
+	pcall(r.stallTick, G, S, m);
+	if r.stallKick and m < r.stallKick.untilT and WQ ~= "combat" then
+		L, u = nil, nil;
+		r.walkTo, r.aimAt = false, false;
+	end;
 	if not e or iQ() then
+		r.lhBranch = "paused (scan or no input)";
 		Pl();
 		return;
 	end;
@@ -7401,10 +7720,12 @@ local function lh(m)
 	if WQ == "combat" then uQ(m); end;
 	-- PORTALS AFTER THE UNMAKER: two rings you walk into. Left is labelled "PRESTIGE I/II/..." (keep going
 	-- deeper); right has a garbled label and leads to "THE $!?#$#*", a shop for very rare items (it never buys).
-	-- Portal signs are caught the moment they appear in the world; it walks into the one you picked as soon
-	-- as no mob is within 25 studs.
+	-- (v5.33) Found by its tag (PrestigePortal / VesperInGate), a model with that name, or its sign; the nearest
+	-- one wins and it walks to the portal's core, as soon as no mob is within 25 studs. It says where it's going
+	-- every 8 s, walks through the ring if standing in it does nothing, and leaves a portal it can't get closer
+	-- to for a minute. One status line per cycle once it's past the Unmaker's room.
 	if not r.portalWatch then
-		r.portalWatch, r.portalSigns = true, {};
+		r.portalWatch, r.portalSigns, r.portalModels = true, {}, setmetatable({}, { __mode = "k" });
 		local function checkSign(bb)
 			if not (bb and bb.Parent) then return; end;
 			for _, o in ipairs(bb:GetDescendants()) do
@@ -7416,15 +7737,19 @@ local function lh(m)
 				end;
 			end;
 		end;
+		local function checkModel(o)
+			if o.Name == "PrestigePortal" or o.Name == "VesperInGate" then r.portalModels[o] = o.Name; end;
+		end;
 		pcall(function()
 			workspace.DescendantAdded:Connect(function(o)
-				if o:IsA("BillboardGui") then task.delay(.5, function() pcall(checkSign, o); end); end;
+				if o:IsA("BillboardGui") then task.delay(.5, function() pcall(checkSign, o); end);
+				elseif o:IsA("Model") then pcall(checkModel, o); end;
 			end);
 		end);
 		task.spawn(function()
 			pcall(function()
 				for _, o in ipairs(workspace:GetDescendants()) do
-					if o:IsA("BillboardGui") then checkSign(o); end;
+					if o:IsA("BillboardGui") then checkSign(o); elseif o:IsA("Model") then checkModel(o); end;
 				end;
 			end);
 		end);
@@ -7432,68 +7757,31 @@ local function lh(m)
 	do
 		local pick = CFG.afterUnmaker or "Prestige I";
 		local wantShop = pick == "?????" or tostring(pick):find("shop", 1, true) ~= nil;
-		local bb = r.portalSigns and (wantShop and r.portalSigns.mystery or r.portalSigns.prestige);
-		if bb and not bb.Parent then bb = nil; end;
-		-- (v5.30) PortalFx tracks prestige portals by the CollectionService tag "PrestigePortal"; Vesper's gate
-		-- is tagged "VesperInGate". The tag wins for the prestige portal; for the shop the sign text comes first.
-		local tagPos, tagSrc;
-		if pick ~= "Don't enter" then
-			pcall(function()
-				for _, mdl in ipairs(game:GetService("CollectionService"):GetTagged(wantShop and "VesperInGate" or "PrestigePortal")) do
-					if mdl.Parent and mdl:IsA("Model") then
-						tagPos, tagSrc = mdl:GetPivot().Position, wantShop and "VesperInGate tag" or "PrestigePortal tag";
-						break;
-					end;
+		if (tonumber(run.curDepth) or 0) > 17520 then
+			local key = tostring(run.id) .. "|" .. tostring(run.cash0) .. "|" .. tostring(run.prestige or 0);
+			if r.pastBossKey ~= key then
+				r.pastBossKey = key;
+				local okT, tg0 = pcall(r.portalFind, G, wantShop);
+				local okF, fx0, fz0, gx0, gz0, gp0, fsrc0 = pcall(r.forwardInfo, G.X, G.Z);
+				if r.why then
+					r.why("move", string.format("past the Unmaker (depth %s m): %s; forward goal %s; after it: %s", tostring(run.curDepth),
+						(okT and tg0) and string.format("%s portal %.0f st away (%s)", wantShop and "shop" or "prestige", tg0.dist, tg0.how) or "no portal in sight yet",
+						(okF and fx0) and string.format("%s, %.0f st", tostring(fsrc0), tonumber(gp0) or 0) or "none", tostring(pick)));
 				end;
-			end);
-		end;
-		if pick ~= "Don't enter" and (bb or tagPos) then
-			-- the sign may hang on a part, an attachment or a model
-			local holder = bb and (bb.Adornee or bb.Parent) or nil;
-			local part, pos = holder, nil;
-			if holder and holder:IsA("Attachment") then
-				pos, part = holder.WorldPosition, holder.Parent;
-			elseif holder and holder:IsA("BasePart") then
-				pos = holder.Position;
-			elseif holder then
-				part = holder:FindFirstChildWhichIsA("BasePart", true) or holder:FindFirstAncestorWhichIsA("BasePart");
-				pos = part and part.Position;
 			end;
-			if not (part and part.Parent) then part = bb; end;
-			local how = "sign text";
-			if tagPos and (not wantShop or not pos) then pos, how = tagPos, tagSrc; end;
-			local nearest = math.huge;
-			for _, mob in ipairs(S) do nearest = math.min(nearest, tonumber(mob.d) or math.huge); end;
-			if pos and nearest > 25 and (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(G.X, 0, G.Z)).Magnitude < (tagPos and 800 or 250) then
-				local tx, tz = pos.X, pos.Z;
-				if r.why and r.portalNote ~= pick .. tostring(bb) .. how then
-					r.portalNote = pick .. tostring(bb) .. how;
-					r.why("move", "walking into the " .. (wantShop and "rare shop" or "prestige") .. " portal (found by " .. how .. "; ahead of walking up the road)");
-					notify("Taking the " .. (wantShop and "rare shop" or "prestige") .. " portal.", "Delve run");
-					if not r.portalDumped and type(writefile) == "function" then
-						r.portalDumped = true;
-						pcall(function()
-							local root = part:FindFirstAncestorWhichIsA("Model") or part;
-							local lines = { "Delve portal " .. os.date("%Y-%m-%d %H:%M:%S"), root.ClassName .. " " .. root:GetFullName() };
-							for _, d0 in ipairs(root:GetDescendants()) do
-								if #lines > 120 then break; end;
-								if d0:IsA("BasePart") or d0:IsA("TextLabel") then
-									lines[#lines + 1] = string.format("  %s '%s'%s", d0.ClassName, d0.Name, d0:IsA("TextLabel") and (" text=\"" .. d0.Text .. "\"") or "");
-								end;
-							end;
-							writefile("DelveGuiDump_portals.txt", table.concat(lines, "\n"));
-						end);
+		end;
+		if pick ~= "Don't enter" then
+			local okP, tg = pcall(r.portalFind, G, wantShop);
+			if okP and tg then
+				local nearest = math.huge;
+				for _, mob in ipairs(S) do nearest = math.min(nearest, tonumber(mob.d) or math.huge); end;
+				if nearest > 25 then
+					local okW, walked = pcall(r.portalWalk, G, m, tg, wantShop);
+					if okW and walked then
+						r.lhBranch = "walking into the portal";
+						return;
 					end;
 				end;
-				local okRt, path = pcall(r.routeTo, { addr = "portal" .. pick, x = tx, z = tz }, G, 2);
-				local wp;
-				if okRt and path then
-					for _, p0 in ipairs(path) do
-						if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
-					end;
-				end;
-				if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(tx - G.X, tz - G.Z); end;
-				return;
 			end;
 		end;
 	end;
@@ -7534,6 +7822,7 @@ local function lh(m)
 					end;
 				end;
 				if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(goal.x - G.X, goal.z - G.Z); end;
+				r.lhBranch = "looking for the mobs left";
 				return;
 			end;
 		end;
@@ -7667,6 +7956,7 @@ local function lh(m)
 			end;
 			r.dodging, r.lastDodgeAt = true, d();
 			SQ(Q.x - G.X, Q.z - G.Z);
+			r.lhBranch = "dodging";
 			return;
 		end;
 	end;
@@ -7747,6 +8037,7 @@ local function lh(m)
 					r.why("move", string.format("walking to a chest %.0f st away", math.sqrt(Q * Q + e * e)));
 				end;
 				r.chestWalk = true;
+				r.lhBranch = "walking to a chest";
 				-- around attack zones and burn strips when possible, otherwise the pillar-aware straight route
 				local okR, cpath = pcall(r.routeTo, { addr = "chest" .. math.floor(m.x) .. "_" .. math.floor(m.z), x = m.x, z = m.z }, G, 1.5);
 				local cwp;
@@ -7771,8 +8062,13 @@ local function lh(m)
 	-- mined if it can get there and mine it before that spot falls (collapse front from SessionSync, else
 	-- the floor timer, else nothing is collapsing). An ore in reach is mined unless the floor under you
 	-- falls first.
+	-- (v5.33) With no floor map it walks the forward direction with a floor check every step; past the
+	-- Unmaker (or while the stall watchdog kicks) it keeps going past the last floor tile, floor checked; and
+	-- with no forward signal at all it says why (every 10 s) instead of standing there silently.
 	do
 		if CFG.pushForward ~= false and run.isDelve and WQ ~= "combat" and Q.on then
+			local kick = r.stallKick and m < r.stallKick.untilT;
+			local pastBoss = (tonumber(run.curDepth) or 0) > 17520;
 			local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
 			if okF and fx then
 				local humS = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
@@ -7801,6 +8097,7 @@ local function lh(m)
 				elseif not u then
 					reason = "nothing left to walk to";
 				end;
+				if kick and not reason then reason = "standing still too long, moving on"; end;
 				if reason then
 					local key = reason:sub(1, 14);
 					if r.why and (m - (r.fwdNoteAt or 0) > 5 or r.fwdNoteKey ~= key) then
@@ -7808,20 +8105,65 @@ local function lh(m)
 						r.why("move", string.format("walking up the road (%s, %.0f st): %s", tostring(fsrc), gp or 0, reason));
 					end;
 					if gx and (gp or 0) > 3 then
-						local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
 						local wp;
-						if okRt and path then
-							for _, p0 in ipairs(path) do
-								if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+						if nav.map then
+							local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
+							if okRt and path then
+								for _, p0 in ipairs(path) do
+									if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+								end;
 							end;
 						end;
-						if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(gx - G.X, gz - G.Z); end;
+						if wp then
+							SQ(wp.x - G.X, wp.z - G.Z);
+						else
+							-- no route (or no floor map): straight that way, but only onto floor
+							local okH, hx, hz = pcall(r.floorHeading, G, gx - G.X, gz - G.Z);
+							if okH and hx then SQ(hx, hz); elseif nav.map then SQ(gx - G.X, gz - G.Z); else SQ(nil); end;
+						end;
+						r.lhBranch = "walking up the road";
 						return;
 					elseif stuckBack then
 						-- already at the exit: don't walk back into the collapse for it
 						SQ(nil);
+						r.lhBranch = "holding at the exit (collapse behind)";
 						return;
+					elseif (kick or pastBoss) and not u and not L then
+						-- at the last floor tile with nothing to do (the room after the Unmaker isn't built from
+						-- shaft tiles): keep going that way, floor checked every step
+						local okH, hx, hz = pcall(r.floorHeading, G, fx, fz);
+						if okH and hx then
+							if r.why and m - (r.pastFloorNoteAt or 0) > 8 then
+								r.pastFloorNoteAt = m;
+								r.why("move", "at the last floor tile with nothing to do: walking on that way (floor checked every step)");
+							end;
+							SQ(hx, hz);
+							r.lhBranch = "walking past the last floor tile";
+							return;
+						end;
 					end;
+				end;
+			elseif (not u and not L) or kick then
+				-- no forward signal at all: walk the road's learned direction if there is one, and say why
+				local why = okF and "no direction signal" or ("forward check error: " .. tostring(fx));
+				pcall(function()
+					local c, src = r.room.current(G.Z);
+					if not c then why = why .. "; " .. tostring(src); end;
+				end);
+				local td = type(brain.tunnelDir) == "table" and brain.tunnelDir or nil;
+				local hx, hz;
+				if td and tonumber(td.x) and tonumber(td.z) then
+					local okH, h1, h2 = pcall(r.floorHeading, G, td.x, td.z);
+					if okH then hx, hz = h1, h2; end;
+				end;
+				if r.why and m - (r.noFwdNoteAt or 0) > 10 then
+					r.noFwdNoteAt = m;
+					r.why("move", string.format("nothing to walk to and no forward goal (%s)%s", why, hx and ": walking the road's learned direction" or ""));
+				end;
+				if hx then
+					SQ(hx, hz);
+					r.lhBranch = "walking the road's learned direction";
+					return;
 				end;
 			end;
 		end;
@@ -7829,8 +8171,10 @@ local function lh(m)
 	if WQ == "mine" and ((Q.walk and u)) then
 		local okS, sx, sz = pcall(r.steerDir, G, u.X, u.Z);
 		if okS and sx then SQ(sx, sz); else SQ(u.X - G.X, u.Z - G.Z); end;
+		r.lhBranch = "walking to an ore";
 		return;
 	end;
+	if WQ ~= "combat" then r.lhBranch = L and "mining an ore in reach" or "nothing to do"; end;
 	SQ(nil);
 end;
 -- ===================================================================================
@@ -9875,7 +10219,7 @@ end;
 				{ k = "pingUserId", t = "input", text = "Discord user ID to ping", placeholder = "e.g. 123456789012345678" },
 				{ k = "pingRuns", t = "toggle", text = "Ping on Run Complete" },
 				{ k = "pingDrops", t = "toggle", text = "Ping on rare drops" },
-				{ k = "pingDisconnect", t = "toggle", text = "Ping if disconnected or Roblox closes" },
+				{ k = "pingDisconnect", t = "toggle", text = "Ping if disconnected, stuck or Roblox closes" },
 				{ k = "rareDropOdds", t = "slider", text = "Drops with no tier: 1 in at least", min = 1000, max = 1000000, step = 1000, suffix = "" },
 			},
 		},
@@ -10268,7 +10612,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.32.1 | Brain",
+		Title = "Delve v5.33 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -10416,7 +10760,7 @@ end;
 		pingUserId = { "Your Discord user ID (number). Mentions you in posts so your phone buzzes. Stays only in your local settings.", "Recommended: set it if you want pings." },
 		pingRuns = { "Pings you on every Run Complete post.", "Recommended: your choice. OFF if it's too many pings." },
 		pingDrops = { "Pings you on rare drop posts.", "Recommended: ON." },
-		pingDisconnect = { "Pings you if Roblox disconnects you, or closes / crashes / freezes while the bot is on (needs the screenshot helper running).", "Recommended: ON. Turn the bot off before closing Roblox yourself." },
+		pingDisconnect = { "Pings you if Roblox disconnects you, or closes / crashes / freezes while the bot is on (needs the screenshot helper running), and if it has been standing still in a Delve for 3 minutes (it keeps trying to move on; DelveStall.txt says why).", "Recommended: ON. Turn the bot off before closing Roblox yourself." },
 		rareDropOdds = { "Drops with no tier name are posted only if they're at least this rare.", "Recommended: 1 in 100,000." },
 		startClosed = { "Hides this window on load. Right Shift or Open Delve shows it.", "Recommended: ON." },
 		niceToasts = { "Pop-ups styled like the game instead of plain Roblox notifications.", "Recommended: ON." },

@@ -1,6 +1,26 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.32.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.33 | Brain`).
+
+## v5.33: No more standing still after the Unmaker; leaves announced attacks early (not yet verified in gameplay)
+- **Stall after the Unmaker (16:03, 17,760 m):** it killed the Unmaker, took BULWARK from the Tithe, then stood still for 48 minutes without a single log line until F2. The same happened at 13:12 (the second Unmaker of a session; you walked into the portal yourself). The main loop kept running (F2 was logged at once) and nothing errored, so it was standing still by choice, and the logs can't tell which way: the "walking into the portal" line was only written once per session (the second portal was silent), and with no floor map or no forward goal the walk up the road stopped without a word.
+- **Portal walk rewritten:**
+  - it takes the nearest portal (PrestigePortal / VesperInGate tag, a model with that name, or its sign), not the first one the game lists;
+  - it aims at the portal's core (the `Deep` part) and says where it's going every 8 s;
+  - after 1.5 s standing in the ring with nothing happening, it walks through along the ring's axis (the other side every 3 s);
+  - a portal it can't get 3 st closer to in 25 s, or one that doesn't take it in after 15 s at it, is left alone for a minute while it walks on.
+- **Past the Unmaker:** one status line per run (`past the Unmaker (depth ... m): prestige portal N st away / no portal in sight yet; forward goal ...`). At the last floor tile with nothing to do, it keeps walking that way, checking for floor under the next 3 and 6 studs at every step (the portal room isn't built from shaft tiles).
+- **Walking up the road without a floor map:** no floor map used to mean no forward signal at all. Now the direction signals (collapse, depth marks, learned road direction) still give a goal 30 st ahead, walked with the same floor check. With no signal at all, it writes `nothing to walk to and no forward goal (why)` every 10 s. The room goal's distance is now signed, so once past the last tile it doesn't walk back to it.
+- **Stall watchdog (every Delve floor):** if it's farming, out of combat, hasn't moved 4 studs and no ore or mob count has changed for 25 s:
+  - it writes `standing still for N s (...)` with what it was doing, the ores in reach or to walk to, the floor tiles, the forward goal, the chamber, the portal and the depth;
+  - `DelveStall.txt` gets more detail: what it's standing on, the shaft rows loaded, the session sync, every portal tag, model and sign with its distance, the workspace and Plates contents, and the last 15 decisions;
+  - it skips the ores within 12 st for 30 s and walks on for 6 s;
+  - if it's still stuck after 3 minutes, it sends one Discord alert, "Delve: stuck" (uses the disconnect ping setting, now labelled "Ping if disconnected, stuck or Roblox closes").
+- **Worldheart death (15:40, 8,840 m):** the donut was announced 3.03 s ahead and the bot stood inside it for 3 s. The escape was picked 0.02 s before it landed, and the roll 0.61 s before, so the i-frames ran out just before the hit. The escape planner treated the spot you're on as safe unless it was hit within the next 1.2 s, and walking out of a ring that size takes longer than that. The window is now 2.2 s (escape planner and open-ground search), so it starts walking out of a long-warning attack straight away.
+- **Seen in the logs, not changed:**
+  - the bullet model matched the drawn bullets within 0.09-0.45 st in 6 of 7 checks (one 8 st outlier on a single bullet);
+  - the 15:51 cave-in came after about 34 s of mining with no timer warning in the log;
+  - there were regular `-269` hits about every 20.6 s with no planned attack or shot around (never fatal; source unknown).
 
 ## v5.32.1: Recorder works unattended (not yet verified in gameplay)
 - `Start Delve Screenshots.bat` now starts the recorder by default (mode 2 after 8 s); mode 1 is the plain helper.
