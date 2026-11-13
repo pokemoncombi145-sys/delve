@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10.3 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10.4 | Brain`).
+
+## v5.10.4: Overnight stability
+- The new route planning in the farm loop is protected: if it ever errors, that target is just skipped for the frame instead of stopping the loop.
+- Per-mob caches (routes, path checks, notes) reset after 300 entries so they can't grow over many hours.
+- `dodge_log.txt` and `DelveReasoning.txt` rotate at about 3 MB (the previous part is kept as `dodge_log_old.txt` / `DelveReasoning_old.txt`), so a night of AFK can't fill the disk.
 
 ## v5.10.3: Reaching the Heart Pylons and the chest (not yet verified in gameplay)
 **What the logs showed:** the pylons were seen (110-168 st away) but only targeted when the straight line to them was clear; across the Worldheart arena it always crossed a burn strip or attack zone, so it kept "holding safe ground" (logged dozens of times a second) and drifted away. After Worldheart died, the last 2 mobs were pylons it would never go to, so it stood still, never left the fight, and never walked to the chest.

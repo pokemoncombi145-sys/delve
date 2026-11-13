@@ -4,7 +4,7 @@
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.10.3**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each update.
+Current version: **v5.10.4**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each update.
 
 ## Features
 - **Dodging.** Plans a path over the floor tiles out of attack zones, avoids corners, and learns from every hit you take.

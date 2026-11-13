@@ -231,6 +231,14 @@ end);
 r.why = function(kind, text)
 	local line = string.format("%s [%s] %s", os.date("%H:%M:%S"), tostring(kind), tostring(text));
 	table.insert(r.whyLines, line);
+	r.whySize = (r.whySize or 0) + #line + 1;
+	if r.whySize > 3000000 then
+		r.whySize = 0;
+		pcall(function()
+			writefile("DelveReasoning_old.txt", readfile("DelveReasoning.txt"));
+			writefile("DelveReasoning.txt", "");
+		end);
+	end;
 	while #r.whyLines > 40 do table.remove(r.whyLines, 1); end;
 	pcall(function()
 		if type(appendfile) == "function" then appendfile("DelveReasoning.txt", line .. "\n");
@@ -314,7 +322,20 @@ local guiService = game:GetService("GuiService");
 local d = (type(os) == "table" and os.clock) or tick;
 local function f(m)
 	if Q.dodgeLog then
-		pcall(appendfile, "dodge_log.txt", string.format("%.2f %s\n", d(), m));
+		local line = string.format("%.2f %s\n", d(), m);
+		pcall(appendfile, "dodge_log.txt", line);
+		if r.logSize == nil then
+			r.logSize = 0;
+			pcall(function() if isfile("dodge_log.txt") then r.logSize = #readfile("dodge_log.txt"); end; end);
+		end;
+		r.logSize = r.logSize + #line;
+		if r.logSize > 3000000 then
+			r.logSize = 0;
+			pcall(function()
+				writefile("dodge_log_old.txt", readfile("dodge_log.txt"));
+				writefile("dodge_log.txt", "");
+			end);
+		end;
 	end;
 end;
 -- ===================================================================================
@@ -5049,6 +5070,8 @@ r.routeTo = function(mob, G, reach, ignoreFloor)
 			k = prev[k];
 		end;
 	end;
+	r.routeCacheN = (r.routeCacheN or 0) + 1;
+	if r.routeCacheN > 300 then r.routeCache, r.routeCacheN = {}, 0; end;
 	r.routeCache[key] = { t = now, path = path };
 	return path;
 end;
@@ -5505,6 +5528,8 @@ function bossStudy.pathSafe(mob)
 			if not ok then break; end;
 		end;
 	end;
+	bossStudy.safeN = (bossStudy.safeN or 0) + 1;
+	if bossStudy.safeN > 300 then bossStudy.safeCache, bossStudy.safeN = {}, 0; end;
 	bossStudy.safeCache[mob.addr] = { t = now, ok = ok, why = why };
 	return ok, why;
 end;
@@ -5516,10 +5541,17 @@ function bossStudy.bias(mob)
 		-- go for it if there's a way around the hazards (straight lines across the arena always crossed a burn strip)
 		local G = sQ();
 		local reach = math.max(4, YQ());
-		local path = r.routeTo(mob, G, reach) or r.routeTo(mob, G, reach, true);
+		local okA, pA = pcall(r.routeTo, mob, G, reach);
+		local path = okA and pA or nil;
+		if not path then
+			local okB2, pB = pcall(r.routeTo, mob, G, reach, true);
+			path = okB2 and pB or nil;
+		end;
 		if not path then
 			bossStudy.noteAt = bossStudy.noteAt or {};
 			if r.why and d() - (bossStudy.noteAt[mob.addr] or 0) > 10 then
+				if (bossStudy.noteN or 0) > 300 then bossStudy.noteAt, bossStudy.noteN = {}, 0; end;
+				bossStudy.noteN = (bossStudy.noteN or 0) + 1;
 				bossStudy.noteAt[mob.addr] = d();
 				r.why("boss", string.format("%s is %.0f st away and there's no way around the hazards yet: fighting what's near", tostring(mob.name), tonumber(mob.d) or 0));
 			end;
@@ -5789,12 +5821,16 @@ local function lh(m)
 	if WQ == "combat" and Q.chase and w and Q.dodge and not eh(Fl, G.X, G.Z) then
 		local reach = math.max(4, YQ());
 		if (tonumber(w.d) or 0) > reach + 2 then
-			local path = r.routeTo(w, G, reach);
+			local okRt, path = pcall(r.routeTo, w, G, reach);
+			if not okRt then path = nil; end;
 			if path then
 				r.noRouteSince = nil;
 			else
 				r.noRouteSince = r.noRouteSince or m;
-				if m - r.noRouteSince > 4 then path = r.routeTo(w, G, reach, true); end;
+				if m - r.noRouteSince > 4 then
+					local okRt2, p2 = pcall(r.routeTo, w, G, reach, true);
+					path = okRt2 and p2 or nil;
+				end;
 			end;
 			if path and #path > 0 then
 				local wp;
@@ -8326,7 +8362,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10.3 | Brain",
+		Title = "Delve v5.10.4 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
