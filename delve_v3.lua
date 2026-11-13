@@ -8258,7 +8258,7 @@ end;
 				if type(isfile) == "function" and not isfile("DelveRuns.jsonl") then return; end;
 				for line in tostring(readfile("DelveRuns.jsonl")):gmatch("[^\n]+") do
 					local okD, rec = pcall(Hs.JSONDecode, Hs, line);
-					if okD and type(rec) == "table" and rec.mode == "delve" and tonumber(rec.depth) then runs[#runs + 1] = rec; end;
+					if okD and type(rec) == "table" then runs[#runs + 1] = rec; end;
 				end;
 			end);
 			return runs;
@@ -8286,80 +8286,86 @@ end;
 			local seg = box(parent, color, (x1 + x2) / 2 - len / 2, (y1 + y2) / 2 - 1, len, 3, 4);
 			seg.Rotation = math.deg(math.atan2(dy, dx));
 		end;
-		local function avg(list, a, b)
+		local function avg(list, a2, b2)
 			local sum, n = 0, 0;
-			for k = math.max(1, a), math.min(#list, b) do sum, n = sum + list[k], n + 1; end;
-			return n > 0 and sum / n or nil;
+			for k = math.max(1, a2), math.min(#list, b2) do sum, n = sum + list[k], n + 1; end;
+			return n > 0 and sum / n or nil, n;
+		end;
+		-- one chart: last 100 runs of a mode as bars, 10-run average line, and the last 50 vs the 50 before
+		local SHOW, CMP = 100, 50;
+		local function section(body, y0, title, all, metric, unit)
+			label(body, title, 16, C_LINE, 16, y0, 300, 20);
+			local runs = {};
+			for k = math.max(1, #all - SHOW + 1), #all do runs[#runs + 1] = all[k]; end;
+			if #runs == 0 then
+				label(body, "No runs recorded yet.", 14, C_DIM, 16, y0 + 26, 500, 20);
+				return;
+			end;
+			local cx, cy, cw, ch = 50, y0 + 26, 590, 130;
+			box(body, C_PANEL, cx, cy, cw, ch, 1);
+			local vals = {};
+			local maxV = 1;
+			for k, rr in ipairs(runs) do
+				vals[k] = tonumber(metric(rr)) or 0;
+				maxV = math.max(maxV, vals[k]);
+			end;
+			local step = maxV > 2000 and 1000 or (maxV > 200 and 50 or 10);
+			maxV = math.ceil(maxV / step) * step;
+			for g = 0, 4 do
+				local gy = cy + ch - ch * g / 4;
+				box(body, Color3.fromRGB(40, 39, 50), cx, gy, cw, 1, 1);
+				local v = maxV * g / 4;
+				label(body, v >= 1000 and string.format("%dk", math.floor(v / 1000 + .5)) or tostring(math.floor(v + .5)), 11, C_DIM, 0, gy - 8, 46, 16, Enum.TextXAlignment.Right);
+			end;
+			local bw = cw / math.max(#runs, 20);
+			for k, rr in ipairs(runs) do
+				local h = ch * vals[k] / maxV;
+				local col = rr.learned == false and C_SKIP or (rr.died and C_DIED or C_OK);
+				box(body, col, cx + (k - 1) * bw + bw * .12, cy + ch - h, math.max(1, bw * .76), h, 2);
+			end;
+			local prevX, prevY;
+			for k = 1, #runs do
+				local a10 = avg(vals, k - 9, k);
+				local x = cx + (k - .5) * bw;
+				local y = cy + ch - ch * a10 / maxV;
+				if prevX then lineSeg(body, prevX, prevY, x, y, C_LINE); end;
+				prevX, prevY = x, y;
+			end;
+			-- the last 50 runs against the 50 before (all runs of this mode, not just the ones drawn)
+			local allVals, allHits = {}, {};
+			for k, rr in ipairs(all) do allVals[k], allHits[k] = tonumber(metric(rr)) or 0, tonumber(rr.hits) or 0; end;
+			local n = #all;
+			local r50, nr = avg(allVals, n - CMP + 1, n);
+			local p50, np = avg(allVals, n - 2 * CMP + 1, n - CMP);
+			local h50 = avg(allHits, n - CMP + 1, n);
+			local ph50 = avg(allHits, n - 2 * CMP + 1, n - CMP);
+			local deaths, best = 0, 0;
+			for k = math.max(1, n - CMP + 1), n do if all[k].died then deaths = deaths + 1; end; end;
+			for _, v in ipairs(allVals) do best = math.max(best, v); end;
+			local function pct(x, y) return (x and y and y > 0) and string.format("%+.0f%%", (x - y) / y * 100) or "not enough runs yet"; end;
+			local sy = cy + ch + 8;
+			label(body, string.format("Last %d runs: avg %s %s  (%s vs the %d before)", nr, r50 and string.format("%.0f", r50) or "?", unit, pct(r50, p50), np), 14, C_TEXT, 16, sy, 640, 18);
+			label(body, string.format("Hits/run %s (%s)   Deaths %d of %d   Best %d %s   Runs %d",
+				h50 and string.format("%.1f", h50) or "?", pct(h50, ph50), deaths, nr, best, unit, n), 13, C_TEXT, 16, sy + 20, 640, 18);
 		end;
 		local function draw()
 			local win = cv.win;
 			if not win then return; end;
-			for _, ch in ipairs(win:GetChildren()) do
-				if ch.Name == "Body" then ch:Destroy(); end;
+			for _, chd in ipairs(win:GetChildren()) do
+				if chd.Name == "Body" then chd:Destroy(); end;
 			end;
 			local body = Instance.new("Frame");
 			body.Name, body.BackgroundTransparency, body.Size, body.Position = "Body", 1, UDim2.new(1, 0, 1, -36), UDim2.fromOffset(0, 36);
 			body.Parent = win;
 			local all = readRuns();
-			local runs = {};
-			for k = math.max(1, #all - 39), #all do runs[#runs + 1] = all[k]; end;
-			if #runs == 0 then
-				label(body, "No delve runs recorded yet.", 16, C_DIM, 16, 20, 500, 24);
-				return;
+			local delve, waves = {}, {};
+			for _, rr in ipairs(all) do
+				if rr.mode == "delve" and tonumber(rr.depth) then delve[#delve + 1] = rr;
+				elseif rr.mode == "waves" then waves[#waves + 1] = rr; end;
 			end;
-			-- depth chart
-			local cx, cy, cw, ch = 46, 10, 560, 180;
-			box(body, C_PANEL, cx, cy, cw, ch, 1);
-			local maxD = 1;
-			for _, rr in ipairs(runs) do maxD = math.max(maxD, tonumber(rr.depth) or 0); end;
-			maxD = math.ceil(maxD / 1000) * 1000;
-			for g = 0, 4 do
-				local gy = cy + ch - ch * g / 4;
-				box(body, Color3.fromRGB(40, 39, 50), cx, gy, cw, 1, 1);
-				label(body, string.format("%dk", math.floor(maxD * g / 4 / 1000 + .5)), 12, C_DIM, 0, gy - 8, 40, 16, Enum.TextXAlignment.Right);
-			end;
-			local bw = cw / #runs;
-			local depths, hits = {}, {};
-			for k, rr in ipairs(runs) do
-				local dep = tonumber(rr.depth) or 0;
-				depths[k], hits[k] = dep, tonumber(rr.hits) or 0;
-				local h = ch * dep / maxD;
-				local col = rr.learned == false and C_SKIP or (rr.died and C_DIED or C_OK);
-				box(body, col, cx + (k - 1) * bw + bw * .15, cy + ch - h, bw * .7, h, 2);
-			end;
-			-- 5-run average line
-			local prevX, prevY;
-			for k = 1, #runs do
-				local a5 = avg(depths, k - 4, k);
-				local x = cx + (k - .5) * bw;
-				local y = cy + ch - ch * a5 / maxD;
-				if prevX then lineSeg(body, prevX, prevY, x, y, C_LINE); end;
-				prevX, prevY = x, y;
-			end;
-			-- hits per run (small bars)
-			local hy, hh = cy + ch + 26, 46;
-			box(body, C_PANEL, cx, hy, cw, hh, 1);
-			label(body, "hits", 12, C_DIM, 0, hy + hh / 2 - 8, 40, 16, Enum.TextXAlignment.Right);
-			local maxH = 1;
-			for _, h in ipairs(hits) do maxH = math.max(maxH, h); end;
-			for k, h in ipairs(hits) do
-				local bh = hh * h / maxH;
-				box(body, C_HIT, cx + (k - 1) * bw + bw * .25, hy + hh - bh, bw * .5, bh, 2);
-			end;
-			-- recent 10 vs the 10 before
-			local n = #depths;
-			local r10, p10 = avg(depths, n - 9, n), avg(depths, n - 19, n - 10);
-			local h10, ph10 = avg(hits, n - 9, n), avg(hits, n - 19, n - 10);
-			local deaths = 0;
-			for k = math.max(1, n - 9), n do if runs[k].died then deaths = deaths + 1; end; end;
-			local best = 0;
-			for _, rr in ipairs(all) do best = math.max(best, tonumber(rr.depth) or 0); end;
-			local function pct(a, b) return (a and b and b > 0) and string.format("%+.0f%%", (a - b) / b * 100) or "n/a"; end;
-			local sy = hy + hh + 14;
-			label(body, string.format("Last 10 runs: avg depth %s m (%s vs the 10 before)", r10 and string.format("%.0f", r10) or "?", pct(r10, p10)), 15, C_TEXT, 16, sy, 600, 20);
-			label(body, string.format("Hits per run %s (%s)   Deaths %d of %d   Best ever %d m   Runs recorded %d",
-				h10 and string.format("%.1f", h10) or "?", pct(h10, ph10), deaths, math.min(10, n), best, #all), 14, C_TEXT, 16, sy + 22, 600, 20);
-			label(body, "Bars: green survived, red died, grey not learned from.  Gold line: 5-run average depth.", 12, C_DIM, 16, sy + 46, 600, 18);
+			section(body, 4, "DELVE  (depth per run)", delve, function(rr) return rr.depth; end, "m");
+			section(body, 228, "MINES  (wave reached per run)", waves, function(rr) return rr.wave; end, "waves");
+			label(body, "Bars: green survived, red died, grey not learned from.  Gold line: 10-run average.", 12, C_DIM, 16, 452, 640, 18);
 		end;
 		local function open()
 			if cv.gui and cv.gui.Parent then cv.gui.Enabled = true; draw(); return; end;
@@ -8370,7 +8376,7 @@ end;
 				if not pcall(function() sg.Parent = game:GetService("CoreGui"); end) then sg.Parent = l:WaitForChild("PlayerGui"); end;
 			end;
 			local win = Instance.new("Frame");
-			win.Size, win.Position, win.AnchorPoint = UDim2.fromOffset(640, 380), UDim2.fromScale(.5, .5), Vector2.new(.5, .5);
+			win.Size, win.Position, win.AnchorPoint = UDim2.fromOffset(660, 520), UDim2.fromScale(.5, .5), Vector2.new(.5, .5);
 			win.BackgroundColor3, win.BackgroundTransparency, win.BorderSizePixel, win.Active = C_BG, .04, 0, true;
 			win.Parent = sg;
 			local corner = Instance.new("UICorner");
@@ -8417,7 +8423,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10.5 | Brain",
+		Title = "Delve v5.10.6 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

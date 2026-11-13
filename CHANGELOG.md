@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10.5 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10.6 | Brain`).
+
+## v5.10.6: Learning curve: Delve and Mines apart, 50-run comparison
+- The learning curve window now has two graphs: **Delve** (depth per run) and **Mines** (wave reached per run).
+- Each shows the last 100 runs with a 10-run average line, and compares the **last 50 runs with the 50 before** (average, hits per run, deaths, best, total runs). Until a mode has 100 runs it says "not enough runs yet" for the comparison.
 
 ## v5.10.5: From the overnight logs (not yet verified in gameplay)
 **What the overnight logs showed (8 delve runs on v5.10.4, then 18 Mycelia wave runs):**
