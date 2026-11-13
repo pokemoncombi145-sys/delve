@@ -3209,8 +3209,11 @@ local relicAPI = (function()
 	r.prio = {
 		life = { "SECOND CHANCE", "SECOND LIFE", "EXTRA LIFE", "REVIVE", "RESURRECT", "CHEAT DEATH", "FATAL", "INSTEAD OF DYING",
 			"WOULD DIE", "ON DEATH", "WHEN YOU DIE", "LAST STAND", "UNDYING", "PHOENIX", "SAVE THE RUN", "SAVES THE RUN", "SURVIVE A" },
+		-- 2nd tier (after luck): mining power/range, weapon power/range, swing speed and area (AOE) hits
 		power = { "WEAPON POWER", "MINE POWER", "MINING POWER", "SWING SPEED", "ATTACK SPEED", "MINE SPEED", "MINING SPEED",
-			"STRIKE TWICE", "STRIKES TWICE", "SWINGS", "SWING" },
+			"STRIKE TWICE", "STRIKES TWICE", "SWINGS", "SWING",
+			"MINING RANGE", "MINE RANGE", "MINING CIRCLE", "MINING RADIUS", "RADIUS", "REACH", "RANGE",
+			"AOE", "AREA", "CLEAVE", "CHAIN", "SPLASH", "EXPLO", "SHOCKWAVE", "LIGHTNING", "NEARBY", "ALL MOBS", "EVERY MOB" },
 		time = { "ROWS OF TIME", "OF TIME", "EXTRA TIME", "MORE TIME", "TIMER", "SECONDS", "COLLAPSE", "LONGER" },
 		has = function(u, list)
 			for _, w in ipairs(list) do
@@ -3246,8 +3249,8 @@ local relicAPI = (function()
 				-- luck and drop quantity are top priority in delves (more and rarer drops)
 				if cat == "luck" or uc:find(" LUCK", 1, true) or uc:find("QUANTITY", 1, true) then
 					pm, tag = 1.8, "luck/drops";
-				elseif r.prio.has(uc, r.prio.power) then
-					pm, tag = 1.6, "power/speed";
+				elseif cat == "range" or r.prio.has(uc, r.prio.power) then
+					pm, tag = 1.6, "power/range/aoe";
 				elseif cat == "survival" or r.prio.has(uc, r.prio.time) then
 					pm, tag = 1.35, "survival/time";
 				end;
@@ -8219,7 +8222,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10.1 | Brain",
+		Title = "Delve v5.10.2 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10.2 | Brain`).
+
+## v5.10.2: Relic priority order
+1. A second chance you don't have yet.
+2. **Luck and drop quantity** (1.8x).
+3. **Mining power and range, weapon power and range, swing/attack/mine speed, and area (AOE) effects** like cleave, chain, splash, explosions, lightning, "nearby" / "all mobs" (1.6x). Mining range, radius, reach and mining circle are now in this tier.
+4. **Survivability and floor time** (1.35x).
 
 ## v5.10.1: Walking into Worldheart's red zone (not yet verified in gameplay)
 **What the death record showed:** at 9,060 m it was chasing Worldheart ("why=big mob") straight through big warning circles (in 2-3 of them for 1.5 s), and the moment before the killing hit it read as "in no zone". Three causes:
