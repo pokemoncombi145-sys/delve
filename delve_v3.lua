@@ -8972,7 +8972,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.21 | Brain",
+		Title = "Delve v5.22 | Brain",
 		Folder = "DelveV3",
 		Icon = "fish",
 		Size = UDim2.fromOffset(760, 640),
@@ -9024,6 +9024,80 @@ end;
 		if item.t == "feat" then return Q.feat[item.k] ~= false; end;
 		return Q[item.k];
 	end;
+	-- INFO TEXT under every setting: what it does, then a recommendation. Shown as the setting's description.
+	local INFO = {
+		autoStage = { "From the hub, opens GO MINE!, picks the stage below and starts it. Also used after scan trips.", "Recommended: ON for AFK farming." },
+		stage = { "Which stage Auto Farm starts from the hub.", "Recommended: Delve." },
+		stageOther = { "Type a stage name that isn't in the list. Anything here overrides the Stage list.", "Recommended: leave empty." },
+		autoReplay = { "Clicks BACK TO MINE on the end screen so the next run starts by itself.", "Recommended: ON for AFK farming." },
+		replayDelay = { "Seconds to wait on the end screen before playing again (gives the screenshot time to be taken).", "Recommended: 2.5 s. Don't go below 1.5 s if Discord posts are on." },
+		autoStartFarm = { "Turns the farm back on by itself after you rejoin or re-run the script.", "Recommended: ON." },
+		mine = { "Mines rocks and ores. Turning it off means fight-only.", "Recommended: ON. Delve needs ores mined to beat the timer." },
+		walk = { "Walks to the next rock instead of only mining what's in reach.", "Recommended: ON." },
+		chests = { "Walks to and opens chests after a floor is cleared.", "Recommended: ON." },
+		centerFarm = { "Stands at the chest / arena center and mines from there (for wave stages with a fixed center).", "Recommended: OFF for Delve. Only for wave arenas." },
+		centerCleanup = { "With center mining, still walks out to ores that are out of reach.", "Recommended: OFF unless center mining is on." },
+		autoStats = { "Reads your real mining reach and radius from the game (Stats tab and buffs) and keeps them updated.", "Recommended: ON. Turn off only to set reach/radius by hand." },
+		reach = { "How far from a rock you can stand and still mine it. Set automatically when the option above is on.", "Recommended: don't touch while the game reading is on." },
+		radius = { "Size of your mining circle (area hit per swing). Set automatically when the reading is on.", "Recommended: don't touch while the game reading is on." },
+		mineRange = { "How far it looks for rocks to walk to.", "Recommended: 150 st. Higher wanders off, lower misses ores." },
+		chestRange = { "How far it looks for chests to walk to.", "Recommended: 120 st." },
+		minTier = { "Ignores rocks below this tier (1 = mine everything).", "Recommended: 1 in Delve (every ore counts toward the timer)." },
+		skipAfter = { "If a rock can't be reached or broken for this long, it moves on to another one.", "Recommended: 9 s." },
+		combat = { "Fights mobs with your weapon.", "Recommended: ON. Delve needs mobs and bosses killed." },
+		chase = { "Follows the target and circles it while hitting.", "Recommended: ON." },
+		dodge = { "Steps out of attack zones (red areas, beams, slams) before they land. The core of staying alive.", "Recommended: ON. Never turn this off." },
+		autoRoll = { "Uses the roll to get out of attacks when walking isn't fast enough.", "Recommended: ON." },
+		mobPriority = { "Smart: ores first, fights bosses, threats and mob floors. Ores first: avoids fights. Always fight: kills everything.", "Recommended: Smart." },
+		dangerTime = { "When the Delve floor timer is at or below this, it ignores mobs (except bosses and mobs on top of you) and only mines.", "Recommended: 10 s. Raise it if you get caved in." },
+		lowHpPct = { "Below this HP it stops chasing and keeps its distance from bosses.", "Recommended: 35 %. With Glass Soul (1 HP) this has no effect." },
+		crowdSize = { "When this many mobs are up at once, it clears them before mining.", "Recommended: 5." },
+		fightDist = { "How close it circles the target while fighting.", "Recommended: 8 st. Lower hits more but gets hit more." },
+		flankDodge = { "Dodges past the enemy (behind or beside it) instead of backing away, so it keeps hitting.", "Recommended: ON." },
+		exploreForMobs = { "When the HUD says more mobs are left than it can see (pylons at the top of a boss room), it walks up the room to find them.", "Recommended: ON." },
+		rangedFirst = { "Kills mobs that shoot or hit from far away first, but only when they're actually firing at you.", "Recommended: ON." },
+		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step). Never during boss fights.", "Recommended: On." },
+		rollKey = { "The key your game uses for roll / dash.", "Recommended: Q (the game's default). Change only if you rebound it." },
+		cardPick = { "Picks relics, blessings, forks and trader buys by itself using the brain's scores.", "Recommended: ON for AFK. OFF shows the pick but lets you choose." },
+		relicExplore = { "Now and then takes a relic it has never taken, so the brain learns the whole relic index. Never instead of a second chance, luck relic or set completion.", "Recommended: ON." },
+		forkPath = { "Safe or Cursed tunnel at forks. Smart picks Cursed when the run is healthy, Safe when it's in trouble.", "Recommended: Smart." },
+		afterBossPath = { "After Worldheart: Descend (more mobs, combat relics first) or Ascend (more rock, mining relics first).", "Recommended: Descend." },
+		afterUnmaker = { "After the Unmaker: walks into the Prestige portal, Vesper's shop portal (it never sells anything there), or neither.", "Recommended: Prestige I." },
+		traderBuy = { "Buys from the in-run relic trader when a relic is worth it. Uses in-run currency only.", "Recommended: ON." },
+		traderMinScore = { "Only buys from the trader when the relic's score is at least this.", "Recommended: 5." },
+		autoIndexScan = { "Every few runs goes to the hub and reads the T menu (Index, Stats, Equipment) so the brain knows drop odds and your gear.", "Recommended: ON." },
+		scanEveryRuns = { "How many runs between scans. The count starts over every time you join or rejoin.", "Recommended: 10-30." },
+		webhookOn = { "Posts a Run Complete message with a screenshot to your Discord webhook.", "Recommended: ON once the webhook URL is set." },
+		webhookUrl = { "Your Discord channel webhook (Server Settings > Integrations > Webhooks > Copy URL). Keep it private.", "Recommended: paste it, then send a test post." },
+		webhookDelay = { "Seconds before the screenshot is taken, so the end screen is fully shown.", "Recommended: 1.5 s." },
+		dropWebhook = { "Posts Mythic, Forsaken and Eternal drops (and very rare untiered ones) to Discord.", "Recommended: ON." },
+		pingUserId = { "Your Discord user ID (number). Mentions you in posts so your phone buzzes. Stays only in your local settings.", "Recommended: set it if you want pings." },
+		pingRuns = { "Pings you on every Run Complete post.", "Recommended: your choice. OFF if it's too many pings." },
+		pingDrops = { "Pings you on rare drop posts.", "Recommended: ON." },
+		pingDisconnect = { "Pings you if Roblox disconnects you, or closes / crashes / freezes while the bot is on (needs the screenshot helper running).", "Recommended: ON. Turn the bot off before closing Roblox yourself." },
+		rareDropOdds = { "Drops with no tier name are posted only if they're at least this rare.", "Recommended: 1 in 100,000." },
+		startClosed = { "Hides this window on load. Right Shift or Open Delve shows it.", "Recommended: ON." },
+		niceToasts = { "Pop-ups styled like the game instead of plain Roblox notifications.", "Recommended: ON." },
+		uiFont = { "Mixed: pixel font for titles, clean font for text. Game font: pixel everywhere. Clean: clean everywhere.", "Recommended: Mixed." },
+		relicNotify = { "Pop-up for each relic, trader and path choice and why it picked it.", "Recommended: ON while watching, OFF if it's distracting." },
+		mechNotify = { "Pop-up when it meets a new relic or mechanic.", "Recommended: ON." },
+		background = { "Keeps farming while Roblox is tabbed out (sends input without your real mouse/keyboard).", "Recommended: ON if you use the PC while farming." },
+		silentAim = { "Aims without moving your real mouse cursor.", "Recommended: ON together with Background mode, otherwise OFF." },
+		bgKeyMethod = { "How key presses are sent while tabbed out. Auto tries each method and keeps the one that works.", "Not recommended to change: leave on Auto." },
+		bgMoveMethod = { "How walking is done while tabbed out.", "Not recommended to change: leave on Both." },
+		useLearned = { "Equips tools through the game's own signals it learned, instead of key presses, while tabbed out.", "Not recommended to change: leave ON." },
+		autoEquip = { "Switches to the pickaxe for rocks and the weapon for mobs by itself.", "Recommended: ON." },
+		pickSlot = { "Hotbar slot of your pickaxe.", "Recommended: 1 (the game's default)." },
+		weaponSlot = { "Hotbar slot of your weapon.", "Recommended: 2 (the game's default)." },
+		antiAfk = { "Stops Roblox from kicking you for being idle.", "Recommended: ON for AFK farming." },
+		dodgeLog = { "Writes every dodge decision to dodge_log.txt (used for reviewing deaths).", "Recommended: ON while improving the script. It rotates at 3 MB." },
+		dangerView = { "Draws the danger zones, safe spots and route it sees on screen.", "Not recommended for farming (costs FPS). Use it to watch what it thinks." },
+	};
+	local function infoText(it)
+		local i = INFO[it.k];
+		if not i then return nil; end;
+		return "ⓘ " .. i[1] .. "\n" .. i[2];
+	end;
 	for _, group in ipairs(spec) do
 		local tab = group.main and main or window:Tab({ Title = group.name, Icon = group.icon });
 		for _, item in ipairs(group.items) do
@@ -9038,6 +9112,7 @@ end;
 				local okInput, inputWidget = pcall(function()
 					return tab:Input({
 						Title = it.text,
+						Desc = infoText(it),
 						Placeholder = it.placeholder or "",
 						Value = tostring(value or ""),
 						Callback = changed,
@@ -9047,6 +9122,7 @@ end;
 			elseif it.t == "slider" then
 				widget = tab:Slider({
 					Title = it.text,
+					Desc = infoText(it),
 					Step = it.step,
 					Value = { Min = it.min, Max = it.max, Default = tonumber(value) or it.min },
 					Callback = changed,
@@ -9054,13 +9130,14 @@ end;
 			elseif it.t == "combo" then
 				widget = tab:Dropdown({
 					Title = it.text,
+					Desc = infoText(it),
 					Values = it.items,
 					Value = value,
 					AllowNone = false,
 					Callback = changed,
 				});
 			else
-				widget = tab:Toggle({ Title = it.text, Value = value == true, Callback = changed });
+				widget = tab:Toggle({ Title = it.text, Desc = infoText(it), Value = value == true, Callback = changed });
 			end;
 			synced[it.k] = { widget = widget, value = value, item = it };
 		end;

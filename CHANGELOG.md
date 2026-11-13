@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.21 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.22 | Brain`).
+
+## v5.22: Info under every setting (not yet verified in gameplay)
+- Every toggle, slider, dropdown and text box now has an **ⓘ** line under it saying exactly what it does, plus a recommendation (or "Not recommended to change") so you know what's safe to touch.
+- Final review before AFK: syntax, scope and local-count checks pass; no clicks on reroll/buy/Robux/spin/gift; nothing sells to Vesper; no personal info in the repo.
 
 ## v5.21: Bigger window, fish icon, Credits, relic study (not yet verified in gameplay)
 - **Window:** 760 x 640 (was 620 x 480), so options fit on one line and more show at once.
