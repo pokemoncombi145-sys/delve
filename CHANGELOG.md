@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.19 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.19.1 | Brain`).
+
+## v5.19.1: Descend reads what the run needs (not yet verified in gameplay)
+- On the **Descend** path, combat boosts still come first, but mining power, mining range and mine speed relics are weighed against the run's current state:
+  - **Mining needed** when your ACTIVE BUFFS add up to less than +100% mining, or the floor timer has dropped into the danger zone since Worldheart. Then mining relics rank close to combat, and a **massive** one (+60% or more) beats the combat picks.
+  - **Mining not needed** (plenty of mining buffs, no timer close calls): mining relics drop lower so the run keeps stacking combat and goes faster. A massive mining relic can still win if the combat options are weak.
+- The reasoning log says why, e.g. `mining, massive (only +40% mining buffs)` or `mining (+190% mining already, no close calls)`.
 
 ## v5.19: Scans happen in the hub; races removed (not yet verified in gameplay)
 - **Scan trips:** when a scan is due (every N runs, set by "Scan every" in the UI), the end screen's **RETURN TO HUB** is clicked instead of BACK TO MINE. The Index/Stats/Equipment scan runs in the hub, then the next run is started from GO MINE with your chosen stage, even when Auto Farm is off. If the scan keeps failing for 90 s it starts the run anyway.

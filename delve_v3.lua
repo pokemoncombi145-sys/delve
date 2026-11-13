@@ -3260,6 +3260,22 @@ local relicAPI = (function()
 	--   2. weapon power, mine power, swing / attack speed (the build)
 	--   3. survivability and more time on the floor
 	-- plus finishing sets already started (read from ACTIVE BUFFS), and everything learned from past runs.
+	-- does this run need more mining? Sums the mining buffs you already have (ACTIVE BUFFS, e.g.
+	-- "+90% MINE POWER - DEEP DELVER") and counts timer close calls since Worldheart.
+	r.mineNeed = function()
+		local have = 0;
+		for _, u in ipairs(type(run.buffLines) == "table" and run.buffLines or {}) do
+			if u:find("MINE", 1, true) or u:find("MINING", 1, true) or u:find("PICKAXE", 1, true) then
+				local pct = tonumber(u:match("%+%s*([%d%.]+)%s*%%"));
+				local mult = tonumber(u:match("[X×]%s*([%d%.]+)"));
+				have = have + (pct or (mult and mult > 1 and (mult - 1) * 100) or 0);
+			end;
+		end;
+		local calls = (run.dangerCount or 0) - (run.pathDanger or run.dangerCount or 0);
+		if calls >= 1 then return true, string.format("%d timer close call%s since Worldheart", calls, calls > 1 and "s" or ""); end;
+		if have < 100 then return true, string.format("only +%d%% mining buffs", have); end;
+		return false, string.format("+%d%% mining already, no close calls", have);
+	end;
 	r.prio = {
 		life = { "SECOND CHANCE", "SECOND LIFE", "EXTRA LIFE", "REVIVE", "RESURRECT", "CHEAT DEATH", "FATAL", "INSTEAD OF DYING",
 			"WOULD DIE", "ON DEATH", "WHEN YOU DIE", "LAST STAND", "UNDYING", "PHOENIX", "SAVE THE RUN", "SAVES THE RUN", "SURVIVE A" },
@@ -3316,6 +3332,15 @@ local relicAPI = (function()
 					local favour = (run.worldPath == "Descend" and isCombat) or (run.worldPath == "Ascend" and isMine);
 					pm = favour and 1.75 or 1.45;
 					tag = (isCombat and "combat" or "mining") .. (favour and " (" .. run.worldPath .. " path)" or "");
+					if run.worldPath == "Descend" and isMine and v > 0 then
+						-- Descend still needs ores mined to beat the timer. Mining relics move up when the run needs
+						-- them (low mining buffs, or timer close calls since Worldheart), and a massive one (+60% or
+						-- more) can beat the combat picks. Otherwise combat keeps going first to make the run faster.
+						local need, why0 = r.mineNeed();
+						local massive = v >= 60;
+						pm = need and (massive and 1.9 or 1.7) or (massive and 1.6 or 1.35);
+						tag = string.format("mining%s (%s)", massive and ", massive" or "", why0);
+					end;
 				elseif cat == "range" or r.prio.has(uc, r.prio.power) then
 					pm, tag = 1.6, "power/range/aoe";
 				elseif cat == "survival" or r.prio.has(uc, r.prio.time) then
@@ -3629,7 +3654,7 @@ local relicAPI = (function()
 		if ascC and desC and (choice == ascC or choice == desC) then
 			local wp = choice == ascC and "Ascend" or "Descend";
 			if run.worldPath ~= wp then
-				run.worldPath = wp;
+				run.worldPath, run.pathDanger = wp, run.dangerCount or 0;
 				if r.why then r.why("relic", wp .. " path: relics now favour " .. (wp == "Descend" and "combat boosts" or "mining power/range")); end;
 			end;
 		end;
@@ -4024,7 +4049,7 @@ local relicAPI = (function()
 		if run.curDepth and run.depth - v > 2000 and v < 2000 then
 			run.prestige = (run.prestige or 0) + 1;
 			run.prestigeTotal = (run.prestigeTotal or 0) + run.depth;
-			run.worldPath = nil;
+			run.worldPath, run.pathDanger = nil, nil;
 			if r.why then r.why("run", string.format("prestige %d after %d m: depth starts over (total %d m)", run.prestige, run.depth, run.prestigeTotal)); end;
 			notify(string.format("Prestige %d! %d m done, starting over.", run.prestige, run.depth), "Delve run");
 			run.depth = v;
@@ -8857,7 +8882,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.19 | Brain",
+		Title = "Delve v5.19.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
