@@ -128,6 +128,7 @@ local m = {
 		mechNotify = true,
 		dangerTime = 10,
 		forkPath = "Smart",
+		afterBossPath = "Descend",
 		traderBuy = true,
 		traderMinScore = 5,
 		relicDelay = .3,
@@ -3537,6 +3538,19 @@ local relicAPI = (function()
 			end;
 			choice = want == "Safe" and safeC or cursedC;
 			draft.forkWhy = why;
+		end;
+		-- after Worldheart ("THE WORLD BREAKS OPEN"): ASCEND = the Heavens, mining path (denser rock, richer ore);
+		-- DESCEND = the Hollow, combat path (more mobs, more elites). Your setting decides.
+		local ascC, desC;
+		for _, c in ipairs(scored) do
+			local nu = tostring(c.name):upper();
+			if nu == "DESCEND" or nu:find("^DESCEND") then desC = c; elseif nu == "ASCEND" or nu:find("^ASCEND") then ascC = c; end;
+		end;
+		local pathPick = Q.afterBossPath or "Descend";
+		if ascC and desC and pathPick ~= "Let the brain decide" then
+			draft.fork = true;
+			choice = pathPick == "Ascend" and ascC or desC;
+			draft.forkWhy = "your setting: " .. pathPick;
 		end;
 		if draft.trader then
 			r.traderBought = (type(r.traderBought) == "table" and now - (r.traderVisitAt or -1e9) < 30) and r.traderBought or {};
@@ -7753,6 +7767,7 @@ end;
 				{ k = "cardPick", t = "toggle", text = "Pick relics and blessings" },
 				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd (to learn)" },
 				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
+				{ k = "afterBossPath", t = "combo", text = "After Worldheart", items = { "Descend", "Ascend", "Let the brain decide" } },
 				{ k = "traderBuy", t = "toggle", text = "Buy from traders" },
 				{ k = "traderMinScore", t = "slider", text = "Trader: buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
 			},
@@ -7995,7 +8010,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.9.5 | Brain",
+		Title = "Delve v5.9.6 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

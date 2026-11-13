@@ -1,6 +1,9 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.9.5 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.9.6 | Brain`).
+
+## v5.9.6: Path after Worldheart
+- After Worldheart ("THE WORLD BREAKS OPEN") the choice is **ASCEND** (the Heavens: mining path, denser rock, richer ore) or **DESCEND** (the Hollow: combat path, more mobs, more elites). The logs showed it always took Ascend by score. New Relics setting **After Worldheart**: Descend (default), Ascend, or Let the brain decide (the old scoring). The pick is announced and logged like a tunnel fork.
 
 ## v5.9.5: Luck first
 - **Luck and drop quantity are top priority** for relics: 1.8x weight (power/speed 1.6x, survival/time 1.35x). "Quantity" now counts as luck/drops, and the old 0.7x discount on luck is removed. A second chance you don't have yet still comes first.
