@@ -144,6 +144,9 @@ local m = {
 		-- settings / run reporting
 		autoStartFarm = true,
 		webhookOn = false,
+		pingUserId = "",
+		pingRuns = true,
+		pingDrops = true,
 		webhookUrl = "",
 		webhookDelay = 1.5,
 		dropWebhook = true,
@@ -5762,6 +5765,20 @@ end;
 --   executor's workspace\DelveWebhook folder and the helper screenshots + uploads it).
 --   Without the helper it still posts the run stats as text.
 -- ===================================================================================
+-- Discord message body. A mention only pings when it's in the message text (not inside the embed),
+-- and allowed_mentions limits it to that one user.
+r.discordPayload = function(embed, kind)
+	local payload = { username = "Delve Brain", embeds = { embed } };
+	local id = tostring(CFG.pingUserId or ""):match("^%s*(%d%d%d%d%d+)%s*$");
+	local want = (kind == "run" and CFG.pingRuns ~= false) or (kind == "drop" and CFG.pingDrops ~= false) or kind == "test";
+	if id and want then
+		payload.content = "<@" .. id .. ">";
+		payload.allowed_mentions = { users = { id } };
+	else
+		payload.allowed_mentions = { parse = {} };
+	end;
+	return payload;
+end;
 r.sendRunWebhook = function(info, isTest)
 	if not isTest and CFG.webhookOn ~= true then return false; end;
 	local url = tostring(CFG.webhookUrl or "");
@@ -5865,7 +5882,7 @@ r.sendRunWebhook = function(info, isTest)
 	end);
 	if helperAlive and type(writefile) == "function" then
 		embed.image = { url = "attachment://run.png" };
-		local job = { url = url, payload = { username = "Delve Brain", embeds = { embed } }, image = (not isTest) and r.lastSnap or nil };
+		local job = { url = url, payload = r.discordPayload(embed, isTest and "test" or "run"), image = (not isTest) and r.lastSnap or nil };
 		r.lastSnap = nil;
 		local ok = pcall(function()
 			writefile(string.format("DelveWebhook/job_%d_%d.json", os.time(), math.random(1000, 9999)), Hs:JSONEncode(job));
@@ -5886,7 +5903,7 @@ r.sendRunWebhook = function(info, isTest)
 		Url = url,
 		Method = "POST",
 		Headers = { ["Content-Type"] = "application/json" },
-		Body = Hs:JSONEncode({ username = "Delve Brain", embeds = { embed } }),
+		Body = Hs:JSONEncode(r.discordPayload(embed, isTest and "test" or "run")),
 	});
 	local code = ok and type(res) == "table" and tonumber(res.StatusCode) or nil;
 	if isTest then
@@ -5916,7 +5933,7 @@ r.postEmbed = function(embed)
 		embed.image = { url = "attachment://run.png" };
 		local ok = pcall(function()
 			writefile(string.format("DelveWebhook/job_%d_%d.json", os.time(), math.random(1000, 9999)),
-				Hs:JSONEncode({ url = url, payload = { username = "Delve Brain", embeds = { embed } } }));
+				Hs:JSONEncode({ url = url, payload = r.discordPayload(embed, "drop") }));
 		end);
 		if ok then return true; end;
 		embed.image = nil;
@@ -5926,7 +5943,7 @@ r.postEmbed = function(embed)
 	if not req then return false; end;
 	local ok, res = pcall(req, {
 		Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" },
-		Body = Hs:JSONEncode({ username = "Delve Brain", embeds = { embed } }),
+		Body = Hs:JSONEncode(r.discordPayload(embed, "drop")),
 	});
 	return ok and type(res) == "table" and (tonumber(res.StatusCode) or 999) < 300;
 end;
@@ -7731,6 +7748,9 @@ end;
 				{ k = "webhookUrl", t = "input", text = "Webhook URL", placeholder = "https://discord.com/api/webhooks/..." },
 				{ k = "webhookDelay", t = "slider", text = "Screenshot delay", min = 0, max = 10, step = .5, suffix = " s" },
 				{ k = "dropWebhook", t = "toggle", text = "Post rare drops" },
+				{ k = "pingUserId", t = "input", text = "Discord user ID to ping", placeholder = "e.g. 123456789012345678" },
+				{ k = "pingRuns", t = "toggle", text = "Ping on Run Complete" },
+				{ k = "pingDrops", t = "toggle", text = "Ping on rare drops" },
 				{ k = "rareDropOdds", t = "slider", text = "Drops with no tier: 1 in at least", min = 1000, max = 1000000, step = 1000, suffix = "" },
 			},
 		},
@@ -7950,7 +7970,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.9.3 | Brain",
+		Title = "Delve v5.9.4 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

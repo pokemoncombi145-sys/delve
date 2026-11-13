@@ -1,6 +1,9 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.9.3 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.9.4 | Brain`).
+
+## v5.9.4: Discord pings
+- Discord tab: **Discord user ID to ping**, plus **Ping on Run Complete** and **Ping on rare drops**. The mention goes in the message text (mentions inside embeds don't notify), and only that one user can be pinged. No bot needed; the webhook does it. The test post pings too.
 
 ## v5.9.3: Mining away from the collapse, end-of-run screenshot (not yet verified in gameplay)
 - **Collapse awareness.** When floor tiles vanish (the floor collapsing), it remembers where for 20 s. Every ore is still mined (you need them all to progress), but ores within 8 studs of the collapse are mined last (weight x0.1) and within 16 studs later (x0.4), so it works on the ores ahead instead of walking back into the collapse. Walking also treats vanished tiles as holes and routes around them instead of crossing the void.
