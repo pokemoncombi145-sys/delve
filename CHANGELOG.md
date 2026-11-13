@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.17 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.17.1 | Brain`).
+
+## v5.17.1: Lava and prestige count (not yet verified in gameplay)
+- **Lava (the orange burn tiles at Worldheart)** tick damage the whole time you stand on them. The escape planner now pays a lot more to cross them (and with Glass Soul, 1 max HP, they're effectively walls), and routes to far targets may only cross them when a tick can't kill you (not on Glass Soul, and HP 60%+). Before, it could cross them after 4 s without a safe route.
+- **Prestige doesn't reset the depth** ("DEPTH 26,580 M - PRESTIGE I"): the prestige number is read from that label instead, and recorded with the run.
 
 ## v5.17: Portals after the Unmaker (not yet verified in gameplay)
 - After the Unmaker two portal rings appear that you walk into: the left one is labelled **PRESTIGE I**, the right one has a garbled label (unknown so far, called **?????**).

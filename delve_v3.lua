@@ -4046,9 +4046,17 @@ local relicAPI = (function()
 				end;
 			end;
 		end;
-		if not ls.depth and hud.depth and hud.depth.Parent then
-			local v = tonumber((trim(txt(hud.depth)):upper():gsub(",", "")):match("^DEPTH%s*(%d+)"));
-			noteDepth(v, now);
+		if hud.depth and hud.depth.Parent then
+			if not ls.depth then
+				local v = tonumber((trim(txt(hud.depth)):upper():gsub(",", "")):match("^DEPTH%s*(%d+)"));
+				noteDepth(v, now);
+			end;
+			local rom = trim(txt(hud.depth)):upper():match("PRESTIGE%s+([IVX]+)");
+			local RN = { I = 1, II = 2, III = 3, IV = 4, V = 5, VI = 6, VII = 7, VIII = 8, IX = 9, X = 10 };
+			if rom and RN[rom] and RN[rom] > (run.prestige or 0) then
+				run.prestige = RN[rom];
+				if r.why then r.why("run", "prestige " .. rom .. " (depth keeps counting)"); end;
+			end;
 		end;
 		if hud.wave and hud.wave.Parent then
 			local wt = txt(hud.wave):upper();
@@ -5115,6 +5123,10 @@ r.navRoute = navRoute;
 -- first tile within `reach` of the target. ignoreFloor = also allow lingering ground hazards (burn strips),
 -- used only when there's no fully safe way (so it doesn't freeze). Cached 0.5 s per target.
 r.routeCache = {};
+r.lavaOk = function()
+	local hum = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+	return hum ~= nil and hum.MaxHealth > 5 and hum.Health / hum.MaxHealth >= .6;
+end;
 r.routeTo = function(mob, G, reach, ignoreFloor)
 	if not (mob and mob.x and G) or not navBuild() then return nil; end;
 	local now = d();
@@ -5235,6 +5247,8 @@ local function navEscape(px, pz, zones, now)
 	end;
 	local margin = Vl + .5 + cell * .35;
 	local dangerCache = {};
+	local humE = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+	local lavaCost = (humE and humE.MaxHealth <= 5) and 200 or 20;
 	local function danger(key)
 		local v = dangerCache[key];
 		if v == nil then
@@ -5242,7 +5256,11 @@ local function navEscape(px, pz, zones, now)
 			local t = map[key];
 			for _, z in ipairs(near) do
 				local depth = ul(z, t.wx, t.wz, margin);
-				if depth then v = v + depth + 1; end;
+				if depth then
+					-- burning floor (the orange lava tiles) ticks damage the whole time you're on it
+					local lava = z.floor or tostring(z.sig or ""):find("Burn", 1, true);
+					v = v + depth + 1 + (lava and lavaCost or 0);
+				end;
 			end;
 			dangerCache[key] = v;
 		end;
@@ -5785,7 +5803,7 @@ function bossStudy.bias(mob)
 		local reach = math.max(4, YQ());
 		local okA, pA = pcall(r.routeTo, mob, G, reach);
 		local path = okA and pA or nil;
-		if not path then
+		if not path and r.lavaOk() then
 			local okB2, pB = pcall(r.routeTo, mob, G, reach, true);
 			path = okB2 and pB or nil;
 		end;
@@ -6303,7 +6321,7 @@ local function lh(m)
 				r.noRouteSince = nil;
 			else
 				r.noRouteSince = r.noRouteSince or m;
-				if m - r.noRouteSince > 4 then
+				if m - r.noRouteSince > 4 and r.lavaOk() then
 					local okRt2, p2 = pcall(r.routeTo, w, G, reach, true);
 					path = okRt2 and p2 or nil;
 				end;
@@ -8859,7 +8877,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.17 | Brain",
+		Title = "Delve v5.17.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
