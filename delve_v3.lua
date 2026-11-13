@@ -127,6 +127,7 @@ local m = {
 		dangerView = false,
 		flankDodge = true,
 		exploreForMobs = true,
+		rangedFirst = true,
 		uiGameFont = true,
 		mechNotify = true,
 		dangerTime = 10,
@@ -2097,6 +2098,22 @@ function dangerMem.tag(z, part, kind)
 	if not z.seenAt and kind ~= "mob" and kind ~= "floor" then
 		z.seenAt = d();
 		pcall(dangerMem.onAttack, z, z.seenAt);
+		if kind == "projectile" then
+			local shooter, sd;
+			for _, mob in pairs(el) do
+				if mob.x and mob.name and not mob.dead then
+					local dd = (mob.x - z.x) ^ 2 + (mob.z - z.z) ^ 2;
+					if dd < 100 and (not sd or dd < sd) then shooter, sd = mob, dd; end;
+				end;
+			end;
+			if shooter then
+				local nm = tostring(shooter.name);
+				brain.ranged = type(brain.ranged) == "table" and brain.ranged or {};
+				brain.ranged[nm] = (tonumber(brain.ranged[nm]) or 0) + 1;
+				r.rangedSeen = r.rangedSeen or {};
+				r.rangedSeen[nm] = z.seenAt;
+			end;
+		end;
 	end;
 end;
 function dangerMem.holes(list)
@@ -6036,6 +6053,23 @@ local function lh(m)
 			r.deathBias[nmKey] = db0;
 		end;
 		if db0 > 0 and (Q.d or 99) < 45 then e = e - db0; end;
+		-- ranged mobs (seen shooting 3+ times, or learned reach 12+ st) go first, only when necessary:
+		-- it fired in the last 8 s, or you're inside its reach. A quiet shooter far away isn't chased.
+		if CFG.rangedFirst ~= false then
+			local shots = type(brain.ranged) == "table" and tonumber(brain.ranged[nmKey]) or 0;
+			local reach0 = tonumber(brain.mobReach[nmKey]) or 0;
+			if (shots >= 3 or reach0 >= 12) and (Q.d or 99) < 40 then
+				local firedAt = r.rangedSeen and r.rangedSeen[nmKey];
+				if (firedAt and d() - firedAt < 8) or (Q.d or 99) <= reach0 + 4 then
+					e = e - 25;
+					r.rangedNote = r.rangedNote or {};
+					if r.why and d() - (r.rangedNote[nmKey] or 0) > 20 then
+						r.rangedNote[nmKey] = d();
+						r.why("combat", string.format("%s hits from range (%.0f st away): taking it out first", nmKey, Q.d or 0));
+					end;
+				end;
+			end;
+		end;
 		if r.keepTarget == Q.addr then
 			e = e - 4;
 		end;
@@ -8288,6 +8322,7 @@ end;
 				{ k = "fightDist", t = "slider", text = "Circle distance", min = 2, max = 30, step = 1, suffix = " st" },
 				{ k = "flankDodge", t = "toggle", text = "Dodge past enemies to keep hitting them" },
 				{ k = "exploreForMobs", t = "toggle", text = "Search the room until all mobs left are found" },
+				{ k = "rangedFirst", t = "toggle", text = "Take out shooters first when they're a threat" },
 				{ k = "attackRoll", t = "combo", text = "Attack rolls (Auto = if your race has a roll perk)", items = { "Auto", "Always", "Off" } },
 				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
@@ -8714,7 +8749,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.14 | Brain",
+		Title = "Delve v5.15 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

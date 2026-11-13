@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.14 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.15 | Brain`).
+
+## v5.15: Shooters first, when it matters (not yet verified in gameplay)
+- **Learns who shoots.** When a projectile appears within 10 studs of a mob, that mob type is counted as a shooter (saved in the brain). Mobs with a learned reach of 12+ studs count as dangerous at range too.
+- **Targets them first only when necessary:** a shooter (3+ shots seen) or long-reach mob within 40 studs gets priority if it fired in the last 8 seconds or you're inside its reach. A quiet shooter far away isn't chased. Logged as "… hits from range: taking it out first".
+- Works together with the kill-first rule (mobs that killed you 3+ times) and boss mechanics (pylons). Combat tab toggle: **Take out shooters first when they're a threat** (on).
 
 ## v5.14: Less jitter, find every mob (not yet verified in gameplay)
 **Jitter (from the dodge log):** 595 of the last 2,156 dodge starts came less than half a second after the previous one: it kept switching between escaping and going back.
