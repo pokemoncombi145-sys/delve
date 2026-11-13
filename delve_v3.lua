@@ -3256,6 +3256,10 @@ local relicAPI = (function()
 			"STRIKE TWICE", "STRIKES TWICE", "SWINGS", "SWING",
 			"MINING RANGE", "MINE RANGE", "MINING CIRCLE", "MINING RADIUS", "RADIUS", "REACH", "RANGE",
 			"AOE", "AREA", "CLEAVE", "CHAIN", "SPLASH", "EXPLO", "SHOCKWAVE", "LIGHTNING", "NEARBY", "ALL MOBS", "EVERY MOB" },
+		-- after Worldheart the path decides which half of the power tier comes first
+		combat = { "WEAPON", "ATTACK", "STRIKE", "SWING", "CRIT", "DAMAGE TO", "ENEMY DAMAGE", "DPS", "CLEAVE", "CHAIN",
+			"LIGHTNING", "BLEED", "BURN", "POISON", "EXECUTE", "OVERKILL", "ALL MOBS", "EVERY MOB", "KILL" },
+		mine = { "MINE ", "MINING", "PICKAXE", " ORE", "ROCK" },
 		time = { "ROWS OF TIME", "OF TIME", "EXTRA TIME", "MORE TIME", "TIMER", "SECONDS", "COLLAPSE", "LONGER" },
 		has = function(u, list)
 			for _, w in ipairs(list) do
@@ -3291,6 +3295,15 @@ local relicAPI = (function()
 				-- luck and drop quantity are top priority in delves (more and rarer drops)
 				if cat == "luck" or uc:find(" LUCK", 1, true) or uc:find("QUANTITY", 1, true) then
 					pm, tag = 1.8, "luck/drops";
+				elseif run.worldPath and not uc:find("DAMAGE TAKEN", 1, true)
+					and (cat == "range" or cat == "mining" or cat == "damage" or r.prio.has(uc, r.prio.power)) then
+					-- Descend (the Hollow, more mobs): combat boosts right under luck, mining still good.
+					-- Ascend (the Heavens, more rock): mining power/range first, combat still good.
+					local isMine = cat == "mining" or r.prio.has(uc, r.prio.mine);
+					local isCombat = not isMine and (cat == "damage" or r.prio.has(uc, r.prio.combat));
+					local favour = (run.worldPath == "Descend" and isCombat) or (run.worldPath == "Ascend" and isMine);
+					pm = favour and 1.75 or 1.45;
+					tag = (isCombat and "combat" or "mining") .. (favour and " (" .. run.worldPath .. " path)" or "");
 				elseif cat == "range" or r.prio.has(uc, r.prio.power) then
 					pm, tag = 1.6, "power/range/aoe";
 				elseif cat == "survival" or r.prio.has(uc, r.prio.time) then
@@ -3600,6 +3613,13 @@ local relicAPI = (function()
 			draft.fork = true;
 			choice = pathPick == "Ascend" and ascC or desC;
 			draft.forkWhy = "your setting: " .. pathPick;
+		end;
+		if ascC and desC and (choice == ascC or choice == desC) then
+			local wp = choice == ascC and "Ascend" or "Descend";
+			if run.worldPath ~= wp then
+				run.worldPath = wp;
+				if r.why then r.why("relic", wp .. " path: relics now favour " .. (wp == "Descend" and "combat boosts" or "mining power/range")); end;
+			end;
 		end;
 		if draft.trader then
 			r.traderBought = (type(r.traderBought) == "table" and now - (r.traderVisitAt or -1e9) < 30) and r.traderBought or {};
@@ -3992,6 +4012,7 @@ local relicAPI = (function()
 		if run.curDepth and run.depth - v > 2000 and v < 2000 then
 			run.prestige = (run.prestige or 0) + 1;
 			run.prestigeTotal = (run.prestigeTotal or 0) + run.depth;
+			run.worldPath = nil;
 			if r.why then r.why("run", string.format("prestige %d after %d m: depth starts over (total %d m)", run.prestige, run.depth, run.prestigeTotal)); end;
 			notify(string.format("Prestige %d! %d m done, starting over.", run.prestige, run.depth), "Delve run");
 			run.depth = v;
@@ -4173,7 +4194,7 @@ local relicAPI = (function()
 		run.combatT, run.mineT = 0, 0;
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
 		run.timeLeft, run.inDanger, run.dangerCount, run.objective, run.rareSeen = nil, false, 0, "", {};
-		run.curDepth, run.prestige, run.prestigeTotal = nil, 0, 0;
+		run.curDepth, run.prestige, run.prestigeTotal, run.worldPath = nil, 0, 0, nil;
 		run.buffSets, run.buffLines, run.hasLifeBuff, run.hasLife = {}, {}, false, false;
 		run.cash0 = cashNow();
 		run.cashExact0 = exactCash(now);
@@ -8892,7 +8913,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.17.3 | Brain",
+		Title = "Delve v5.18 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

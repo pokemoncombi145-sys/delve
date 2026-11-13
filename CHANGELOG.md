@@ -1,6 +1,13 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.17.3 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.18 | Brain`).
+
+## v5.18: Relic priorities follow the Worldheart path (not yet verified in gameplay)
+- After Worldheart, the path you take changes the relic order (second chance and luck stay on top):
+  - **Descend** (the Hollow, more mobs): combat boosts (weapon power, swing/attack speed, crit, AOE/chain hits, damage) rank right under luck; mining power/range are still good.
+  - **Ascend** (the Heavens, more rock): mining power and mining range rank right under luck; combat boosts are still good.
+- The path is remembered for the rest of that cycle and resets on prestige and on a new run. Before Worldheart nothing changes.
+- The reasoning log shows which path is driving the pick (e.g. `combat (Descend path)`).
 
 ## v5.17.3: Walks into the prestige portal (not yet verified in gameplay)
 - **Bug:** after the Unmaker the bot stood still in the portal room next to the PRESTIGE II portal. The old portal logic only ran if the Unmaker intro card had been recorded, the room had zero mobs in sight and depth was 15,000+; the first Unmaker kill was on an older version (card never recorded), and the figure by the shop portal counted as a mob.
