@@ -3983,9 +3983,41 @@ local relicAPI = (function()
 	end;
 	r.readResults = function() return readResults(d()); end;
 
+	-- PRESTIGE ("THE DELVE - YOU BEGIN AGAIN" after the Unmaker): the depth starts over inside the same run.
+	-- run.curDepth = the depth right now; run.depth = deepest in this cycle; run.prestigeTotal = metres of
+	-- finished cycles, so the run's total progress is prestigeTotal + depth.
+	local function noteDepth(v, now)
+		if not v then return; end;
+		if run.curDepth and run.depth - v > 2000 and v < 2000 then
+			run.prestige = (run.prestige or 0) + 1;
+			run.prestigeTotal = (run.prestigeTotal or 0) + run.depth;
+			if r.why then r.why("run", string.format("prestige %d after %d m: depth starts over (total %d m)", run.prestige, run.depth, run.prestigeTotal)); end;
+			notify(string.format("Prestige %d! %d m done, starting over.", run.prestige, run.depth), "Delve run");
+			run.depth = v;
+		end;
+		run.curDepth = v;
+		if v > run.depth then run.depth = v; end;
+	end;
 	local function readHud(now)
 		local ls = leaderRead();
-		if ls.depth and ls.depth > run.depth then run.depth = ls.depth; end;
+		if ls.depth then noteDepth(ls.depth, now); end;
+		-- boss intro card ("THE UNMAKER / THE END OF ALL THINGS"): remember the name as a boss
+		local pgB = l:FindFirstChild("PlayerGui");
+		local card = pgB and pgB:FindFirstChild("RiftBossCard");
+		if card and card:IsA("LayerCollector") and card.Enabled ~= false then
+			for _, o in ipairs(card:GetDescendants()) do
+				if o:IsA("TextLabel") and o.Visible and trim(txt(o)):upper():find("^THE%s") then
+					local nm = trim(txt(o)):upper();
+					brain.bossNames = type(brain.bossNames) == "table" and brain.bossNames or {};
+					if not brain.bossNames[nm] then
+						brain.bossNames[nm] = true;
+						markBrain();
+						if r.why then r.why("boss", "boss card: " .. nm .. " (remembered as a boss)"); end;
+					end;
+					break;
+				end;
+			end;
+		end;
 		if ls.wave and ls.wave > run.wave then run.wave = ls.wave; end;
 		if now - hud.scanAt > 10 then
 			hud.scanAt = now;
@@ -4015,7 +4047,7 @@ local relicAPI = (function()
 		end;
 		if not ls.depth and hud.depth and hud.depth.Parent then
 			local v = tonumber((trim(txt(hud.depth)):upper():gsub(",", "")):match("^DEPTH%s*(%d+)"));
-			if v and v > run.depth then run.depth = v; end;
+			noteDepth(v, now);
 		end;
 		if hud.wave and hud.wave.Parent then
 			local wt = txt(hud.wave):upper();
@@ -4132,6 +4164,7 @@ local relicAPI = (function()
 		run.combatT, run.mineT = 0, 0;
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
 		run.timeLeft, run.inDanger, run.dangerCount, run.objective, run.rareSeen = nil, false, 0, "", {};
+		run.curDepth, run.prestige, run.prestigeTotal = nil, 0, 0;
 		run.buffSets, run.buffLines, run.hasLifeBuff, run.hasLife = {}, {}, false, false;
 		run.cash0 = cashNow();
 		run.cashExact0 = exactCash(now);
@@ -4247,6 +4280,7 @@ local relicAPI = (function()
 		};
 		record.rareDrops, record.closeCalls, record.newMechanics = snap.rare, snap.close, snap.newMechs;
 		record.learned = learnable;
+		record.prestige = snap.prestige;
 		pcall(function()
 			local line = Http:JSONEncode(record) .. "\n";
 			if type(appendfile) == "function" and type(isfile) == "function" and isfile("DelveRuns.jsonl") then
@@ -4299,7 +4333,8 @@ local relicAPI = (function()
 		local dur = now - run.startAt;
 		readHud(now);
 		local snap = {
-			relics = run.relics, depth = run.depth, wave = run.wave, died = run.died, hits = run.hits,
+			relics = run.relics, depth = (run.prestigeTotal or 0) + run.depth, wave = run.wave, died = run.died, hits = run.hits,
+			prestige = run.prestige,
 			cash0 = run.cash0, cashExact0 = run.cashExact0, level0 = run.level0, isDelve = run.isDelve,
 			combatT = run.combatT, mineT = run.mineT, rare = run.rareSeen, close = run.dangerCount,
 			mechs = run.mechs, newMechs = run.newMechs,
@@ -4848,7 +4883,7 @@ local function navBuild()
 	-- Rebuilding every refresh wiped the blocked pillars, so it walked into the same pillar again and again.
 	-- the tile list is refreshed all the time and shrinks as the floor collapses. Rebuild the map at most
 	-- once a second, and only forget blocked pillars when it's a different floor (run id + depth).
-	local fkey = tostring(l:GetAttribute("RunId")) .. "|" .. tostring(run.depth);
+	local fkey = tostring(l:GetAttribute("RunId")) .. "|" .. tostring(run.prestige or 0) .. "|" .. tostring(run.curDepth or run.depth);
 	if nav.map and fkey == nav.fkey and d() - (nav.builtAt or 0) < 1 then
 		nav.tiles = i;
 		return true;
@@ -5789,10 +5824,14 @@ local function wantFight(list, pos, now)
 	for _, mob in ipairs(list) do
 		-- a mob that killed you before and is named on the death screen ("THE WORLDHEART") is a boss,
 		-- unless it was an elite
-		if not mob.boss and not mob.knownChecked then
-			mob.knownChecked = true;
+		-- re-checked every 5 s: a boss card can name the boss after the mob first showed up
+		if not mob.boss and d() - (mob.knownChecked or -1e9) > 5 then
+			mob.knownChecked = d();
 			local nm = tostring(mob.name or ""):upper():gsub("%s", "");
-			for killer in pairs(type(brain.deaths) == "table" and brain.deaths or {}) do
+			local names = {};
+			for killer in pairs(type(brain.deaths) == "table" and brain.deaths or {}) do names[#names + 1] = killer; end;
+			for bn in pairs(type(brain.bossNames) == "table" and brain.bossNames or {}) do names[#names + 1] = bn; end;
+			for _, killer in ipairs(names) do
 				local k = tostring(killer):upper();
 				-- named bosses only ("THE WORLDHEART"); a normal mob that killed you once (POWDER GUNNER) isn't one
 				if k:find("^THE%s") then
@@ -6128,8 +6167,9 @@ local function lh(m)
 	-- FIND ALL THE MOBS: the HUD says "N MOBS LEFT"; far mobs (pylons at the top of a boss room) aren't
 	-- loaded until you get close, so when it sees fewer than N it moves up the room, away from where it came
 	-- in, along a safe route, until all of them are in sight. A mob right next to you is still fought first.
-	if run.depth ~= r.exploreDepth then
-		r.exploreDepth, r.floorEntry, r.exploreGoal = run.depth, { x = G.X, z = G.Z }, nil;
+	local floorId = tostring(run.prestige or 0) .. "|" .. tostring(run.curDepth or run.depth);
+	if floorId ~= r.exploreDepth then
+		r.exploreDepth, r.floorEntry, r.exploreGoal = floorId, { x = G.X, z = G.Z }, nil;
 	end;
 	do
 		local need = tonumber(tostring(run.objective or ""):match("(%d+)%s*MOBS?%s*LEFT"));
@@ -6429,6 +6469,7 @@ r.sendRunWebhook = function(info, isTest)
 	add("Run score", string.format("%.1f (%+.2f vs avg)", tonumber(info.score) or 0, tonumber(info.z) or 0));
 	add("Fighting", info.combatPct and (tostring(info.combatPct) .. "% of the time") or "?");
 	if info.closeCalls then add("Timer close calls", tostring(info.closeCalls)); end;
+	if (tonumber(info.prestige) or 0) > 0 then add("Prestige", tostring(info.prestige) .. " (depth counts every cycle)"); end;
 	if type(info.newMechanics) == "table" and #info.newMechanics > 0 then
 		add("New mechanics found", table.concat(info.newMechanics, "\n"):sub(1, 1000), false);
 	end;
@@ -8749,7 +8790,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.15 | Brain",
+		Title = "Delve v5.16 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

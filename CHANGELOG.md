@@ -1,6 +1,13 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.15 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.16 | Brain`).
+
+## v5.16: Prestige and boss cards (not yet verified in gameplay)
+**What happened:** the Unmaker ("THE END OF ALL THINGS") was killed at 17,520 m on a Glass Soul run, using the new routing and dodging; then **Prestige I** ("THE DELVE - YOU BEGIN AGAIN") restarted the depth inside the same run. Two new screens were saved: RiftBossCard (the boss intro card) and RelicPoof (just a visual effect).
+
+- **Prestige-aware depth.** The script only tracked the deepest depth, so after a prestige every floor looked like the same floor: the pillar map and the room search would never reset. It now follows the depth right now: when it drops sharply to the start, that's a prestige (pop-up and reasoning log). Floors are told apart by prestige + current depth.
+- **Run totals.** A run's depth is the metres of finished prestige cycles plus the current one, and the run record and Discord post show the prestige count.
+- **Boss intro cards.** The name on the RiftBossCard ("THE UNMAKER") is remembered as a boss, so boss rules apply from the first fight. Boss names are re-checked every 5 s.
 
 ## v5.15: Shooters first, when it matters (not yet verified in gameplay)
 - **Learns who shoots.** When a projectile appears within 10 studs of a mob, that mob type is counted as a shooter (saved in the brain). Mobs with a learned reach of 12+ studs count as dangerous at range too.
