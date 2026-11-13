@@ -5624,7 +5624,8 @@ local function wantFight(list, pos, now)
 			local nm = tostring(mob.name or ""):upper():gsub("%s", "");
 			for killer in pairs(type(brain.deaths) == "table" and brain.deaths or {}) do
 				local k = tostring(killer):upper();
-				if not k:find("^ELITE") then
+				-- named bosses only ("THE WORLDHEART"); a normal mob that killed you once (POWDER GUNNER) isn't one
+				if k:find("^THE%s") then
 					k = k:gsub("^THE%s+", ""):gsub("%s", "");
 					if #k >= 4 and nm ~= "" and (nm == k or nm:find(k, 1, true) or k:find(nm, 1, true)) then mob.boss = true; end;
 				end;
@@ -5797,6 +5798,22 @@ local function lh(m)
 		Q.d = e;
 		local okB, bias = pcall(bossStudy.bias, Q);
 		if okB and bias then e = e - bias; end;
+		-- mobs that have killed you 3+ times (e.g. Elite Powder Gunner, 13 one-shots) are taken out first,
+		-- if they're within 45 studs: up to 30 studs "closer" in the target choice
+		r.deathBias = r.deathBias or {};
+		local nmKey = tostring(Q.name);
+		local db0 = r.deathBias[nmKey];
+		if db0 == nil then
+			local nm = nmKey:upper():gsub("%s", "");
+			local cnt = 0;
+			for killer, n in pairs(type(brain.deaths) == "table" and brain.deaths or {}) do
+				local k = tostring(killer):upper():gsub("^ELITE%s+", ""):gsub("^THE%s+", ""):gsub("%s", "");
+				if #k >= 4 and (k == nm or nm:find(k, 1, true) or k:find(nm, 1, true)) then cnt = cnt + (tonumber(n) or 0); end;
+			end;
+			db0 = cnt >= 3 and math.min(30, cnt * 3) or 0;
+			r.deathBias[nmKey] = db0;
+		end;
+		if db0 > 0 and (Q.d or 99) < 45 then e = e - db0; end;
 		if r.keepTarget == Q.addr then
 			e = e - 4;
 		end;
@@ -6289,7 +6306,8 @@ local indexAPI = (function()
 		brain.cleanV = 2;
 		brain.lifetime, brain.index, brain.rocks = {}, {}, nil;
 	end;
-	local TIERS = { COMMON = 1, UNCOMMON = 2, RARE = 3, EPIC = 4, LEGENDARY = 5, MYTHIC = 6, EXOTIC = 6, DIVINE = 7, SECRET = 7 };
+	-- FORSAKEN / ETERNAL are above Mythic (e.g. "[FORSAKEN] Player found an Ascension Stone! (1 in 1,750,000)")
+	local TIERS = { COMMON = 1, UNCOMMON = 2, RARE = 3, EPIC = 4, LEGENDARY = 5, MYTHIC = 6, EXOTIC = 6, DIVINE = 7, SECRET = 7, FORSAKEN = 8, ETERNAL = 9 };
 	local function trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")); end;
 	local function txt(o)
 		local ok, v = pcall(function() return o.ContentText; end);
@@ -7137,7 +7155,7 @@ local indexAPI = (function()
 			if fromChat then fields[#fields + 1] = { name = "Seen in", value = "Roblox chat", inline = true }; end;
 			task.spawn(r.postEmbed, {
 				title = (isNew and "NEW INDEX ENTRY: " or "Rare drop: ") .. name,
-				color = isNew and 16766720 or (tierRank >= 5 and 15844367 or 10181046),
+				color = tierRank >= 8 and 15548997 or (isNew and 16766720 or (tierRank >= 5 and 15844367 or 10181046)),
 				fields = fields,
 				footer = { text = "Delve v3 brain | " .. tostring(l.Name) },
 			});
@@ -7183,6 +7201,9 @@ local indexAPI = (function()
 		local item = plain:match("[Ff]ound%s+(.-)%s*[%(%[]") or plain:match("[Gg]ot%s+(.-)%s*[%(%[]")
 			or plain:match("[Oo]btained%s+(.-)%s*[%(%[]") or plain:match("[Mm]ined%s+(.-)%s*[%(%[]");
 		item = trim(item and item:gsub("^[Aa]n?%s+", "") or plain:sub(1, 60));
+		-- "the Broadside Blunderbuss in a chest!" -> "Broadside Blunderbuss" (one name per item, so repeats are counted)
+		item = item:gsub("^[Tt]he%s+", ""):gsub("%s+in%s+a%s+chest", ""):gsub("%s+off%s+a%s+mob", ""):gsub("[!%.]+$", "");
+		item = trim(item);
 		local tier;
 		for t2 in pairs(TIERS) do
 			if up:find("%f[%a]" .. t2 .. "%f[%A]") then tier = t2; end;
@@ -7579,6 +7600,7 @@ local brainTick = (function()
 						if killer then
 							brain.deaths = type(brain.deaths) == "table" and brain.deaths or {};
 							brain.deaths[killer] = (tonumber(brain.deaths[killer]) or 0) + 1;
+							r.deathBias = {};
 							run.killer = killer;
 							local live = dangerMem.live;
 							if live and live.sig and now - live.at < 6 and type(brain.attacks[live.sig]) == "table" then
@@ -8423,7 +8445,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10.6 | Brain",
+		Title = "Delve v5.10.8 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

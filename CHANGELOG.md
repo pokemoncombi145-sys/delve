@@ -1,6 +1,13 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10.6 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10.8 | Brain`).
+
+## v5.10.8: Forsaken drops, kill-first learning (from the Pirates Cove session; not yet verified in gameplay)
+**What the logs showed:** 22 Pirates Cove wave runs (average wave 139, best 227), 21 deaths, every one a single big hit. 13 were an Elite Powder Gunner shooting from 22-40 studs. The end screen is now read correctly (rocks, XP and materials are in every run). Normal mobs that had killed you once (Powder Gunner, Skeleton Deckhand) were being treated as bosses.
+
+- **Forsaken and Eternal drops** count as tiers above Mythic, so they're announced and posted (red embed). Before, "[FORSAKEN] … Ascension Stone (1 in 1,750,000)" only got through on its odds, with no tier. Drop names are cleaned ("the Broadside Blunderbuss in a chest!" -> "Broadside Blunderbuss") so repeats of the same item are counted, not announced again.
+- **Only named bosses** that killed you ("THE WORLDHEART", "THE SPORE MOTHER") are treated as bosses by name.
+- **Learned kill-first priority:** a mob type that has killed you 3+ times is targeted first when within 45 studs (up to 30 studs "closer" in the target choice). For you right now that's the Powder Gunner and the Skeleton Deckhand.
 
 ## v5.10.6: Learning curve: Delve and Mines apart, 50-run comparison
 - The learning curve window now has two graphs: **Delve** (depth per run) and **Mines** (wave reached per run).
