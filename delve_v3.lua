@@ -5265,8 +5265,9 @@ r.routeTo = function(mob, G, reach, ignoreFloor)
 	local function bad(t)
 		if (nav.blocked[t.cx * 4096 + t.cz] or 0) > now then return true; end;
 		for _, z in ipairs(Fl) do
-			local lingering = z.floor or tostring(z.sig or ""):find("Burn", 1, true);
-			if not (ignoreFloor and lingering) and ul(z, t.wx, t.wz, .5) then return true; end;
+			local sg = tostring(z.sig or "");
+			local lingering = z.floor or sg:find("Burn", 1, true);
+			if sg:sub(1, 11) ~= "projectile:" and not (ignoreFloor and lingering) and ul(z, t.wx, t.wz, .5) then return true; end;
 		end;
 		return false;
 	end;
@@ -6497,7 +6498,13 @@ local function lh(m)
 			local tl2 = math.sqrt(tdx * tdx + tdz * tdz);
 			if tl2 > .1 then
 				local ax, az = G.X + tdx / tl2 * 3, G.Z + tdz / tl2 * 3;
-				if eh(Fl, ax, az) then
+				-- ground attacks only: a projectile lane ahead is gone in a moment and the dodge handles a
+				-- shot that's about to hit; treating lanes as walls kept it 40-60 st from the Pale Warden
+				local groundZ = {};
+				for _, z in ipairs(Fl) do
+					if tostring(z.sig or ""):sub(1, 11) ~= "projectile:" then groundZ[#groundZ + 1] = z; end;
+				end;
+				if eh(groundZ, ax, az) then
 					chaseUnsafe = true;
 					-- an attack zone sits between us and the target. Standing still here and stepping in again
 					-- once it moved made it jitter back and forth (W/S) and burn the timer, so it walks AROUND the
@@ -6509,20 +6516,6 @@ local function lh(m)
 						SQ(nil);
 						return;
 					end;
-					-- only projectiles in the way: they're gone in a moment, wait for them to pass instead of
-					-- walking around (into) the bullet field
-					local onlyShots = true;
-					for _, z in ipairs(Fl) do
-						if ul(z, ax, az, Vl + .5) and tostring(z.sig or ""):sub(1, 11) ~= "projectile:" then onlyShots = false; break; end;
-					end;
-					if onlyShots then
-						if r.why and m - (r.holdNoteAt or 0) > 5 then
-							r.holdNoteAt = m;
-							r.why("combat", string.format("projectiles between me and %s: waiting for them to pass", tostring(w.name)));
-						end;
-						SQ(nil);
-						return;
-					end;
 					local side = r.holdSide and m - r.holdSide.t < 1.5 and r.holdSide.addr == w.addr and r.holdSide.s or nil;
 					local pickX, pickZ, pickS;
 					for _, deg in ipairs({ 30, 50, 70, 90 }) do
@@ -6530,7 +6523,7 @@ local function lh(m)
 							local a = math.rad(deg) * sg;
 							local ca, sa = math.cos(a), math.sin(a);
 							local dx, dz = ux * ca - uz * sa, ux * sa + uz * ca;
-							local ok3 = not eh(Fl, G.X + dx * 3, G.Z + dz * 3) and not eh(Fl, G.X + dx * 6, G.Z + dz * 6);
+							local ok3 = not eh(groundZ, G.X + dx * 3, G.Z + dz * 3) and not eh(groundZ, G.X + dx * 6, G.Z + dz * 6);
 							if ok3 and nav.map then ok3 = navOpenAt(G.X + dx * 3, G.Z + dz * 3) >= 1; end;
 							if ok3 then pickX, pickZ, pickS = dx, dz, sg; break; end;
 						end;
@@ -6647,6 +6640,11 @@ local function lh(m)
 		if m then
 			local Q, e = m.x - G.X, m.z - G.Z;
 			if Q * Q + e * e > 1 then
+				local ck = math.floor(m.x) .. "_" .. math.floor(m.z);
+				if r.why and ck ~= r.chestNoteFor then
+					r.chestNoteFor = ck;
+					r.why("move", string.format("walking to a chest %.0f st away", math.sqrt(Q * Q + e * e)));
+				end;
 				r.chestWalk = true;
 				-- around attack zones and burn strips when possible, otherwise the pillar-aware straight route
 				local okR, cpath = pcall(r.routeTo, { addr = "chest" .. math.floor(m.x) .. "_" .. math.floor(m.z), x = m.x, z = m.z }, G, 1.5);
@@ -9071,7 +9069,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.26.1 | Brain",
+		Title = "Delve v5.27 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,

@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.26.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.27 | Brain`).
+
+## v5.27: Engages bullet-hell bosses (not yet verified in gameplay)
+- **Bug:** against The Pale Warden it spent 40 s at 40-60 st ("attack zone between us, no way around, holding outside") and never closed in. Route planning treated every projectile's flight lane as a wall, and so did the "zone ahead" check, so with a constant bullet stream there was never a way to the boss.
+- **Fix:** projectile lanes no longer block routes or the approach (they move, routes are redone every 0.5 s). Only ground attacks (circles, strips, lava) block. The dodge still reacts to any shot that's about to hit, and the longer projectile lanes on 1-HP runs (v5.26) still shape escapes.
+- Removed the v5.26 "wait for projectiles to pass" hold: against a boss that never stops firing it would wait forever.
+- The log now says when it walks to a chest (to find idle time after a boss).
 
 ## v5.26.1: Edge-safe smoothing, no ping when you leave (not yet verified in gameplay)
 - **"YOU SLIPPED. BACK ON SOLID GROUND."** right after resuming at 340 m. Likely cause: the v5.23.1 smoothing kept the old heading for up to 0.35 s when the new one reversed it, which near an edge can carry the character off the floor. Now the old heading (or a blended one) is only kept if a ray finds solid floor 4 st ahead; otherwise it turns immediately. The reversal window is 0.3 s.
