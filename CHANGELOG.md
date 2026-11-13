@@ -1,6 +1,17 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.9.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.9.2 | Brain`).
+
+## v5.9.2: Hits with no roll (from the first v5.9.1 session; not yet verified in gameplay)
+**What the logs showed:** 13 hits in 3 runs; only 2 now had a roll land just after (was 5 of 6), but 12 of 13 had no roll before. Three came while it walked 9-15 studs to safe ground with 0.4-0.7 s left; two had an attack roll fire 10-20 ms after the hit; the death at 6,840 m was an Elite Magma Brute hitting twice (185 + 269) from 9-10 studs with no warning zone and the roll ready, and the death was blamed on the floor. One burst (6 hits in 0.15 s) looked unavoidable.
+
+| Change | Why |
+|---|---|
+| Inside an attack zone, it compares the time to walk out (distance / your actual walk speed) with the time left. If walking is too slow, or a zone with no known timing is past 60% and walking needs over 0.35 s, it rolls out instead, only if the roll lands outside every zone and on the floor. Logged as "escape roll". | Walking 9-15 studs in 0.4-0.7 s can't work. |
+| No attack roll within 1 s of being hit; a queued one is cancelled. | It spent the roll right when follow-up hits were likely. |
+| A hit with no warning zone and no strike seen is credited to the nearest mob within 15 studs. After 2 such hits, that mob's reach is raised (max 14 st), so wind-up dodges cover it. The floor is only blamed when no mob is near. Floors learned before (likely mob hits) are cleared, brain backed up first. | The Magma Brute's reach was never learned, so dodges covered about 7 studs, and the death taught it a wrong "dangerous floor". |
+
+**How to check:** "escape roll" lines in `dodge_log.txt`; fewer "hit … rolled=false" right after "escape to open ground"; no "attack roll" right after a "hit"; "learned reach … (unseen strike, 2 hits)" for elites.
 
 ## v5.9.1: Fix ":4369 attempt to perform arithmetic (add) on number and boolean"
 - Since v5.5 the wind-up dodge read the mob's wind-up time from a line that ended with a boss-fight check, so outside boss fights the "time" was `true` instead of a number and `windupAt + true` errored. While the error repeated, the early (wind-up) dodge never ran, which also fits the hits that only got a roll afterwards. The time and the boss check are now separate.

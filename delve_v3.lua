@@ -385,23 +385,28 @@ do
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
 	if okRead and type(raw) == "string" and #raw > 2 then
-		local migrating = (tonumber(brain.learnV) or 0) < 3 or (tonumber(brain.cleanV) or 0) < 3;
+		local migrating = (tonumber(brain.learnV) or 0) < 4 or (tonumber(brain.cleanV) or 0) < 3;
 		if migrating or os.time() - (tonumber(brain.lastBackupAt) or 0) > 21600 then
 			if r.brainBackup(migrating and "before-migration" or "auto", raw) then brain.lastBackupAt = os.time(); end;
 		end;
 	end;
+	if (tonumber(brain.learnV) or 0) == 3 then
+		-- v5.9.2: "dangerous floors" were learned from hits that were really unseen mob strikes
+		brain.learnV = 4;
+		brain.floorHaz = {};
+	end;
 	if (tonumber(brain.learnV) or 0) == 2 then
 		-- v5.8.3: boss floors and roll distance were learned with a wrong "boss" rule / measurement
-		brain.learnV = 3;
-		brain.bossFloors = {};
+		brain.learnV = 4;
+		brain.bossFloors, brain.floorHaz = {}, {};
 		brain.rollDist = nil;
 	end;
 	if (tonumber(brain.learnV) or 0) < 2 then
 		-- v5.4 audit: every attack shared one bucket ("Hazards/Part") so its numbers sat at their caps,
 		-- category weights were all at the 2.5 cap, the run baseline mixed abandoned 40 s runs with real
 		-- ones, and a sword reach of 119 studs was learned from proc damage. Start those fresh.
-		brain.learnV = 3;
-		brain.bossFloors, brain.rollDist = {}, nil;
+		brain.learnV = 4;
+		brain.bossFloors, brain.rollDist, brain.floorHaz = {}, nil, {};
 		brain.attacks, brain.patterns, brain.swordHit, brain.runs = {}, {}, {}, {};
 		brain.cat, brain.catMode = {}, {};
 		brain.dodge.iframe = .35;
@@ -4405,6 +4410,11 @@ local function attackRoll(m)
 		if r.offRollAt then r.offRollAt, r.forceDir = nil, nil; f("attack roll cancelled: boss fight"); end;
 		return;
 	end;
+	-- just got hit: more hits are likely, so keep the roll for defence (cancel a queued attack roll too)
+	if r.lastHitAt and m - r.lastHitAt < 1 then
+		if r.offRollAt then r.offRollAt, r.forceDir = nil, nil; f("attack roll cancelled: just got hit"); end;
+		return;
+	end;
 	-- phase 2: direction is set, roll now, unless something dangerous started in the meantime
 	if r.offRollAt and m >= r.offRollAt then
 		r.offRollAt = nil;
@@ -4501,6 +4511,18 @@ local function mh(m)
 	-- (v5.4) pattern-based pre-moves are paused: with the old lumped attack data they forced 591
 	-- meaningless "step out" moves. They come back once the new attack fingerprints prove reliable.
 	pcall(attackRoll, m);
+	-- a queued escape roll: direction was set last frame, roll now if still useful
+	local er = r.escRoll;
+	if er and m >= er.at then
+		r.escRoll = nil;
+		if m - er.at < .15 and inp.active() and m - (r.lastRoll or -1e9) >= yl and eQ(m) then
+			if er.w then er.w.rolled = true; end;
+			r.lastRoll = m;
+			r.lastRollSig = er.sig;
+			r.lastRollHitIn = er.hitIn;
+			f(string.format("escape roll (walking out needed %.2fs, %s left)", er.walkT, er.left and string.format("%.2fs", er.left) or "?"));
+		end;
+	end;
 	if not next(Cl) then
 		JQ = nil;
 		return;
@@ -4532,6 +4554,42 @@ local function mh(m)
 						r.lastRollSig = w.zone and w.zone.sig;
 						r.lastRollHitIn = w.hitAt and (w.hitAt - m) or nil;
 						f(string.format("roll zone=%.1f,%.1f hitIn=%.2f", w.zone.x, w.zone.z, ((w.hitAt or m)) - m));
+					end;
+				end;
+			end;
+		end;
+	end;
+	-- WALK OR ROLL: inside an attack zone, can walking get you out before it lands? If not, roll out
+	-- (only when the roll lands on safe ground). Before this it walked 9-15 studs with 0.4-0.7 s left and got hit.
+	if not r.escRoll and inp.active() and m - (r.lastRoll or -1e9) >= yl and not (r.lastHitAt and m - r.lastHitAt < .3) then
+		local hum = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+		local ws = math.max(4, hum and hum.WalkSpeed or 16);
+		for _, w in pairs(Cl) do
+			if not w.rolled and w.zone then
+				local depth, ox, oz = ul(w.zone, G.X, G.Z, Vl);
+				if depth and ox then
+					local walkT = depth / ws;
+					local left = w.hitAt and (w.hitAt - m) or nil;
+					local late = (left and left > 0 and walkT > left - .05)
+						or (not w.hitAt and (tonumber(w.p) or 0) >= .6 and walkT > .35);
+					if late then
+						local rd = math.min(12, tonumber(brain.rollDist) or 6);
+						local ex, ez = G.X + ox * rd, G.Z + oz * rd;
+						local safe = true;
+						for _, z2 in ipairs(Fl) do
+							if ul(z2, ex, ez, Vl) then safe = false; break; end;
+						end;
+						if safe and r.navOpenAt then
+							local okO, open = pcall(r.navOpenAt, ex, ez);
+							if okO and (tonumber(open) or 99) < 1 then safe = false; end;
+						end;
+						if safe then
+							-- point the character out of the zone now, roll next frame
+							r.forceDir = { x = ox, z = oz, untilT = m + .25 };
+							SQ(ox, oz);
+							r.escRoll = { at = m + .03, w = w, sig = w.zone.sig, hitIn = left, walkT = walkT, left = left };
+							break;
+						end;
 					end;
 				end;
 			end;
@@ -7072,8 +7130,31 @@ local brainTick = (function()
 			run.mobHits = (run.mobHits or 0) + 1;
 			hs.lastMobHit = now;
 		end;
-		-- nothing explains this damage: it's the floor (lava strips etc.). Remember what you were standing on.
+		-- no strike seen and no zone: if a mob is close (15 st), it's most likely that mob (e.g. an elite's slam).
+		-- Its reach is only raised after 2 such hits, so one stray projectile can't inflate it.
+		local nearMob, nearD;
 		if not inZone and not best then
+			for _, mob in pairs(el) do
+				if mob.owned and mob.x and mob.name and not mob.dead then
+					local dist = math.sqrt((mob.x - pos.X) ^ 2 + (mob.z - pos.Z) ^ 2);
+					if dist < 15 and (not nearD or dist < nearD) then nearMob, nearD = mob, dist; end;
+				end;
+			end;
+			if nearMob then
+				brain.reachObs = type(brain.reachObs) == "table" and brain.reachObs or {};
+				local key = tostring(nearMob.name);
+				local ob = type(brain.reachObs[key]) == "table" and brain.reachObs[key] or { n = 0, max = 0 };
+				ob.n, ob.max = (tonumber(ob.n) or 0) + 1, math.max(tonumber(ob.max) or 0, nearD);
+				brain.reachObs[key] = ob;
+				if ob.n >= 2 and nearD > vl then
+					local cur = tonumber(brain.mobReach[key]) or vl;
+					brain.mobReach[key] = math.min(14, math.max(cur, nearD + .75));
+					f(string.format("learned reach %s -> %.1f (unseen strike, %d hits)", key, brain.mobReach[key], ob.n));
+				end;
+			end;
+		end;
+		-- nothing explains this damage and no mob is near: it's the floor (lava strips etc.)
+		if not inZone and not best and not nearMob then
 			local seenF = {};
 			for _, part in ipairs(dangerMem.partsNear(pos, 0, true)) do
 				local sig = dangerMem.sigOf(part);
@@ -7090,7 +7171,7 @@ local brainTick = (function()
 			pcall(navBlock, pos.X, pos.Z, now, 20);
 			dangerMem.refreshAt = -1e9;
 		end;
-		hs.lastHitSigs, hs.lastHitAt, hs.lastHitMob = sigs, now, best and best.name or nil;
+		hs.lastHitSigs, hs.lastHitAt, hs.lastHitMob = sigs, now, (best and best.name) or (nearMob and nearMob.name) or nil;
 		if best and bd and bd > vl and bd < 16 then
 			local key = tostring(best.name);
 			local cur = tonumber(brain.mobReach[key]) or vl;
@@ -7793,7 +7874,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.9.1 | Brain",
+		Title = "Delve v5.9.2 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
