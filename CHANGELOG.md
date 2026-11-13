@@ -1,13 +1,23 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.22.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.23.1 | Brain`).
+
+## v5.23.1: Smooth movement (not yet verified in gameplay)
+- Every walking direction now goes through a smoother: outside dodges, a sudden reversal (more than about 110 degrees) within 0.35 s of the last heading is ignored, and smaller turns are eased. Removes W/S back-and-forth from targets or routes flipping.
+- Dodges, escape rolls, attack rolls and forced headings are never smoothed or delayed.
+
+## v5.23: Advances instead of jittering, hover info, F2 stop (not yet verified in gameplay)
+- **Bug:** when an attack zone (e.g. the Cloud Golem's beam) sat between it and its target, it stood still, stepped in when the zone moved, dodged back out, and repeated: W/S jitter that burned the timer instead of engaging.
+- **Fix:** it now walks **around** the zone toward the target (first safe heading 30-90 degrees off the straight line, checked 3 and 6 st ahead and on the floor map), keeping the same side for 1.5 s so it doesn't flip. It only holds still if every heading is blocked.
+- **Info icons:** the explanations are hidden now. A small **i** sits after each setting's name; hover it to see what the setting does and the recommendation.
+- **F2 hotkey:** stops all farming (farm, Play again, Auto Farm, scan-trip restarts). Press F2 again to resume exactly as it was.
 
 ## v5.22.1: Descend setting can't be overridden (not yet verified in gameplay)
 - **Bug:** with After Worldheart set to Descend it took **Ascend**. The fork screen was read with the title "A TRADER IN THE DARK", so the trader logic ran after the fork choice and bought the highest-scoring card (ASCEND 224 vs DESCEND 130).
 - **Fix:** whenever Ascend and Descend cards are on screen it's always treated as the fork and your setting is used; the trader logic can't override a fork any more (also for Safe/Cursed forks).
 
 ## v5.22: Info under every setting (not yet verified in gameplay)
-- Every toggle, slider, dropdown and text box now has an **ⓘ** line under it saying exactly what it does, plus a recommendation (or "Not recommended to change") so you know what's safe to touch.
+- Every toggle, slider, dropdown and text box now has an info line saying exactly what it does, plus a recommendation (or "Not recommended to change") so you know what's safe to touch.
 - Final review before AFK: syntax, scope and local-count checks pass; no clicks on reroll/buy/Robux/spin/gift; nothing sells to Vesper; no personal info in the repo.
 
 ## v5.21: Bigger window, fish icon, Credits, relic study (not yet verified in gameplay)

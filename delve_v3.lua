@@ -2507,6 +2507,7 @@ local function NQ(m, G)
 	end;
 end;
 local function SQ(m, G)
+	local R0 = r; -- r becomes a number further down
 	-- an attack roll is lined up: face the target for a moment so the roll goes into it
 	local fd = r.forceDir;
 	local dt = r.detour;
@@ -2536,6 +2537,26 @@ local function SQ(m, G)
 		return;
 	end;
 	m, G = m / r, G / r;
+	-- SMOOTH MOVEMENT: outside dodges, a sudden reversal (more than ~110 degrees) within 0.35 s of the last
+	-- heading is ignored (it keeps going the way it was), and smaller turns are eased. That removes the W/S
+	-- back-and-forth from targets/routes flipping. Dodges, rolls and forced headings are never delayed.
+	do
+		local nowS = d();
+		local sm = R0.smoothDir;
+		local urgent = R0.dodging or (fd and nowS < fd.untilT) or nowS - (R0.lastDodgeAt or -1e9) < .4 or nowS - (R0.lastRoll or -1e9) < .4;
+		if sm and not urgent and nowS - sm.t < .5 then
+			local dot = m * sm.x + G * sm.z;
+			if dot < -0.34 and nowS - sm.setAt < .35 then
+				m, G = sm.x, sm.z;
+			elseif dot < .97 then
+				local bx, bz = sm.x * .35 + m * .65, sm.z * .35 + G * .65;
+				local bl = math.sqrt(bx * bx + bz * bz);
+				if bl > .2 then m, G = bx / bl, bz / bl; end;
+			end;
+		end;
+		local turned = not sm or (m * sm.x + G * sm.z) < .5;
+		R0.smoothDir = { x = m, z = G, t = nowS, setAt = (turned or not sm) and nowS or sm.setAt };
+	end;
 	run.lastDir = { m, G };
 	if Q.background == true then
 		-- no key presses in background mode: walk with Humanoid:Move
@@ -6456,10 +6477,38 @@ local function lh(m)
 				local ax, az = G.X + tdx / tl2 * 3, G.Z + tdz / tl2 * 3;
 				if eh(Fl, ax, az) then
 					chaseUnsafe = true;
-					-- not in danger yet: hold here (keep attacking if in reach) instead of stepping in
+					-- an attack zone sits between us and the target. Standing still here and stepping in again
+					-- once it moved made it jitter back and forth (W/S) and burn the timer, so it walks AROUND the
+					-- zone toward the target instead: the first safe heading 30-90 degrees off the straight line,
+					-- keeping the same side for 1.5 s so it doesn't flip. Only if every heading is blocked, it holds.
+					local ux, uz = tdx / tl2, tdz / tl2;
+					local side = r.holdSide and m - r.holdSide.t < 1.5 and r.holdSide.addr == w.addr and r.holdSide.s or nil;
+					local pickX, pickZ, pickS;
+					for _, deg in ipairs({ 30, 50, 70, 90 }) do
+						for _, sg in ipairs(side and { side } or { 1, -1 }) do
+							local a = math.rad(deg) * sg;
+							local ca, sa = math.cos(a), math.sin(a);
+							local dx, dz = ux * ca - uz * sa, ux * sa + uz * ca;
+							local ok3 = not eh(Fl, G.X + dx * 3, G.Z + dz * 3) and not eh(Fl, G.X + dx * 6, G.Z + dz * 6);
+							if ok3 and nav.map then ok3 = navOpenAt(G.X + dx * 3, G.Z + dz * 3) >= 1; end;
+							if ok3 then pickX, pickZ, pickS = dx, dz, sg; break; end;
+						end;
+						if pickX then break; end;
+					end;
+					if pickX then
+						if not (r.holdSide and r.holdSide.addr == w.addr and r.holdSide.s == pickS and m - r.holdSide.t < 1.5) then
+							r.holdSide = { s = pickS, t = m, addr = w.addr };
+						end;
+						if r.why and m - (r.holdNoteAt or 0) > 5 then
+							r.holdNoteAt = m;
+							r.why("combat", string.format("attack zone between me and %s: going around it", tostring(w.name)));
+						end;
+						SQ(pickX, pickZ);
+						return;
+					end;
 					if r.why and m - (r.holdNoteAt or 0) > 5 then
 						r.holdNoteAt = m;
-						r.why("combat", string.format("not chasing %s: attack zone between us, holding outside", tostring(w.name)));
+						r.why("combat", string.format("not chasing %s: attack zone between us, no way around, holding outside", tostring(w.name)));
 					end;
 					SQ(nil);
 					return;
@@ -7939,7 +7988,7 @@ local indexAPI = (function()
 		-- in the hub with Auto Farm on: open GO MINE and start the chosen stage
 		-- after a scan trip to the hub, the next run starts from here even with Auto Farm off (scan first,
 		-- unless it keeps failing for 90 s)
-		local scanTrip = r.hubForScan and (not (CFG.autoIndexScan ~= false and due) or now - r.hubForScan > 90);
+		local scanTrip = r.hubForScan and not r.f2Paused and (not (CFG.autoIndexScan ~= false and due) or now - r.hubForScan > 90);
 		if (CFG.autoStage == true or scanTrip) and not busy and not launch.busy and now - startedAt > 10 and not inRun()
 			and not (CFG.autoStage == true and r.hubForScan and not scanTrip)
 			and not relicAPI.hasDraft() and now - launch.at > math.min(60, 8 + launch.fails * 6)
@@ -8979,7 +9028,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.22.1 | Brain",
+		Title = "Delve v5.23.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "fish",
 		Size = UDim2.fromOffset(760, 640),
@@ -9103,7 +9152,7 @@ end;
 	local function infoText(it)
 		local i = INFO[it.k];
 		if not i then return nil; end;
-		return "ⓘ " .. i[1] .. "\n" .. i[2];
+		return i[1] .. "\n\n" .. i[2];
 	end;
 	for _, group in ipairs(spec) do
 		local tab = group.main and main or window:Tab({ Title = group.name, Icon = group.icon });
@@ -9119,7 +9168,6 @@ end;
 				local okInput, inputWidget = pcall(function()
 					return tab:Input({
 						Title = it.text,
-						Desc = infoText(it),
 						Placeholder = it.placeholder or "",
 						Value = tostring(value or ""),
 						Callback = changed,
@@ -9129,7 +9177,6 @@ end;
 			elseif it.t == "slider" then
 				widget = tab:Slider({
 					Title = it.text,
-					Desc = infoText(it),
 					Step = it.step,
 					Value = { Min = it.min, Max = it.max, Default = tonumber(value) or it.min },
 					Callback = changed,
@@ -9137,14 +9184,13 @@ end;
 			elseif it.t == "combo" then
 				widget = tab:Dropdown({
 					Title = it.text,
-					Desc = infoText(it),
 					Values = it.items,
 					Value = value,
 					AllowNone = false,
 					Callback = changed,
 				});
 			else
-				widget = tab:Toggle({ Title = it.text, Desc = infoText(it), Value = value == true, Callback = changed });
+				widget = tab:Toggle({ Title = it.text, Value = value == true, Callback = changed });
 			end;
 			synced[it.k] = { widget = widget, value = value, item = it };
 		end;
@@ -9153,7 +9199,7 @@ end;
 			tab:Button({ Title = "Start the stage now", Callback = function() if r.launchStage then r.launchStage(); end; end });
 			tab:Paragraph({
 				Title = "Auto Farm",
-				Desc = "From the hub it clicks GO MINE!, scrolls to your stage, selects it and descends. The farm turns on once the run loads. Right Shift or the Open Delve button shows this window.",
+				Desc = "From the hub it clicks GO MINE!, scrolls to your stage, selects it and descends. The farm turns on once the run loads. Right Shift or the Open Delve button shows this window. F2 stops all farming; F2 again resumes.",
 			});
 			tab:Button({ Title = "Stop and unload", Callback = r.stop });
 		end;
@@ -9368,6 +9414,117 @@ end;
 			Desc = "The version is in the window title. Every change, with the evidence behind it, is in CHANGELOG.md on GitHub.",
 		});
 	end;
+	-- INFO ICONS: a small (i) after each setting's name; hovering it shows what the setting does and the
+	-- recommendation in a tooltip. Hidden otherwise, so the list stays short.
+	task.delay(1, function()
+		pcall(function()
+			local byTitle = {};
+			for _, group in ipairs(spec) do
+				for _, it in ipairs(group.items) do
+					local txt0 = infoText(it);
+					if txt0 then byTitle[it.text] = txt0; end;
+				end;
+			end;
+			local root;
+			local okU, mainUI = pcall(function() return window.UIElements and window.UIElements.Main; end);
+			if okU and typeof(mainUI) == "Instance" then root = mainUI:FindFirstAncestorWhichIsA("LayerCollector"); end;
+			if not root then return; end;
+			local tip = Instance.new("Frame");
+			tip.Name = "DelveInfoTip";
+			tip.Visible = false;
+			tip.ZIndex = 1000;
+			tip.Size = UDim2.fromOffset(320, 0);
+			tip.AutomaticSize = Enum.AutomaticSize.Y;
+			tip.BackgroundColor3 = Color3.fromRGB(24, 24, 28);
+			tip.BorderSizePixel = 0;
+			local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = tip;
+			local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(150, 110, 255); stroke.Thickness = 1; stroke.Parent = tip;
+			local pad = Instance.new("UIPadding");
+			pad.PaddingLeft, pad.PaddingRight, pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 10), UDim.new(0, 10), UDim.new(0, 8), UDim.new(0, 8);
+			pad.Parent = tip;
+			local tipText = Instance.new("TextLabel");
+			tipText.Name = "Text";
+			tipText.BackgroundTransparency = 1;
+			tipText.Size = UDim2.new(1, 0, 0, 0);
+			tipText.AutomaticSize = Enum.AutomaticSize.Y;
+			tipText.TextWrapped = true;
+			tipText.TextXAlignment = Enum.TextXAlignment.Left;
+			tipText.TextYAlignment = Enum.TextYAlignment.Top;
+			tipText.TextColor3 = Color3.fromRGB(235, 235, 240);
+			tipText.TextSize = 15;
+			tipText.FontFace = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Medium);
+			tipText.ZIndex = 1001;
+			tipText.Parent = tip;
+			tip.Parent = root;
+			local function showTip(icon, text)
+				tipText.Text = text;
+				local cam = workspace.CurrentCamera;
+				local vw = cam and cam.ViewportSize.X or 1920;
+				local x = icon.AbsolutePosition.X + icon.AbsoluteSize.X + 8;
+				if x + 330 > vw then x = icon.AbsolutePosition.X - 330; end;
+				tip.Position = UDim2.fromOffset(x, icon.AbsolutePosition.Y - 4);
+				tip.Visible = true;
+			end;
+			local done = {};
+			for _, o in ipairs(root:GetDescendants()) do
+				if o:IsA("TextLabel") and byTitle[o.Text] and not done[o.Text] and o.Name ~= "Text" then
+					done[o.Text] = true;
+					local label, text = o, byTitle[o.Text];
+					local icon = Instance.new("TextButton");
+					icon.Name = "DelveInfoIcon";
+					icon.Text = "i";
+					icon.AutoButtonColor = false;
+					icon.Size = UDim2.fromOffset(16, 16);
+					icon.AnchorPoint = Vector2.new(0, .5);
+					icon.BackgroundColor3 = Color3.fromRGB(70, 70, 82);
+					icon.TextColor3 = Color3.fromRGB(230, 230, 240);
+					icon.TextSize = 12;
+					icon.FontFace = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Bold);
+					icon.ZIndex = label.ZIndex + 1;
+					local ic = Instance.new("UICorner"); ic.CornerRadius = UDim.new(1, 0); ic.Parent = icon;
+					local function place()
+						local tb = label.TextBounds.X;
+						if label.TextXAlignment == Enum.TextXAlignment.Center then
+							tb = label.AbsoluteSize.X / 2 + tb / 2;
+						end;
+						icon.Position = UDim2.new(0, math.min(tb + 6, math.max(0, label.AbsoluteSize.X - 2)), .5, 0);
+					end;
+					label.ClipsDescendants = false;
+					icon.Parent = label;
+					place();
+					label:GetPropertyChangedSignal("TextBounds"):Connect(place);
+					label:GetPropertyChangedSignal("AbsoluteSize"):Connect(place);
+					icon.MouseEnter:Connect(function() icon.BackgroundColor3 = Color3.fromRGB(150, 110, 255); showTip(icon, text); end);
+					icon.MouseLeave:Connect(function() icon.BackgroundColor3 = Color3.fromRGB(70, 70, 82); tip.Visible = false; end);
+				end;
+			end;
+		end);
+	end);
+	-- F2: stop everything (farm, Play again, Auto Farm, scan-trip restarts). F2 again: back on as it was.
+	pcall(function()
+		game:GetService("UserInputService").InputBegan:Connect(function(io)
+			if io.KeyCode ~= Enum.KeyCode.F2 then return; end;
+			if not r.f2Paused then
+				r.f2Paused = { autoReplay = Q.autoReplay, autoStage = Q.autoStage, farm = Q.on == true };
+				r.autoStart = false;
+				Q.autoReplay, Q.autoStage = false, false;
+				r.hubForScan = nil;
+				if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
+				N(false);
+				pcall(dQ);
+				notify("F2: auto farming stopped. Press F2 again to resume.", "Delve");
+				if r.why then r.why("run", "F2 pressed: farming stopped"); end;
+			else
+				local was = r.f2Paused;
+				r.f2Paused = nil;
+				Q.autoReplay, Q.autoStage = was.autoReplay, was.autoStage;
+				if farmToggle then pcall(farmToggle.Set, farmToggle, true); end;
+				pcall(dQ);
+				notify("F2: auto farming resumed.", "Delve");
+				if r.why then r.why("run", "F2 pressed: farming resumed"); end;
+			end;
+		end);
+	end);
 	dQ = function()
 		for _, setting in pairs(synced) do
 			local value = current(setting.item);
