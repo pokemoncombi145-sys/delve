@@ -135,7 +135,8 @@ local m = {
 		uiFontV = 0,
 		replayFixV = 0,
 		mechNotify = true,
-		dangerTime = 10,
+		dangerTime = 15,
+		dangerTimeV = 0,
 		forkPath = "Smart",
 		afterBossPath = "Descend",
 		afterUnmaker = "Prestige I",
@@ -2568,7 +2569,16 @@ local function SQ(m, G)
 	do
 		local nowS = d();
 		local sm = R0.smoothDir;
-		local urgent = R0.dodging or (fd and nowS < fd.untilT) or nowS - (R0.lastDodgeAt or -1e9) < .4 or nowS - (R0.lastRoll or -1e9) < .4;
+		local urgent = R0.dodging or (fd and nowS < fd.untilT) or nowS - (R0.lastDodgeAt or -1e9) < .4 or nowS - (R0.lastRoll or -1e9) < .4
+			or (R0.detour ~= nil) or (R0.lastStuck and nowS - R0.lastStuck.t < 3);
+		-- pressing into something (pillar, wall): never keep the old heading
+		if not urgent then
+			local hrpV = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+			if hrpV then
+				local v = hrpV.AssemblyLinearVelocity;
+				if v.X * v.X + v.Z * v.Z < 9 then urgent = true; end;
+			end;
+		end;
 		-- never smooth toward an edge: keeping the old heading is only allowed with solid floor 4 st ahead
 		-- (it carried the character off the map once: "YOU SLIPPED")
 		local function floorAhead(dx, dz)
@@ -6737,7 +6747,19 @@ local function lh(m)
 			local okF, fx, fz, gx, gz, gp = pcall(r.forwardInfo, G.X, G.Z);
 			if okF and fx and gx and (gp or 0) > 3 then
 				local behind = u and ((u.X - G.X) * fx + (u.Z - G.Z) * fz) < -4;
-				if not (WQ == "mine" and Q.walk and u) or (behind and tlF <= 5) then
+				-- a missed ore behind still gets mined if it can walk there and mine it with time to spare
+				local reachable = true;
+				if behind then
+					local humS = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+					local spd = math.max(8, humS and humS.WalkSpeed or 16);
+					local need = math.sqrt((u.X - G.X) ^ 2 + (u.Z - G.Z) ^ 2) / spd + 1.5;
+					reachable = need < tlF - 1;
+					if not reachable and r.why and m - (r.fwdSkipAt or 0) > 4 then
+						r.fwdSkipAt = m;
+						r.why("move", string.format("timer %ds: ore behind needs %.1f s, not enough time: going up instead", tlF, need));
+					end;
+				end;
+				if not (WQ == "mine" and Q.walk and u) or (behind and not reachable) then
 					if r.why and m - (r.fwdNoteAt or 0) > 4 then
 						r.fwdNoteAt = m;
 						r.why("move", string.format("timer %ds: heading up the tunnel, away from the collapse (%.0f st)", tlF, gp));
@@ -9161,7 +9183,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.28 | Brain",
+		Title = "Delve v5.28.1 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -9281,7 +9303,7 @@ end;
 		dodge = { "Steps out of attack zones (red areas, beams, slams) before they land. The core of staying alive.", "Recommended: ON. Never turn this off." },
 		autoRoll = { "Uses the roll to get out of attacks when walking isn't fast enough.", "Recommended: ON." },
 		mobPriority = { "Smart: ores first, fights bosses, threats and mob floors. Ores first: avoids fights. Always fight: kills everything.", "Recommended: Smart." },
-		dangerTime = { "When the Delve floor timer is at or below this, it ignores mobs (except bosses and mobs on top of you) and only mines.", "Recommended: 10 s. Raise it if you get caved in." },
+		dangerTime = { "When the Delve floor timer is at or below this, it ignores mobs (except bosses and mobs on top of you) and only mines.", "Recommended: 15 s. Raise it if you get caved in." },
 		lowHpPct = { "Below this HP it stops chasing and keeps its distance from bosses.", "Recommended: 35 %. With Glass Soul (1 HP) this has no effect." },
 		crowdSize = { "When this many mobs are up at once, it clears them before mining.", "Recommended: 5." },
 		fightDist = { "How close it circles the target while fighting.", "Recommended: 8 st. Lower hits more but gets hit more." },
@@ -9290,7 +9312,7 @@ end;
 		rangedFirst = { "Kills mobs that shoot or hit from far away first, but only when they're actually firing at you.", "Recommended: ON." },
 		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step).", "Recommended: On." },
 		bossRolls = { "In boss fights, rolls through the boss for extra damage, but only when no attack zone is within 18 st (25 st on a 1-HP run), nothing is winding up and no boss attack is expected for 2 s.", "Recommended: ON." },
-		pushForward = { "When the floor timer reaches the danger time, ores ahead come first and with nothing left to mine it walks up the tunnel, away from the collapse. Under 5 s it won't go back for an ore behind it.", "Recommended: ON." },
+		pushForward = { "When the floor timer reaches the danger time, ores ahead come first and with nothing left to mine it walks up the tunnel, away from the collapse. It still turns back for a missed ore if it can get there and mine it before the timer runs out.", "Recommended: ON." },
 		rollKey = { "The key your game uses for roll / dash.", "Recommended: Q (the game's default). Change only if you rebound it." },
 		cardPick = { "Picks relics, blessings, forks and trader buys by itself using the brain's scores.", "Recommended: ON for AFK. OFF shows the pick but lets you choose." },
 		relicExplore = { "Now and then takes a relic it has never taken, so the brain learns the whole relic index. Never instead of a second chance, luck relic or set completion.", "Recommended: ON." },
@@ -9741,6 +9763,10 @@ end;
 		end;
 		local origSize = setmetatable({}, { __mode = "k" });
 		local clean = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Medium);
+		if (tonumber(CFG.dangerTimeV) or 0) < 1 then
+			CFG.dangerTimeV = 1;
+			if tonumber(CFG.dangerTime) == 10 then CFG.dangerTime = 15; task.defer(function() pcall(dQ); end); end;
+		end;
 		if (tonumber(CFG.replayFixV) or 0) < 1 then
 			CFG.replayFixV = 1;
 			if CFG.autoReplay == false then

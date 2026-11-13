@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.28 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.28.1 | Brain`).
+
+## v5.28.1: Pillars, 15 s timer, missed ores (not yet verified in gameplay)
+- **Stuck on a pillar again:** when it got stuck it planned a detour, but the v5.23.1 smoothing still eased the detour's turns, keeping part of its heading into the pillar (the edge check doesn't see a pillar it's standing against). Detours, the 3 s after getting stuck, and any moment it isn't actually moving now skip smoothing completely.
+- **Timer danger time 15 s** (was 10): it switches to "ignore mobs, ores ahead, head up the tunnel" 5 s earlier. Your saved 10 is moved to 15 once.
+- **Missed ores behind it:** instead of "never go back under 5 s", it goes back for an ore behind it as long as it can walk there and mine it with time to spare (distance / walk speed + 1.5 s, under the time left minus 1 s). Otherwise it goes up the tunnel and the log says why.
 
 ## v5.28: Up the tunnel on a low timer, rolls through bosses (not yet verified in gameplay)
 - **Low floor timer (10 s by default):** it now knows which way is "up the tunnel": away from the tiles that just collapsed (or, before the collapse starts, away from where it came into the room).
