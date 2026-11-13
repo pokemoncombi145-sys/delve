@@ -63,13 +63,37 @@ function Take-Screenshot([string]$path) {
 
 Write-Host "Delve webhook helper running. Watching $dir" -ForegroundColor Green
 Write-Host "Leave this window open while you play. Ctrl+C to stop."
+# The script writes game_alive.json every 10 s while the bot is on. If that stops for 2+ minutes,
+# Roblox closed, crashed or froze: post the alert the script left in that file (pings you), once.
+$heartbeat = Join-Path $dir "game_alive.json"
+$staleSent = $false
+$lastBeatCheck = 0
+$retryAt = @{}
 while ($true) {
     try {
         $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         [System.IO.File]::WriteAllText($alive, "$now", $utf8)
+        if ($now - $lastBeatCheck -ge 5 -and (Test-Path -LiteralPath $heartbeat)) {
+            $lastBeatCheck = $now
+            try {
+                $beat = Get-Content -Raw -LiteralPath $heartbeat | ConvertFrom-Json
+                $age = $now - [int64]$beat.t
+                if ($age -lt 60) { $staleSent = $false }
+                elseif ($age -ge 120 -and -not $staleSent -and $beat.farming -and -not $beat.alerted -and $age -lt 3600) {
+                    $staleSent = $true
+                    $stale = @{ url = $beat.url; payload = $beat.payload; retry = $true } | ConvertTo-Json -Depth 12 -Compress
+                    [System.IO.File]::WriteAllText((Join-Path $dir ("job_stale_{0}.json" -f $now)), $stale, $utf8)
+                    Write-Host ("[{0}] No heartbeat from the script for {1} s: sending the alert" -f (Get-Date -Format T), $age) -ForegroundColor Yellow
+                }
+            } catch { }
+        }
         foreach ($jobFile in Get-ChildItem -Path $dir -Filter "job_*.json" -File -ErrorAction SilentlyContinue) {
+            $keep = $false
+            $job = $null
             try {
                 $job = Get-Content -Raw -Path $jobFile.FullName | ConvertFrom-Json
+                # alerts that failed (internet down) are retried every 15 s for up to 30 minutes
+                if ($job.retry -and $retryAt.ContainsKey($jobFile.Name) -and $now -lt $retryAt[$jobFile.Name]) { $keep = $true; continue }
                 # "snap" job: just take the picture now (the end-of-run screen) and keep it for the post
                 if ($job.snap) {
                     $snapName = [System.IO.Path]::GetFileName([string]$job.snap)
@@ -92,14 +116,21 @@ while ($true) {
                 [System.IO.File]::WriteAllText($payloadPath, ($job.payload | ConvertTo-Json -Depth 12 -Compress), $utf8)
                 $code = & $curl -s -o NUL -w "%{http_code}" -F "payload_json=<$payloadPath" -F "files[0]=@$png;type=image/png;filename=run.png" $url
                 if ($code -match '^2') {
-                    Write-Host ("[{0}] Posted run to Discord" -f (Get-Date -Format T)) -ForegroundColor Green
+                    Write-Host ("[{0}] Posted to Discord" -f (Get-Date -Format T)) -ForegroundColor Green
                 } else {
                     Write-Host ("[{0}] Discord answered HTTP {1}" -f (Get-Date -Format T), $code) -ForegroundColor Yellow
+                    if ($job.retry -and $jobFile.CreationTime -gt (Get-Date).AddMinutes(-30)) { $keep = $true }
                 }
             } catch {
                 Write-Host ("[{0}] Job failed: {1}" -f (Get-Date -Format T), $_.Exception.Message) -ForegroundColor Red
+                if ($job -and $job.retry -and $jobFile.CreationTime -gt (Get-Date).AddMinutes(-30)) { $keep = $true }
             } finally {
-                Remove-Item -LiteralPath $jobFile.FullName -Force -ErrorAction SilentlyContinue
+                if ($keep) {
+                    if (-not $retryAt.ContainsKey($jobFile.Name) -or $now -ge $retryAt[$jobFile.Name]) { $retryAt[$jobFile.Name] = $now + 15 }
+                } else {
+                    $retryAt.Remove($jobFile.Name)
+                    Remove-Item -LiteralPath $jobFile.FullName -Force -ErrorAction SilentlyContinue
+                }
             }
         }
     } catch {

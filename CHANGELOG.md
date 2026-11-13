@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.19.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.20 | Brain`).
+
+## v5.20: Disconnect pings, scan count per session (not yet verified in gameplay)
+- **Disconnect ping:** when Roblox shows the "Disconnected" / kick prompt (e.g. Error Code 277), you get pinged on Discord with the message and the depth. With the screenshot helper running, the alert is retried every 15 s for up to 30 minutes, so it still arrives once your internet is back.
+- **Roblox closed, crashed or froze:** the script writes a heartbeat every 10 s. If it stops for 2+ minutes while the bot was on, the helper posts "Delve stopped" and pings you (once, until the script is running again). Turn the bot off before closing Roblox if you don't want that ping.
+- New toggle: **Ping if disconnected or Roblox closes** (on by default). Needs webhooks on; the Roblox-closed ping needs the helper running. **Restart the helper** to get the new version.
+- **Scan count per session:** every time you join, rejoin or re-run the script, the "scan every N runs" count starts over.
 
 ## v5.19.1: Descend reads what the run needs (not yet verified in gameplay)
 - On the **Descend** path, combat boosts still come first, but mining power, mining range and mine speed relics are weighed against the run's current state:

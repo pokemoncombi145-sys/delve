@@ -153,6 +153,7 @@ local m = {
 		pingUserId = "",
 		pingRuns = true,
 		pingDrops = true,
+		pingDisconnect = true,
 		webhookUrl = "",
 		webhookDelay = 1.5,
 		dropWebhook = true,
@@ -6567,7 +6568,8 @@ end;
 r.discordPayload = function(embed, kind)
 	local payload = { username = "Delve Brain", embeds = { embed } };
 	local id = tostring(CFG.pingUserId or ""):match("^%s*(%d%d%d%d%d+)%s*$");
-	local want = (kind == "run" and CFG.pingRuns ~= false) or (kind == "drop" and CFG.pingDrops ~= false) or kind == "test";
+	local want = (kind == "run" and CFG.pingRuns ~= false) or (kind == "drop" and CFG.pingDrops ~= false) or kind == "test"
+		or (kind == "alert" and CFG.pingDisconnect ~= false);
 	if id and want then
 		payload.content = "<@" .. id .. ">";
 		payload.allowed_mentions = { users = { id } };
@@ -6715,7 +6717,8 @@ pcall(function()
 	end;
 end);
 -- generic Discord post (used by rare-drop alerts); screenshot attached when the helper is running
-r.postEmbed = function(embed)
+r.postEmbed = function(embed, kind)
+	kind = kind or "drop";
 	local url = tostring(CFG.webhookUrl or ""):gsub("^%s+", ""):gsub("%s+$", "");
 	if CFG.webhookOn ~= true or not url:match("^https://[%w%.]*discord[%w]*%.com/api/webhooks/%d+/[%w%-_]+") then return false; end;
 	local Hs = game:GetService("HttpService");
@@ -6731,7 +6734,7 @@ r.postEmbed = function(embed)
 		embed.image = { url = "attachment://run.png" };
 		local ok = pcall(function()
 			writefile(string.format("DelveWebhook/job_%d_%d.json", os.time(), math.random(1000, 9999)),
-				Hs:JSONEncode({ url = url, payload = r.discordPayload(embed, "drop") }));
+				Hs:JSONEncode({ url = url, payload = r.discordPayload(embed, kind), retry = kind == "alert" or nil }));
 		end);
 		if ok then return true; end;
 		embed.image = nil;
@@ -6741,10 +6744,70 @@ r.postEmbed = function(embed)
 	if not req then return false; end;
 	local ok, res = pcall(req, {
 		Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" },
-		Body = Hs:JSONEncode(r.discordPayload(embed, "drop")),
+		Body = Hs:JSONEncode(r.discordPayload(embed, kind)),
 	});
 	return ok and type(res) == "table" and (tonumber(res.StatusCode) or 999) < 300;
 end;
+-- DISCONNECT ALERT: Roblox's "Disconnected" / kick prompt pings you on Discord (with the helper running it
+-- keeps retrying until the internet is back). A heartbeat file lets the helper ping you too if Roblox
+-- closes, crashes or freezes while the bot was on.
+task.spawn(function()
+	local Hs = game:GetService("HttpService");
+	local GS = game:GetService("GuiService");
+	local alerted = false;
+	local function alert(msg)
+		if alerted then return; end;
+		alerted = true;
+		msg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "");
+		pcall(function() if r.why then r.why("run", "disconnected: " .. msg); end; end);
+		pcall(function() notify("Disconnected: " .. msg, "Delve"); end);
+		local depth = (type(run) == "table" and run.depth) or 0;
+		pcall(r.postEmbed, {
+			title = "Disconnected from Delve",
+			description = (msg ~= "" and msg or "Roblox showed a disconnect prompt.") .. string.format("\nDepth when it happened: %s m", tostring(depth)),
+			color = 15158332,
+		}, "alert");
+	end;
+	pcall(function()
+		GS.ErrorMessageChanged:Connect(function()
+			local okM, m = pcall(function() return GS:GetErrorMessage(); end);
+			if okM and type(m) == "string" and m ~= "" then alert(m); end;
+		end);
+	end);
+	pcall(function()
+		local ov = game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 60):WaitForChild("promptOverlay", 60);
+		ov.ChildAdded:Connect(function(c)
+			if c.Name ~= "ErrorPrompt" then return; end;
+			task.wait(1);
+			local m = "";
+			pcall(function()
+				for _, o in ipairs(c:GetDescendants()) do
+					if o:IsA("TextLabel") and o.Text:find("Error Code", 1, true) then m = o.Text; end;
+				end;
+			end);
+			alert(m ~= "" and m or "Disconnected");
+		end);
+	end);
+	-- heartbeat for the helper (only while webhooks are set up)
+	while true do
+		pcall(function()
+			local url = tostring(CFG.webhookUrl or ""):gsub("^%s+", ""):gsub("%s+$", "");
+			if CFG.webhookOn == true and CFG.pingDisconnect ~= false and type(writefile) == "function"
+				and url:match("^https://[%w%.]*discord[%w]*%.com/api/webhooks/%d+/[%w%-_]+") then
+				local depth = (type(run) == "table" and run.depth) or 0;
+				writefile("DelveWebhook/game_alive.json", Hs:JSONEncode({
+					t = os.time(), farming = (CFG.on or r.autoStart) and true or false, alerted = alerted, url = url,
+					payload = r.discordPayload({
+						title = "Delve stopped",
+						description = string.format("The script stopped reporting: Roblox closed, crashed or froze. Last depth %s m.", tostring(depth)),
+						color = 15158332,
+					}, "alert"),
+				}));
+			end;
+		end);
+		task.wait(10);
+	end;
+end);
 -- ===================================================================================
 -- INDEX + EQUIPMENT KNOWLEDGE
 --   * on launch: opens the T menu, reads every Index entry (name, zone, "1 in N", found or not)
@@ -7826,6 +7889,10 @@ local indexAPI = (function()
 		end;
 		if now - tickAt < 1 then return; end;
 		tickAt = now;
+		if not startedAt and brain.indexScannedAt then
+			-- a new session (joined, rejoined after a disconnect, or the script re-run): the scan count starts over
+			brain.runsAtScan = tonumber(brain.runCount) or 0;
+		end;
 		startedAt = startedAt or now;
 		if not addConn then hook(); end;
 		pcall(gearTick);
@@ -8491,6 +8558,7 @@ end;
 				{ k = "pingUserId", t = "input", text = "Discord user ID to ping", placeholder = "e.g. 123456789012345678" },
 				{ k = "pingRuns", t = "toggle", text = "Ping on Run Complete" },
 				{ k = "pingDrops", t = "toggle", text = "Ping on rare drops" },
+				{ k = "pingDisconnect", t = "toggle", text = "Ping if disconnected or Roblox closes" },
 				{ k = "rareDropOdds", t = "slider", text = "Drops with no tier: 1 in at least", min = 1000, max = 1000000, step = 1000, suffix = "" },
 			},
 		},
@@ -8882,7 +8950,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.19.1 | Brain",
+		Title = "Delve v5.20 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

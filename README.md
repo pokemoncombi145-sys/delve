@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.19.1** (shown in the window title, `Delve v5.19.1 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.20** (shown in the window title, `Delve v5.20 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -46,7 +46,7 @@ Put `delve_autoexec.lua` in `%LOCALAPPDATA%\Volt\autoexec`. Every time you join 
 ## Discord posts and screenshots
 1. In Discord: Server Settings → Integrations → Webhooks → New Webhook → pick the channel → **Copy Webhook URL**.
 2. In the script's **Discord** tab: paste the URL, turn posting on, and press **Send test post**.
-3. Optional: put your Discord user ID in **Discord user ID to ping** to get pinged on Run Complete and rare drops (no bot needed).
+3. Optional: put your Discord user ID in **Discord user ID to ping** to get pinged on Run Complete, rare drops, and if you disconnect or Roblox closes while farming (no bot needed; the Roblox-closed ping needs the screenshot helper running).
 4. For screenshots, keep `delve_webhook_helper.ps1` and `Start Delve Screenshots.bat` in the same folder (with Volt they're in `%LOCALAPPDATA%\Volt\scripts`), double-click **Start Delve Screenshots.bat** and leave that window open while you play.
 
 Roblox scripts can't take screenshots, so the helper does it: the script asks for a picture the moment the end screen shows, and Auto Replay waits a few seconds for it. Without the helper, posts are sent as text. If Windows asks about running the file, choose **More info → Run anyway** (it's a plain text script you can open in Notepad). Manual start:
