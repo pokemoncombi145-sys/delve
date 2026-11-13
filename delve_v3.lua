@@ -3867,6 +3867,33 @@ local relicAPI = (function()
 		end;
 		return nil;
 	end;
+	-- the TRIP COMPLETE screen by its layout (DelveGuiDump_runend.txt): RunEnd > Results { Title, CashValue,
+	-- Stats > Stat_rocks / Stat_xp / Stat_levels > Value, Count "+N MATERIALS" }
+	local function readRunEnd()
+		local pg = l:FindFirstChild("PlayerGui");
+		local re = pg and pg:FindFirstChild("RunEnd");
+		if not (re and re:IsA("LayerCollector") and re.Enabled ~= false) then return nil; end;
+		local R = re:FindFirstChild("Results");
+		if not (R and R:IsA("GuiObject") and R.Visible) then return nil; end;
+		local function tv(o) return (o and (o:IsA("TextLabel") or o:IsA("TextButton"))) and trim(txt(o)) or ""; end;
+		local title = tv(R:FindFirstChild("Title"));
+		if title == "" then return nil; end;
+		local st = R:FindFirstChild("Stats");
+		local function stat(n)
+			local f = st and st:FindFirstChild(n);
+			return f and parseNum(tv(f:FindFirstChild("Value"))) or nil;
+		end;
+		local res = { title = title, endScreen = true };
+		res.cashValue = parseMoney(tv(R:FindFirstChild("CashValue")));
+		res.rocks, res.xp, res.level = stat("Stat_rocks"), stat("Stat_xp"), stat("Stat_levels");
+		res.materials = parseNum((tv(R:FindFirstChild("Count")):match("([%d,]+)")) or "");
+		local tu = title:upper():gsub(",", "");
+		if tu:find("DIED", 1, true) then res.died = true; end;
+		res.depth = tonumber(tu:match("(%d+)%s*M%s*$"));
+		res.sig = table.concat({ title, tostring(res.cashValue), tostring(res.rocks), tostring(res.xp), tostring(res.level), tostring(res.materials) }, "|");
+		return res;
+	end;
+	r.readRunEnd = readRunEnd;
 	local function readResults(now)
 		local title = resultsTitle(now);
 		if not title then return nil; end;
@@ -4262,15 +4289,24 @@ local relicAPI = (function()
 			-- wait for the results screen, then until its numbers stop counting up
 			local t0 = d();
 			local res, prev;
-			while d() - t0 < 7 do
-				res = readResults(d());
-				-- the end screen is up (or 2.5 s passed): take the picture now
-				if res or d() - t0 >= 2.5 then pcall(r.requestSnap); end;
-				if res and prev and res.sig == prev.sig then break; end;
-				prev = res;
-				task.wait(res and .4 or .25);
+			-- prefer the TRIP COMPLETE screen (it has rocks, XP, level, materials); the "YOU DIED TO" overlay
+			-- only has a title, so it's used only if the end screen never shows
+			local endRes, otherRes;
+			while d() - t0 < 8 do
+				local re = readRunEnd();
+				if re then
+					-- the end screen is up: picture now, then wait until its numbers stop counting up
+					pcall(r.requestSnap);
+					if endRes and endRes.sig == re.sig then endRes = re; break; end;
+					endRes = re;
+					task.wait(.4);
+				else
+					otherRes = readResults(d()) or otherRes;
+					if d() - t0 >= 4 then pcall(r.requestSnap); end;
+					task.wait(.25);
+				end;
 			end;
-			res = res or prev;
+			res = endRes or otherRes;
 			pcall(r.requestSnap);
 			-- save what the end screen looks like once, so its reader can be fixed if it misses fields
 			if not r.runEndDumped and r.dumpGui then
@@ -5816,6 +5852,25 @@ local function lh(m)
 		Fl, Cl = {}, {};
 	end;
 	if WQ == "combat" then uQ(m); end;
+	-- LOW HP + BOSS: two Worldheart deaths came from charging it with 16 and 27 HP left. Below the low-HP
+	-- setting, keep out of the boss's reach and only fight what comes to you until health is back.
+	if WQ == "combat" and w and r.bossFight and tostring(w.name) == r.bossFight then
+		local hum0 = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+		local hpPct0 = (hum0 and hum0.MaxHealth > 0) and hum0.Health / hum0.MaxHealth * 100 or 100;
+		if hpPct0 < (tonumber(CFG.lowHpPct) or 35) then
+			local keep = math.max(14, (tonumber(brain.mobReach[tostring(w.name)]) or 0) + 6);
+			local dxb, dzb = w.x - G.X, w.z - G.Z;
+			local db = math.sqrt(dxb * dxb + dzb * dzb);
+			if r.why and m - (r.lowHpNoteAt or 0) > 8 then
+				r.lowHpNoteAt = m;
+				r.why("combat", string.format("low HP (%d%%): keeping %d st from %s instead of closing in", math.floor(hpPct0), keep, tostring(w.name)));
+			end;
+			if not eh(Fl, G.X, G.Z) then
+				if db < keep and db > .1 then SQ(-dxb / db, -dzb / db); else SQ(nil); end;
+				return;
+			end;
+		end;
+	end;
 	-- far target (e.g. a pylon across burn strips): walk the route around the hazards instead of a straight line.
 	-- No safe route for 4 s: allow crossing lingering ground hazards rather than standing still.
 	if WQ == "combat" and Q.chase and w and Q.dodge and not eh(Fl, G.X, G.Z) then
@@ -8362,7 +8417,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10.4 | Brain",
+		Title = "Delve v5.10.5 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

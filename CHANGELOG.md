@@ -1,6 +1,17 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10.4 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10.5 | Brain`).
+
+## v5.10.5: From the overnight logs (not yet verified in gameplay)
+**What the overnight logs showed (8 delve runs on v5.10.4, then 18 Mycelia wave runs):**
+- **New best depth: 15,300 m**, on the first run after choosing **Descend** (the setting worked). 3 of the 4 delve runs after the first three got past Worldheart.
+- **Pylons:** it routed to Heart Pylons around hazards, and learned "Worldheart takes more damage after a Heart Pylon dies: kill it first".
+- **Worldheart deaths (3):** two came from walking at the boss with 16 and 27 HP left; one was a single huge hit while standing in two big warning circles.
+- **Run posts had no rocks/XP/materials:** the reader matched the "YOU DIED TO" overlay instead of the TRIP COMPLETE screen.
+
+**Fixed**
+- The end screen is read by its real layout (RunEnd > Results: title, cash value, rocks mined, XP gained, level, materials). It waits up to 8 s for it and uses the death overlay only if it never shows. The screenshot is taken when it appears.
+- Below the low-HP setting (35%) in a boss fight, it stays at least 14 studs (or the boss's learned reach + 6) from the boss and only fights what comes to it, instead of closing in. Getting out of an attack zone still comes first.
 
 ## v5.10.4: Overnight stability
 - The new route planning in the farm loop is protected: if it ever errors, that target is just skipped for the frame instead of stopping the loop.
