@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.28.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.29 | Brain`).
+
+## v5.29: Keeps walking up the road (not yet verified in gameplay)
+- **Bug:** it stood still after the Unmaker (17,520 to 17,760 m, no timer) and in a boss room whose boss was out of sight (14,260 m). The forward push only ran when the floor timer was low.
+- **Fix:** in Delve, whenever there's nothing to do (no ore to walk to or mine in reach, no fight, no chest), it walks up the road to the farthest safe tile ahead, around hazards. The portal walk-in and mob search still take over when they apply.
+- **The road's direction is learned and kept** between runs: the tunnel runs the same way across the map (depth 4,760 m at z -3,670, 9,060 m at z -7,080), so it learns that direction from the first depth mark of a run to the newest. Used when there's no recent collapse or depth movement to go by (e.g. after the Unmaker, where depth goes up while you stand still).
+- Toggle renamed: **Keep walking up the road** (Combat tab).
 
 ## v5.28.2: "Up the tunnel" points the right way (not yet verified in gameplay)
 - **Bug (17,060 m, caved in):** it ran backwards into the cave-in. v5.28 worked out "forward" from the middle of all loaded floor tiles; when earlier segments are still loaded that middle point lies behind you, so "forward" pointed back.

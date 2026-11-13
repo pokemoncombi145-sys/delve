@@ -4160,6 +4160,22 @@ local relicAPI = (function()
 				r.depthMarks = type(r.depthMarks) == "table" and r.depthMarks or {};
 				table.insert(r.depthMarks, { x = hrpM.Position.X, z = hrpM.Position.Z, t = os.clock(), depth = v });
 				while #r.depthMarks > 8 do table.remove(r.depthMarks, 1); end;
+				-- the road always runs the same way across the map (depth 4,760 m at z -3,670, 9,060 m at
+				-- z -7,080): learn that direction from the first mark of the run to the newest, keep it
+				r.markAnchor = r.markAnchor or { x = hrpM.Position.X, z = hrpM.Position.Z };
+				local ax, az = hrpM.Position.X - r.markAnchor.x, hrpM.Position.Z - r.markAnchor.z;
+				local al = math.sqrt(ax * ax + az * az);
+				if al >= 40 then
+					ax, az = ax / al, az / al;
+					local td = type(brain.tunnelDir) == "table" and brain.tunnelDir or nil;
+					if td and tonumber(td.x) and tonumber(td.z) then
+						local bx, bz = td.x * .8 + ax * .2, td.z * .8 + az * .2;
+						local bl = math.sqrt(bx * bx + bz * bz);
+						if bl > .1 then ax, az = bx / bl, bz / bl; end;
+					end;
+					brain.tunnelDir = { x = ax, z = az, n = ((td and tonumber(td.n)) or 0) + 1 };
+					if (brain.tunnelDir.n % 10) == 1 then markBrain(); end;
+				end;
 			end;
 		end;
 	end;
@@ -4338,7 +4354,7 @@ local relicAPI = (function()
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
 		run.timeLeft, run.inDanger, run.dangerCount, run.objective, run.rareSeen = nil, false, 0, "", {};
 		run.curDepth, run.prestige, run.prestigeTotal, run.worldPath = nil, 0, 0, nil;
-		r.depthMarks, r.markDepth = nil, nil;
+		r.depthMarks, r.markDepth, r.markAnchor = nil, nil, nil;
 		run.buffSets, run.buffLines, run.hasLifeBuff, run.hasLife = {}, {}, false, false;
 		run.cash0 = cashNow();
 		run.cashExact0 = exactCash(now);
@@ -5399,6 +5415,12 @@ r.forwardInfo = function(px, pz)
 				local dl = math.sqrt(dx * dx + dz * dz);
 				if dl >= 8 then fx, fz, src = dx / dl, dz / dl, "the way the depth goes up"; break; end;
 			end;
+		end;
+	end;
+	if not fx then
+		local td = type(brain.tunnelDir) == "table" and brain.tunnelDir or nil;
+		if td and tonumber(td.x) and tonumber(td.z) and (tonumber(td.n) or 0) >= 3 then
+			fx, fz, src = td.x, td.z, "the road's learned direction";
 		end;
 	end;
 	if not fx then return nil; end;
@@ -6803,6 +6825,26 @@ local function lh(m)
 		local okS, sx, sz = pcall(r.steerDir, G, u.X, u.Z);
 		if okS and sx then SQ(sx, sz); else SQ(u.X - G.X, u.Z - G.Z); end;
 		return;
+	end;
+	-- NOTHING TO DO HERE (Delve): no ore to walk to, no fight, no chest. Standing still wastes the run
+	-- (after the Unmaker, in a boss room whose boss is out of sight, on an empty stretch): walk up the road.
+	if CFG.pushForward ~= false and run.isDelve and WQ ~= "combat" and not u and not L and Q.on then
+		local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
+		if okF and fx and gx and (gp or 0) > 3 then
+			if r.why and m - (r.idleFwdAt or 0) > 6 then
+				r.idleFwdAt = m;
+				r.why("move", string.format("nothing to do here: walking up the road (%s, %.0f st)", tostring(fsrc), gp));
+			end;
+			local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
+			local wp;
+			if okRt and path then
+				for _, p0 in ipairs(path) do
+					if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+				end;
+			end;
+			if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(gx - G.X, gz - G.Z); end;
+			return;
+		end;
 	end;
 	SQ(nil);
 end;
@@ -8776,7 +8818,7 @@ end;
 				{ k = "rangedFirst", t = "toggle", text = "Take out shooters first when they're a threat" },
 				{ k = "attackRoll", t = "combo", text = "Attack rolls (roll into the target)", items = { "On", "Off" } },
 				{ k = "bossRolls", t = "toggle", text = "Roll through bosses when no attack is near" },
-				{ k = "pushForward", t = "toggle", text = "Low timer: head up the tunnel" },
+				{ k = "pushForward", t = "toggle", text = "Keep walking up the road" },
 				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
 		},
@@ -9205,7 +9247,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.28.2 | Brain",
+		Title = "Delve v5.29 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -9334,7 +9376,7 @@ end;
 		rangedFirst = { "Kills mobs that shoot or hit from far away first, but only when they're actually firing at you.", "Recommended: ON." },
 		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step).", "Recommended: On." },
 		bossRolls = { "In boss fights, rolls through the boss for extra damage, but only when no attack zone is within 18 st (25 st on a 1-HP run), nothing is winding up and no boss attack is expected for 2 s.", "Recommended: ON." },
-		pushForward = { "When the floor timer reaches the danger time, ores ahead come first and with nothing left to mine it walks up the tunnel, away from the collapse. It still turns back for a missed ore if it can get there and mine it before the timer runs out.", "Recommended: ON." },
+		pushForward = { "Keeps it moving up the road in Delve: whenever there's nothing to mine, fight or loot it walks forward (also after the Unmaker and in boss rooms whose boss is out of sight). When the floor timer reaches the danger time, ores ahead come first; it still turns back for a missed ore if it can get there and mine it in time.", "Recommended: ON." },
 		rollKey = { "The key your game uses for roll / dash.", "Recommended: Q (the game's default). Change only if you rebound it." },
 		cardPick = { "Picks relics, blessings, forks and trader buys by itself using the brain's scores.", "Recommended: ON for AFK. OFF shows the pick but lets you choose." },
 		relicExplore = { "Now and then takes a relic it has never taken, so the brain learns the whole relic index. Never instead of a second chance, luck relic or set completion.", "Recommended: ON." },
