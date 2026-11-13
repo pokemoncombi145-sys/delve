@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.17.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.17.3 | Brain`).
+
+## v5.17.3: Walks into the prestige portal (not yet verified in gameplay)
+- **Bug:** after the Unmaker the bot stood still in the portal room next to the PRESTIGE II portal. The old portal logic only ran if the Unmaker intro card had been recorded, the room had zero mobs in sight and depth was 15,000+; the first Unmaker kill was on an older version (card never recorded), and the figure by the shop portal counted as a mob.
+- **Fix:** portal signs are now caught the moment they appear in the world (plus one scan at start). It walks into the chosen portal whenever no mob is within 25 studs and the portal is within 250 studs. Works for PRESTIGE I, II, III and on.
+- Signs attached to a part, an attachment or a model are all handled.
+- The right portal is a rare-item shop ("THE $!?#$#*"); the option is now called **Rare shop (?????)**. The script never buys anything there.
 
 ## v5.17.1: Lava and prestige count (not yet verified in gameplay)
 - **Lava (the orange burn tiles at Worldheart)** tick damage the whole time you stand on them. The escape planner now pays a lot more to cross them (and with Glass Soul, 1 max HP, they're effectively walls), and routes to far targets may only cross them when a tick can't kill you (not on Glass Soul, and HP 60%+). Before, it could cross them after 4 s without a safe route.
