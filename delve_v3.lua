@@ -8556,7 +8556,6 @@ end;
 			name = "Farm",
 			main = true,
 			items = {
-				{ k = "autoStage", t = "toggle", text = "Auto Farm: start a stage from the hub" },
 				{ k = "stage", t = "combo", text = "Stage", items = STAGES },
 				{ k = "stageOther", t = "input", text = "Other stage (overrides the list)", placeholder = "Type a stage name, e.g. THE ABYSS" },
 				{ k = "autoReplay", t = "toggle", text = "Play again when a run ends" },
@@ -9028,7 +9027,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.23.1 | Brain",
+		Title = "Delve v5.24 | Brain",
 		Folder = "DelveV3",
 		Icon = "fish",
 		Size = UDim2.fromOffset(760, 640),
@@ -9060,18 +9059,32 @@ end;
 
 	local main = window:Tab({ Title = "Farm", Icon = "play" });
 	local farmToggle;
+	-- ONE switch for farming: on = farm in the run, and from the hub start the chosen stage (old "Auto Farm").
 	farmToggle = main:Toggle({
-		Title = "Farm enabled",
-		Value = false,
+		Title = "Auto Farm",
+		Value = (Q.autoStage == true or r.autoStart) and true or false,
 		Callback = function(enabled)
 			r.autoStart = false;
-			local blocker = enabled and farmBlocker();
-			if blocker then
-				notify(blocker, "Delve");
+			if not enabled then
+				Q.autoStage = false;
+				N(false);
+				pcall(r.saveSettings);
+				return;
+			end;
+			if missingInput and Q.background ~= true then
+				notify(missingInput, "Delve");
 				if farmToggle then farmToggle:Set(false); end;
 				return;
 			end;
-			N(enabled);
+			Q.autoStage = true;
+			if farmBlocker() then
+				-- in the hub: start the stage from GO MINE, the farm turns on once the run loads
+				r.autoStart = true;
+				notify("Auto Farm on: starting your stage from the hub.", "Delve");
+			else
+				N(true);
+			end;
+			pcall(r.saveSettings);
 		end,
 	});
 	r.farmToggle = farmToggle;
@@ -9082,7 +9095,7 @@ end;
 	end;
 	-- INFO TEXT under every setting: what it does, then a recommendation. Shown as the setting's description.
 	local INFO = {
-		autoStage = { "From the hub, opens GO MINE!, picks the stage below and starts it. Also used after scan trips.", "Recommended: ON for AFK farming." },
+		autoStage = { "The one on/off switch (also F2). In a run: mines, fights, dodges and picks relics. In the hub: opens GO MINE!, picks the stage below and starts it; the farm turns on once the run loads.", "Recommended: ON for AFK farming." },
 		stage = { "Which stage Auto Farm starts from the hub.", "Recommended: Delve." },
 		stageOther = { "Type a stage name that isn't in the list. Anything here overrides the Stage list.", "Recommended: leave empty." },
 		autoReplay = { "Clicks BACK TO MINE on the end screen so the next run starts by itself.", "Recommended: ON for AFK farming." },
@@ -9418,7 +9431,7 @@ end;
 	-- recommendation in a tooltip. Hidden otherwise, so the list stays short.
 	task.delay(1, function()
 		pcall(function()
-			local byTitle = {};
+			local byTitle = { ["Auto Farm"] = infoText({ k = "autoStage" }) };
 			for _, group in ipairs(spec) do
 				for _, it in ipairs(group.items) do
 					local txt0 = infoText(it);
@@ -9512,15 +9525,17 @@ end;
 				if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
 				N(false);
 				pcall(dQ);
-				notify("F2: auto farming stopped. Press F2 again to resume.", "Delve");
+				Q.autoStage = false;
+				pcall(r.saveSettings);
+				notify("F2: Auto Farm off. Press F2 again to turn it back on.", "Delve");
 				if r.why then r.why("run", "F2 pressed: farming stopped"); end;
 			else
 				local was = r.f2Paused;
 				r.f2Paused = nil;
-				Q.autoReplay, Q.autoStage = was.autoReplay, was.autoStage;
+				Q.autoReplay = was.autoReplay;
 				if farmToggle then pcall(farmToggle.Set, farmToggle, true); end;
 				pcall(dQ);
-				notify("F2: auto farming resumed.", "Delve");
+				notify("F2: Auto Farm on.", "Delve");
 				if r.why then r.why("run", "F2 pressed: farming resumed"); end;
 			end;
 		end);

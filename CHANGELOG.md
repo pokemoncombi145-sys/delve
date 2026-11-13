@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.23.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.24 | Brain`).
+
+## v5.24: One Auto Farm switch (not yet verified in gameplay)
+- "Farm enabled" and "Auto Farm: start a stage from the hub" are now **one switch: Auto Farm**. On in a run: farms. On in the hub: starts your stage from GO MINE and the farm turns on once the run loads. Off: stops both.
+- **F2** flips the same switch (and pauses Play again while off; F2 again restores it).
 
 ## v5.23.1: Smooth movement (not yet verified in gameplay)
 - Every walking direction now goes through a smoother: outside dodges, a sudden reversal (more than about 110 degrees) within 0.35 s of the last heading is ignored, and smaller turns are eased. Removes W/S back-and-forth from targets or routes flipping.
