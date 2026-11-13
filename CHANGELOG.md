@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.22 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.22.1 | Brain`).
+
+## v5.22.1: Descend setting can't be overridden (not yet verified in gameplay)
+- **Bug:** with After Worldheart set to Descend it took **Ascend**. The fork screen was read with the title "A TRADER IN THE DARK", so the trader logic ran after the fork choice and bought the highest-scoring card (ASCEND 224 vs DESCEND 130).
+- **Fix:** whenever Ascend and Descend cards are on screen it's always treated as the fork and your setting is used; the trader logic can't override a fork any more (also for Safe/Cursed forks).
 
 ## v5.22: Info under every setting (not yet verified in gameplay)
 - Every toggle, slider, dropdown and text box now has an **ⓘ** line under it saying exactly what it does, plus a recommendation (or "Not recommended to change") so you know what's safe to touch.

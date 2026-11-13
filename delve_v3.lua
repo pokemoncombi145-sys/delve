@@ -3648,6 +3648,7 @@ local relicAPI = (function()
 			if nu == "DESCEND" or nu:find("^DESCEND") then desC = c; elseif nu == "ASCEND" or nu:find("^ASCEND") then ascC = c; end;
 		end;
 		local pathPick = Q.afterBossPath or "Descend";
+		if ascC and desC then draft.fork = true; draft.forkWhy = draft.forkWhy or "the brain's choice"; end;
 		if ascC and desC and pathPick ~= "Let the brain decide" then
 			draft.fork = true;
 			choice = pathPick == "Ascend" and ascC or desC;
@@ -3659,6 +3660,12 @@ local relicAPI = (function()
 				run.worldPath, run.pathDanger = wp, run.dangerCount or 0;
 				if r.why then r.why("relic", wp .. " path: relics now favour " .. (wp == "Descend" and "combat boosts" or "mining power/range")); end;
 			end;
+		end;
+		-- a fork (Ascend/Descend, Safe/Cursed) always wins over the trader: the fork screen was once read as
+		-- "A TRADER IN THE DARK" and the trader logic bought the highest score (ASCEND) over your Descend setting
+		if draft.fork and draft.trader then
+			draft.trader = false;
+			if r.why then r.why("relic", "fork cards on a screen titled like a trader: treating it as the fork"); end;
 		end;
 		if draft.trader then
 			r.traderBought = (type(r.traderBought) == "table" and now - (r.traderVisitAt or -1e9) < 30) and r.traderBought or {};
@@ -8972,7 +8979,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.22 | Brain",
+		Title = "Delve v5.22.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "fish",
 		Size = UDim2.fromOffset(760, 640),
