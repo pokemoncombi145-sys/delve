@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.16 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.17 | Brain`).
+
+## v5.17: Portals after the Unmaker (not yet verified in gameplay)
+- After the Unmaker two portal rings appear that you walk into: the left one is labelled **PRESTIGE I**, the right one has a garbled label (unknown so far, called **?????**).
+- New Relics setting **After the Unmaker (portal)**: Prestige I (default), ?????, or Don't enter. Once the Unmaker has been seen and the room is clear (15,000 m+), it finds the portal labels in the world every 3 s, walks a safe route to the chosen one and steps into it. Logged as "walking into the … portal".
+- The first time it finds them, it saves the portal layout to `DelveGuiDump_portals.txt` so detection can be refined.
 
 ## v5.16: Prestige and boss cards (not yet verified in gameplay)
 **What happened:** the Unmaker ("THE END OF ALL THINGS") was killed at 17,520 m on a Glass Soul run, using the new routing and dodging; then **Prestige I** ("THE DELVE - YOU BEGIN AGAIN") restarted the depth inside the same run. Two new screens were saved: RiftBossCard (the boss intro card) and RelicPoof (just a visual effect).

@@ -133,6 +133,7 @@ local m = {
 		dangerTime = 10,
 		forkPath = "Smart",
 		afterBossPath = "Descend",
+		afterUnmaker = "Prestige I",
 		traderBuy = true,
 		traderMinScore = 5,
 		relicDelay = .3,
@@ -6164,6 +6165,73 @@ local function lh(m)
 		Fl, Cl = {}, {};
 	end;
 	if WQ == "combat" then uQ(m); end;
+	-- PORTALS AFTER THE UNMAKER: two rings you walk into. Left is labelled "PRESTIGE I", right is a garbled
+	-- label (unknown, called "?????" here). Once the Unmaker has been seen and the room is clear, it looks for
+	-- the labels in the world (every 3 s), saves the layout once, and walks into the one you picked.
+	do
+		local pick = CFG.afterUnmaker or "Prestige I";
+		local unmakerSeen = type(brain.bossNames) == "table" and brain.bossNames["THE UNMAKER"];
+		if pick ~= "Don't enter" and unmakerSeen and #S == 0 and (run.curDepth or run.depth or 0) >= 15000 then
+			if not r.portals or m - r.portals.t > 3 then
+				local found = { t = m };
+				for _, o in ipairs(workspace:GetDescendants()) do
+					if o:IsA("TextLabel") and o.Text ~= "" and o:FindFirstAncestorWhichIsA("BillboardGui") then
+						local bb = o:FindFirstAncestorWhichIsA("BillboardGui");
+						local part = (bb.Adornee and bb.Adornee:IsA("BasePart") and bb.Adornee) or bb.Parent;
+						if part and not part:IsA("BasePart") then part = part:FindFirstChildWhichIsA("BasePart", true); end;
+						if part and part:IsA("BasePart") then
+							local tu = o.Text:upper();
+							local junk = select(2, tu:gsub("[#&%*%^%$@!%%]", ""));
+							if tu:find("PRESTIGE", 1, true) then
+								found.prestige = { x = part.Position.X, z = part.Position.Z, part = part };
+							elseif junk >= 3 and #tu <= 16 then
+								found.mystery = { x = part.Position.X, z = part.Position.Z, part = part };
+							end;
+						end;
+					end;
+				end;
+				r.portals = found;
+				if (found.prestige or found.mystery) and not r.portalDumped and type(writefile) == "function" then
+					r.portalDumped = true;
+					pcall(function()
+						local lines = { "Delve portals " .. os.date("%Y-%m-%d %H:%M:%S") };
+						for _, key in ipairs({ "prestige", "mystery" }) do
+							local pr = found[key];
+							if pr then
+								local root = pr.part:FindFirstAncestorWhichIsA("Model") or pr.part;
+								lines[#lines + 1] = string.format("%s: %s '%s' at %.1f, %.1f", key, root.ClassName, root:GetFullName(), pr.x, pr.z);
+								for _, d0 in ipairs(root:GetDescendants()) do
+									if #lines > 120 then break; end;
+									if d0:IsA("BasePart") or d0:IsA("TextLabel") then
+										lines[#lines + 1] = string.format("  %s '%s'%s", d0.ClassName, d0.Name, d0:IsA("TextLabel") and (" text=\"" .. d0.Text .. "\"") or "");
+									end;
+								end;
+							end;
+						end;
+						writefile("DelveGuiDump_portals.txt", table.concat(lines, "\n"));
+					end);
+				end;
+			end;
+			local target = pick == "?????" and r.portals.mystery or r.portals.prestige;
+			if target then
+				if r.why and r.portalNote ~= pick then
+					r.portalNote = pick;
+					r.why("move", "walking into the " .. pick .. " portal");
+					notify("Taking the " .. pick .. " portal.", "Delve run");
+				end;
+				local okRt, path = pcall(r.routeTo, { addr = "portal" .. pick, x = target.x, z = target.z }, G, 2);
+				local wp;
+				if okRt and path then
+					for _, p0 in ipairs(path) do
+						if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+					end;
+				end;
+				-- the last steps go straight into the ring
+				if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(target.x - G.X, target.z - G.Z); end;
+				return;
+			end;
+		end;
+	end;
 	-- FIND ALL THE MOBS: the HUD says "N MOBS LEFT"; far mobs (pylons at the top of a boss room) aren't
 	-- loaded until you get close, so when it sees fewer than N it moves up the room, away from where it came
 	-- in, along a safe route, until all of them are in sight. A mob right next to you is still fought first.
@@ -8376,6 +8444,7 @@ end;
 				{ k = "relicExplore", t = "toggle", text = "Sometimes try a close 2nd (to learn)" },
 				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
 				{ k = "afterBossPath", t = "combo", text = "After Worldheart", items = { "Descend", "Ascend", "Let the brain decide" } },
+				{ k = "afterUnmaker", t = "combo", text = "After the Unmaker (portal)", items = { "Prestige I", "?????", "Don't enter" } },
 				{ k = "traderBuy", t = "toggle", text = "Buy from traders" },
 				{ k = "traderMinScore", t = "slider", text = "Trader: buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
 			},
@@ -8790,7 +8859,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.16 | Brain",
+		Title = "Delve v5.17 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
