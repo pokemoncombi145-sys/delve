@@ -2836,6 +2836,42 @@ do
 				if pp then sh.fx, sh.fz = pp.Position.X, pp.Position.Z; end;
 				if now >= sh.spawnAt then sh.fixed = true; end;
 			end;
+			-- capture record: the boss and the start point used at the moment it spawned
+			if not sh.spawnSeen and now >= sh.spawnAt then
+				sh.spawnSeen = true;
+				local th = sh.thrower;
+				local pp = th and th.Parent and th.PrimaryPart;
+				if pp then sh.bossAtSpawn = { pp.Position.X, pp.Position.Z }; end;
+				sh.originUsed = { sh.fx, sh.fz };
+			end;
+		end;
+		-- (v5.32) record only: once a second during a bullet storm, how far the drawn bullets near you are
+		-- from the modelled ones (median / max). Nothing here changes movement or dodging.
+		if pos and #P.shots > 0 and nowL - (P.chkAt or -1e9) >= 1 then
+			P.chkAt = nowL;
+			pcall(function()
+				local vis = P.visibleBullets(pos.X, pos.Z, 40);
+				local errs = {};
+				for k = 1, math.min(#vis, 8) do
+					local v, me = vis[k], nil;
+					for _, sh in ipairs(P.shots) do
+						local sx, sz = P.shotPos(sh, now);
+						if sx then
+							local dd = math.sqrt((sx - v.x) ^ 2 + (sz - v.z) ^ 2);
+							if not me or dd < me then me = dd; end;
+						end;
+					end;
+					if me then errs[#errs + 1] = me; end;
+				end;
+				if #errs > 0 then
+					table.sort(errs);
+					P.lastCheck = { clock = nowL, n = #errs, median = errs[math.ceil(#errs / 2)], max = errs[#errs] };
+					if nowL - (P.chkLogAt or -1e9) >= 3 then
+						P.chkLogAt = nowL;
+						f(string.format("bullet model check: %d drawn bullets near you, model off by median %.2f st, max %.2f st", #errs, P.lastCheck.median, P.lastCheck.max));
+					end;
+				end;
+			end);
 		end;
 		local lead = r.fragile and 1.6 or 1.25;
 		local zs, cl = {}, {};
@@ -2938,10 +2974,11 @@ do
 					radius = tonumber(s0.radius) or 2, back = tonumber(s0.back), visual = s0.visual and true or nil,
 					recv = now, seenAt = nowL, what = "shot" };
 				if typeof(s0.vel) == "Vector3" then sh.vx, sh.vz = s0.vel.X, s0.vel.Z; else sh.vx, sh.vz = 0, 0; end;
+				sh.px0, sh.pz0, sh.thrower = sh.fx, sh.fz, thrower; -- for the capture record: the plan's own start point
 				-- "fromMob": the game starts the shot wherever the boss is when it spawns, not at "from"
 				-- (a Pale Warden sanctum storm killed a run from bullets the old model put somewhere else)
 				if s0.fromMob then
-					sh.fromMob, sh.thrower = true, thrower;
+					sh.fromMob = true;
 					fromMobN = fromMobN + 1;
 					local pp = thrower and thrower.PrimaryPart;
 					if pp and not offBoss then offBoss = math.sqrt((pp.Position.X - sh.fx) ^ 2 + (pp.Position.Z - sh.fz) ^ 2); end;
@@ -3005,13 +3042,132 @@ do
 	end;
 	function P.onDodged(p)
 		P.dodged = (P.dodged or 0) + 1;
+		P.lastDodged = { clock = d() };
 		local bits = {};
 		if type(p) == "table" then
 			for k, v in pairs(p) do
 				if #bits < 6 then bits[#bits + 1] = tostring(k) .. "=" .. tostring(v); end;
 			end;
 		end;
-		f("server: dodged (" .. table.concat(bits, " ") .. ")");
+		P.lastDodged.info = table.concat(bits, " ");
+		f("server: dodged (" .. P.lastDodged.info .. ")");
+	end;
+	-- ===================================================================================
+	-- CAPTURE RECORDS (v5.32). With the helper in capture mode ("Start Delve Screenshots.bat", option 2) the
+	-- last seconds of the screen are kept; on a hit, a death or F8 this writes what the dodge code knew at
+	-- that moment, so the clip and the model can be compared. It writes files only: nothing here changes
+	-- movement or dodging. Times: ms = Unix milliseconds (same clock as the helper), clock = dodge_log time.
+	-- ===================================================================================
+	-- drawn bullets near you (HazardView's bodies: small, solid, longer than wide, not the smoke balls)
+	function P.visibleBullets(px, pz, radius)
+		local out = {};
+		local fold = workspace:FindFirstChild("Hazards");
+		if not fold then return out; end;
+		for _, o in ipairs(fold:GetChildren()) do
+			if o:IsA("BasePart") and o.Transparency < .5 and not (o:IsA("Part") and o.Shape == Enum.PartType.Ball) then
+				local sz = o.Size;
+				local mx, mn = math.max(sz.X, sz.Y, sz.Z), math.min(sz.X, sz.Y, sz.Z);
+				if mx <= 3 and mn >= .2 and mx >= mn * 2 then
+					local p0 = o.Position;
+					local dd = (p0.X - px) ^ 2 + (p0.Z - pz) ^ 2;
+					if dd <= radius * radius then out[#out + 1] = { x = p0.X, z = p0.Z, d = math.sqrt(dd) }; end;
+				end;
+			end;
+		end;
+		table.sort(out, function(a, b) return a.d < b.d; end);
+		return out;
+	end;
+	function P.captureOn()
+		local nowL = d();
+		if P.capChk and nowL - P.capChk.t < 5 then return P.capChk.on; end;
+		local on = false;
+		pcall(function()
+			if type(isfile) == "function" and isfile("DelveWebhook/capture_on.txt") then
+				local t = tonumber((readfile("DelveWebhook/capture_on.txt") or ""):match("%d+"));
+				on = t ~= nil and math.abs(os.time() - t) < 20;
+			end;
+		end);
+		P.capChk = { t = nowL, on = on };
+		return on;
+	end;
+	function P.snapshot(reason, loss)
+		local ch = l.Character;
+		local hrp = ch and ch:FindFirstChild("HumanoidRootPart");
+		if not hrp then return nil; end;
+		local hum = ch:FindFirstChildOfClass("Humanoid");
+		local px, pz = hrp.Position.X, hrp.Position.Z;
+		local okT, ms = pcall(function() return DateTime.now().UnixTimestampMillis; end);
+		local sv, clk = srv(), d();
+		local rec = { reason = reason, version = "v5.32", ms = okT and ms or math.floor(os.time() * 1000), clock = clk, srv = sv,
+			loss = loss, hp = hum and hum.Health or nil, player = { x = px, z = pz }, planned = #P.hz, shots = #P.shots };
+		local best, bd;
+		for _, sh in ipairs(P.shots) do
+			local sx, sz = P.shotPos(sh, sv);
+			if sx then
+				local dd = math.sqrt((sx - px) ^ 2 + (sz - pz) ^ 2);
+				if not bd or dd < bd then best, bd = sh, dd; end;
+			end;
+		end;
+		if best then
+			local sx, sz = P.shotPos(best, sv);
+			rec.nearestShot = {
+				key = best.key, mob = best.mob, fromMob = best.fromMob or false,
+				spawnMs = rec.ms + math.floor((best.spawnAt - sv) * 1000), spawnBeforeMs = math.floor((sv - best.spawnAt) * 1000),
+				bossAtSpawn = best.bossAtSpawn and { x = best.bossAtSpawn[1], z = best.bossAtSpawn[2] } or nil,
+				originUsed = best.originUsed and { x = best.originUsed[1], z = best.originUsed[2] } or { x = best.fx, z = best.fz },
+				planFrom = best.px0 and { x = best.px0, z = best.pz0 } or nil,
+				modeled = { x = sx, z = sz }, distance = bd, radius = best.radius,
+				speed = math.sqrt((best.vx or 0) ^ 2 + (best.vz or 0) ^ 2), life = best.life,
+			};
+		end;
+		local vis = P.visibleBullets(px, pz, 30);
+		if vis[1] then
+			local v, mk, me = vis[1], nil, nil;
+			for _, sh in ipairs(P.shots) do
+				local sx, sz = P.shotPos(sh, sv);
+				if sx then
+					local dd = math.sqrt((sx - v.x) ^ 2 + (sz - v.z) ^ 2);
+					if not me or dd < me then mk, me = sh.key, dd; end;
+				end;
+			end;
+			rec.visibleBullet = { x = v.x, z = v.z, distance = v.d, modelKey = mk, modelError = me, drawnNearby = #vis };
+		end;
+		if P.lastCheck then
+			rec.bulletCheck = { n = P.lastCheck.n, median = P.lastCheck.median, max = P.lastCheck.max, msAgo = math.floor((clk - P.lastCheck.clock) * 1000) };
+		end;
+		rec.dodge = {
+			rollMsAgo = r.lastRoll and math.floor((clk - r.lastRoll) * 1000) or nil,
+			escapeMsAgo = r.escInfo and math.floor((clk - r.escInfo.t) * 1000) or nil,
+			serverDodgeMsAgo = P.lastDodged and math.floor((clk - P.lastDodged.clock) * 1000) or nil,
+			serverDodgeInfo = P.lastDodged and P.lastDodged.info or nil,
+		};
+		return rec;
+	end;
+	function P.requestCapture(reason, loss)
+		local nowL = d();
+		if P.capLast and P.capLast.reason == reason and nowL - P.capLast.t < 1 then return nil; end;
+		P.capLast = { reason = reason, t = nowL };
+		local rec = P.snapshot(reason, loss);
+		if not rec then return nil; end;
+		local ns, vb = rec.nearestShot, rec.visibleBullet;
+		local gap;
+		if ns and ns.bossAtSpawn and ns.originUsed then
+			gap = math.sqrt((ns.bossAtSpawn.x - ns.originUsed.x) ^ 2 + (ns.bossAtSpawn.z - ns.originUsed.z) ^ 2);
+		end;
+		f(string.format("capture (%s): nearest planned shot %s%s; drawn bullet %s; roll %s, server dodge %s",
+			reason,
+			ns and string.format("%.1f st (spawned %.2fs before, start used vs boss at spawn %s apart)", ns.distance, ns.spawnBeforeMs / 1000,
+				gap and string.format("%.1f st", gap) or "?") or "none",
+			"",
+			vb and string.format("%.1f st away, model off by %s", vb.distance, vb.modelError and string.format("%.2f st", vb.modelError) or "?") or "none near you",
+			rec.dodge.rollMsAgo and (rec.dodge.rollMsAgo .. " ms ago") or "none",
+			rec.dodge.serverDodgeMsAgo and (rec.dodge.serverDodgeMsAgo .. " ms ago") or "none"));
+		if P.captureOn() and type(writefile) == "function" then
+			pcall(function()
+				writefile(string.format("DelveWebhook/cap_%d.json", rec.ms), game:GetService("HttpService"):JSONEncode(rec));
+			end);
+		end;
+		return rec;
 	end;
 	-- listen (a re-run of the script drops the old listeners first)
 	for _, c in ipairs(type(r.planConns) == "table" and r.planConns or {}) do pcall(function() c:Disconnect(); end); end;
@@ -9084,6 +9240,8 @@ local brainTick = (function()
 			else
 				f(string.format("hit -%.0f: no planned attack covered this spot (%d planned, %d shots): touch or untracked, %s", loss, #Pq.hz, #Pq.shots, tail));
 			end;
+			local humC = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+			Pq.requestCapture((humC and humC.Health <= 0) and "death" or "hit", loss);
 		end);
 		local dd = brain.dodge;
 		dd.hits = (tonumber(dd.hits) or 0) + 1;
@@ -10083,7 +10241,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.31.2 | Brain",
+		Title = "Delve v5.32 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -10300,7 +10458,7 @@ end;
 			tab:Button({ Title = "Start the stage now", Callback = function() if r.launchStage then r.launchStage(); end; end });
 			tab:Paragraph({
 				Title = "How it works",
-				Desc = "From the hub it clicks GO MINE!, scrolls to your stage, selects it and descends. The farm turns on once the run loads. Right Shift or the Open Delve button shows this window. F2 stops all farming; F2 again resumes.",
+				Desc = "From the hub it clicks GO MINE!, scrolls to your stage, selects it and descends. The farm turns on once the run loads. Right Shift or the Open Delve button shows this window. F2 stops all farming; F2 again resumes. F8 saves a capture (with the helper's recorder on).",
 			});
 			tab:Button({ Title = "Stop and unload", Callback = r.stop });
 		end;
@@ -10609,6 +10767,16 @@ end;
 	pcall(function()
 		if r.f2Conn then pcall(function() r.f2Conn:Disconnect(); end); end;
 		r.f2Conn = game:GetService("UserInputService").InputBegan:Connect(function(io)
+			if io.KeyCode == Enum.KeyCode.F8 then
+				-- F8: capture record now (and the last 5 s + next 2 s of video with the recorder on)
+				if d() - (r.f8At or -1e9) > 1.5 and r.plan and r.plan.requestCapture then
+					r.f8At = d();
+					pcall(r.plan.requestCapture, "manual", 0);
+					local on = r.plan.captureOn and r.plan.captureOn();
+					notify(on and "F8: saving the last 5 s and the next 2 s." or "F8: written to the dodge log (start the helper with the recorder to save video).", "Delve");
+				end;
+				return;
+			end;
 			if io.KeyCode ~= Enum.KeyCode.F2 then return; end;
 			if d() - (r.f2At or -1e9) < .4 then return; end;
 			r.f2At = d();

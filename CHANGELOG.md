@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.31.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.32 | Brain`).
+
+## v5.32: Local recorder for checking the bullet model (not yet verified in gameplay)
+- **Recorder (optional, local only):** `Start Delve Screenshots.bat` now asks for a mode; **2** starts the helper with `-Capture`. It keeps the last seconds of the screen in memory (8 fps, 60% size, JPEG) and, on a hit, a death or **F8**, saves 5 s before and 2 s after to `<Volt workspace>\DelveCaptures\<date>_<time>_<reason>\`: the frames, `logs.txt` (dodge and reasoning lines on the same time line), `summary.txt`, the script's `impact.json`, the death black box on deaths, and `index.html` to step through it. Nothing is uploaded. Mode 1 (or waiting 8 s) behaves exactly as before.
+- **Common time:** every frame is stamped with the wall clock; the script sends Unix milliseconds plus its dodge-log clock with each request, so dodge lines land on the same time line (reasoning lines are whole seconds).
+- **What the script records at the impact** (only written, never used for moving or dodging): the nearest planned shot (when it spawned, where the boss was at that moment, the start point the model used, the plan's own start point, where the model had it, distance, speed, radius), your position at the HP loss, the drawn bullet nearest you and how far the nearest modelled bullet is from it, the last roll, the last escape and the last server `Dodged` confirmation. Without the recorder the same summary goes to the dodge log as a `capture (...)` line.
+- **Bullet model check:** during a bullet storm, once a second the drawn bullets near you are matched to the modelled ones; every 3 s the dodge log gets `bullet model check: N drawn bullets near you, model off by median X st, max Y st`.
+- **F8** saves a capture by hand (e.g. a storm you survived).
+- v5.31.2's commit had the whole script saved with Unix line endings (a side effect of the version bump); this one restores the usual Windows line endings, so diffs are readable again. No behaviour change.
 
 ## v5.31.2: Final check before more runs (not yet verified in gameplay)
 - **Bullet checks solved exactly instead of sampled.** Each bullet was tested every 0.04 s along its path; a 168-bullet storm made that about 5,000 steps per question and the escape planner asks hundreds, enough to stall frames mid-dodge. It's now one closest-approach calculation per bullet (out-and-back bullets too); checked against brute-force sampling on 20,000 random bullets, same answers within 0.5 ms.
