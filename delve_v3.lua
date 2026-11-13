@@ -6483,6 +6483,11 @@ local function lh(m)
 					-- zone toward the target instead: the first safe heading 30-90 degrees off the straight line,
 					-- keeping the same side for 1.5 s so it doesn't flip. Only if every heading is blocked, it holds.
 					local ux, uz = tdx / tl2, tdz / tl2;
+					if tl2 <= math.max(4, YQ()) + .5 then
+						-- already in weapon reach: stay out of the zone and keep hitting
+						SQ(nil);
+						return;
+					end;
 					local side = r.holdSide and m - r.holdSide.t < 1.5 and r.holdSide.addr == w.addr and r.holdSide.s or nil;
 					local pickX, pickZ, pickS;
 					for _, deg in ipairs({ 30, 50, 70, 90 }) do
@@ -9028,7 +9033,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.25 | Brain",
+		Title = "Delve v5.25.1 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -9082,32 +9087,40 @@ end;
 	local main = window:Tab({ Title = "Farm", Icon = "play" });
 	local farmToggle;
 	-- ONE switch for farming: on = farm in the run, and from the hub start the chosen stage (old "Auto Farm").
-	farmToggle = main:Toggle({
-		Title = "Auto Farm",
-		Value = (Q.autoStage == true or r.autoStart) and true or false,
-		Callback = function(enabled)
-			r.autoStart = false;
-			if not enabled then
-				Q.autoStage = false;
-				N(false);
-				pcall(r.saveSettings);
-				return;
-			end;
-			if missingInput and Q.background ~= true then
-				notify(missingInput, "Delve");
-				if farmToggle then farmToggle:Set(false); end;
-				return;
-			end;
-			Q.autoStage = true;
-			if farmBlocker() then
-				-- in the hub: start the stage from GO MINE, the farm turns on once the run loads
+	-- On load it shows what will actually happen: on only if the farm is coming back on by itself.
+	Q.autoStage = r.autoStart and true or false;
+	local function farmSwitch(enabled)
+		if not enabled then
+			r.autoStart, r.hubForScan = false, nil;
+			Q.autoStage = false;
+			N(false);
+			pcall(r.saveSettings);
+			return;
+		end;
+		if missingInput and Q.background ~= true then
+			notify(missingInput, "Delve");
+			if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
+			return;
+		end;
+		Q.autoStage = true;
+		if Q.on then return; end;
+		if farmBlocker() then
+			-- in the hub: start the stage from GO MINE, the farm turns on once the run loads
+			if not r.autoStart then
 				r.autoStart = true;
 				notify("Auto Farm on: starting your stage from the hub.", "Delve");
-			else
-				N(true);
 			end;
-			pcall(r.saveSettings);
-		end,
+		else
+			r.autoStart = false;
+			N(true);
+		end;
+		pcall(r.saveSettings);
+	end;
+	r.farmSwitch = farmSwitch;
+	farmToggle = main:Toggle({
+		Title = "Auto Farm",
+		Value = r.autoStart and true or false,
+		Callback = farmSwitch,
 	});
 	r.farmToggle = farmToggle;
 	local synced = {};
@@ -9233,7 +9246,7 @@ end;
 		if group.main then
 			tab:Button({ Title = "Start the stage now", Callback = function() if r.launchStage then r.launchStage(); end; end });
 			tab:Paragraph({
-				Title = "Auto Farm",
+				Title = "How it works",
 				Desc = "From the hub it clicks GO MINE!, scrolls to your stage, selects it and descends. The farm turns on once the run loads. Right Shift or the Open Delve button shows this window. F2 stops all farming; F2 again resumes.",
 			});
 			tab:Button({ Title = "Stop and unload", Callback = r.stop });
@@ -9544,17 +9557,16 @@ end;
 				r.autoStart = false;
 				Q.autoReplay, Q.autoStage = false, false;
 				r.hubForScan = nil;
+				farmSwitch(false);
 				if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
-				N(false);
 				pcall(dQ);
-				Q.autoStage = false;
-				pcall(r.saveSettings);
 				notify("F2: Auto Farm off. Press F2 again to turn it back on.", "Delve");
 				if r.why then r.why("run", "F2 pressed: farming stopped"); end;
 			else
 				local was = r.f2Paused;
 				r.f2Paused = nil;
 				Q.autoReplay = was.autoReplay;
+				farmSwitch(true);
 				if farmToggle then pcall(farmToggle.Set, farmToggle, true); end;
 				pcall(dQ);
 				notify("F2: Auto Farm on.", "Delve");
@@ -9601,6 +9613,7 @@ end;
 		local clean = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Medium);
 		if (tonumber(CFG.uiFontV) or 0) < 2 then
 			CFG.uiFontV, CFG.uiFont = 2, "Game font"; -- v5.25: the game's font (lighter) is the new default
+			task.defer(function() pcall(dQ); end);
 		end;
 		local function fontMode()
 			local m = tostring(CFG.uiFont or "Game font");

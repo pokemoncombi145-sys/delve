@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.25 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.25.1 | Brain`).
+
+## v5.25.1: Review fixes (not yet verified in gameplay)
+- Turning **Auto Farm** off during a scan trip could still start a run from the hub afterwards. Off now cancels the trip's restart too.
+- **F2** no longer depends on the UI library firing the switch's callback: F2, the switch and the auto-start all go through one function, so F2 always stops and resumes for real.
+- The new walk-around (v5.23) also kicked in when the target was already in weapon reach, so it circled instead of hitting. In reach it now stands outside the zone and keeps attacking; it only walks around when out of reach.
+- After a restart the switch could show ON while the farm was off. It now shows ON only when the farm is coming back on by itself.
+- The help paragraph on the Farm tab had the same title as the switch, so the **i** icon could attach to the wrong one. Renamed to "How it works".
+- The font dropdown now shows the new default right after the one-time switch.
 
 ## v5.25: Cleaner window (not yet verified in gameplay)
 - Window **900 x 700** (was 760 x 640) so long setting names, the **i** icons and text boxes don't overlap.
