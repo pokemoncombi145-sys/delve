@@ -2554,14 +2554,26 @@ local function SQ(m, G)
 		local nowS = d();
 		local sm = R0.smoothDir;
 		local urgent = R0.dodging or (fd and nowS < fd.untilT) or nowS - (R0.lastDodgeAt or -1e9) < .4 or nowS - (R0.lastRoll or -1e9) < .4;
+		-- never smooth toward an edge: keeping the old heading is only allowed with solid floor 4 st ahead
+		-- (it carried the character off the map once: "YOU SLIPPED")
+		local function floorAhead(dx, dz)
+			local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+			if not hrp then return false; end;
+			local rp = RaycastParams.new();
+			rp.FilterType = Enum.RaycastFilterType.Exclude;
+			rp.FilterDescendantsInstances = { l.Character };
+			local o = hrp.Position + Vector3.new(dx * 4, 2, dz * 4);
+			local hit = workspace:Raycast(o, Vector3.new(0, -12, 0), rp);
+			return hit ~= nil and hit.Position.Y > hrp.Position.Y - 6;
+		end;
 		if sm and not urgent and nowS - sm.t < .5 then
 			local dot = m * sm.x + G * sm.z;
-			if dot < -0.34 and nowS - sm.setAt < .35 then
-				m, G = sm.x, sm.z;
+			if dot < -0.34 and nowS - sm.setAt < .3 then
+				if floorAhead(sm.x, sm.z) then m, G = sm.x, sm.z; end;
 			elseif dot < .97 then
 				local bx, bz = sm.x * .35 + m * .65, sm.z * .35 + G * .65;
 				local bl = math.sqrt(bx * bx + bz * bz);
-				if bl > .2 then m, G = bx / bl, bz / bl; end;
+				if bl > .2 and floorAhead(bx / bl, bz / bl) then m, G = bx / bl, bz / bl; end;
 			end;
 		end;
 		local turned = not sm or (m * sm.x + G * sm.z) < .5;
@@ -6863,6 +6875,9 @@ task.spawn(function()
 	local alerted = false;
 	local function alert(msg)
 		if alerted then return; end;
+		-- you left / closed the game yourself (or a normal teleport): not a disconnect, no ping
+		local mu = tostring(msg or ""):upper();
+		if mu:find("CLIENTINITIATED", 1, true) or mu:find("CLIENT INITIATED", 1, true) or mu:find("LEFT THE GAME", 1, true) then return; end;
 		alerted = true;
 		msg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "");
 		pcall(function() if r.why then r.why("run", "disconnected: " .. msg); end; end);
@@ -9056,7 +9071,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.26 | Brain",
+		Title = "Delve v5.26.1 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,

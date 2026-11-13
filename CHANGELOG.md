@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.26 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.26.1 | Brain`).
+
+## v5.26.1: Edge-safe smoothing, no ping when you leave (not yet verified in gameplay)
+- **"YOU SLIPPED. BACK ON SOLID GROUND."** right after resuming at 340 m. Likely cause: the v5.23.1 smoothing kept the old heading for up to 0.35 s when the new one reversed it, which near an edge can carry the character off the floor. Now the old heading (or a blended one) is only kept if a ray finds solid floor 4 st ahead; otherwise it turns immediately. The reversal window is 0.3 s.
+- **Leaving the game pinged you as a disconnect** (Roblox reports it as "DisconnectClientInitiated"). Leaving or closing the game yourself no longer sends the disconnect ping; real disconnects and kicks still do.
 
 ## v5.26: Projectile deaths and Play again (not yet verified in gameplay)
 - **Death (The Pale Warden, 4,760 m, 1 HP):** the boss filled the room with projectiles (55 tracked). The bot started an 11 st escape to open ground and was hit 0.1 s later outside any zone it knew about.
