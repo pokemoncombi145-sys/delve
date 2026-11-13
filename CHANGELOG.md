@@ -1,6 +1,13 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.9.6 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10 | Brain`).
+
+## v5.10: Learning curve window
+- Brain tab: **Show learning curve (graph)** opens a separate, draggable window:
+  - depth of the last 40 delve runs as bars (green survived, red died, grey not learned from), with a gold line for the 5-run average;
+  - hits per run underneath;
+  - last 10 runs vs the 10 before: average depth and hits per run (with % change), deaths, best ever, runs recorded.
+- Built from `DelveRuns.jsonl`; drawn only when opened, and redrawn after each run while it's open.
 
 ## v5.9.6: Path after Worldheart
 - After Worldheart ("THE WORLD BREAKS OPEN") the choice is **ASCEND** (the Heavens: mining path, denser rock, richer ore) or **DESCEND** (the Hollow: combat path, more mobs, more elites). The logs showed it always took Ascend by score. New Relics setting **After Worldheart**: Descend (default), Ascend, or Let the brain decide (the old scoring). The pick is announced and logged like a tunnel fork.

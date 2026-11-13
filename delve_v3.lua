@@ -4248,6 +4248,7 @@ local relicAPI = (function()
 				if re then r.runEndDumped = true; pcall(r.dumpGui, re, "runend"); end;
 			end;
 			local ok, err = pcall(finalizeRun, snap, res, dur);
+			if r.curveRefresh then task.delay(.5, r.curveRefresh); end;
 			if not ok then notify("Run finish error: " .. tostring(err), "Delve brain"); end;
 		end);
 	end;
@@ -8002,6 +8003,171 @@ end;
 			task.delay(math.clamp(4.5 + #message / 45, 4.5, 12), close);
 		end;
 	end;
+	-- LEARNING CURVE window: depth per run (bars), 5-run average (line), hits per run, and recent vs earlier.
+	-- Reads DelveRuns.jsonl; draws only when opened and after each run while open.
+	do
+		local Hs = game:GetService("HttpService");
+		local cv = { gui = nil };
+		local C_BG, C_PANEL, C_TEXT, C_DIM = Color3.fromRGB(16, 15, 22), Color3.fromRGB(26, 25, 34), Color3.fromRGB(232, 230, 238), Color3.fromRGB(140, 138, 150);
+		local C_OK, C_DIED, C_SKIP, C_LINE, C_HIT = Color3.fromRGB(110, 205, 120), Color3.fromRGB(230, 95, 95), Color3.fromRGB(95, 95, 110), Color3.fromRGB(255, 200, 70), Color3.fromRGB(205, 145, 255);
+		local function font() return (r.gameFont and r.gameFont()) or Font.fromEnum(Enum.Font.Arcade); end;
+		local function readRuns()
+			local runs = {};
+			pcall(function()
+				if type(isfile) == "function" and not isfile("DelveRuns.jsonl") then return; end;
+				for line in tostring(readfile("DelveRuns.jsonl")):gmatch("[^\n]+") do
+					local okD, rec = pcall(Hs.JSONDecode, Hs, line);
+					if okD and type(rec) == "table" and rec.mode == "delve" and tonumber(rec.depth) then runs[#runs + 1] = rec; end;
+				end;
+			end);
+			return runs;
+		end;
+		local function label(parent, text, size, color, x, y, w, h, align)
+			local t = Instance.new("TextLabel");
+			t.BackgroundTransparency, t.FontFace, t.TextSize, t.TextColor3 = 1, font(), size, color;
+			t.Position, t.Size = UDim2.fromOffset(x, y), UDim2.fromOffset(w, h);
+			t.TextXAlignment = align or Enum.TextXAlignment.Left;
+			t.Text = text;
+			t.Parent = parent;
+			return t;
+		end;
+		local function box(parent, color, x, y, w, h, z)
+			local f2 = Instance.new("Frame");
+			f2.BorderSizePixel, f2.BackgroundColor3 = 0, color;
+			f2.Position, f2.Size = UDim2.fromOffset(x, y), UDim2.fromOffset(math.max(1, w), math.max(1, h));
+			f2.ZIndex = z or 2;
+			f2.Parent = parent;
+			return f2;
+		end;
+		local function lineSeg(parent, x1, y1, x2, y2, color)
+			local dx, dy = x2 - x1, y2 - y1;
+			local len = math.sqrt(dx * dx + dy * dy);
+			local seg = box(parent, color, (x1 + x2) / 2 - len / 2, (y1 + y2) / 2 - 1, len, 3, 4);
+			seg.Rotation = math.deg(math.atan2(dy, dx));
+		end;
+		local function avg(list, a, b)
+			local sum, n = 0, 0;
+			for k = math.max(1, a), math.min(#list, b) do sum, n = sum + list[k], n + 1; end;
+			return n > 0 and sum / n or nil;
+		end;
+		local function draw()
+			local win = cv.win;
+			if not win then return; end;
+			for _, ch in ipairs(win:GetChildren()) do
+				if ch.Name == "Body" then ch:Destroy(); end;
+			end;
+			local body = Instance.new("Frame");
+			body.Name, body.BackgroundTransparency, body.Size, body.Position = "Body", 1, UDim2.new(1, 0, 1, -36), UDim2.fromOffset(0, 36);
+			body.Parent = win;
+			local all = readRuns();
+			local runs = {};
+			for k = math.max(1, #all - 39), #all do runs[#runs + 1] = all[k]; end;
+			if #runs == 0 then
+				label(body, "No delve runs recorded yet.", 16, C_DIM, 16, 20, 500, 24);
+				return;
+			end;
+			-- depth chart
+			local cx, cy, cw, ch = 46, 10, 560, 180;
+			box(body, C_PANEL, cx, cy, cw, ch, 1);
+			local maxD = 1;
+			for _, rr in ipairs(runs) do maxD = math.max(maxD, tonumber(rr.depth) or 0); end;
+			maxD = math.ceil(maxD / 1000) * 1000;
+			for g = 0, 4 do
+				local gy = cy + ch - ch * g / 4;
+				box(body, Color3.fromRGB(40, 39, 50), cx, gy, cw, 1, 1);
+				label(body, string.format("%dk", math.floor(maxD * g / 4 / 1000 + .5)), 12, C_DIM, 0, gy - 8, 40, 16, Enum.TextXAlignment.Right);
+			end;
+			local bw = cw / #runs;
+			local depths, hits = {}, {};
+			for k, rr in ipairs(runs) do
+				local dep = tonumber(rr.depth) or 0;
+				depths[k], hits[k] = dep, tonumber(rr.hits) or 0;
+				local h = ch * dep / maxD;
+				local col = rr.learned == false and C_SKIP or (rr.died and C_DIED or C_OK);
+				box(body, col, cx + (k - 1) * bw + bw * .15, cy + ch - h, bw * .7, h, 2);
+			end;
+			-- 5-run average line
+			local prevX, prevY;
+			for k = 1, #runs do
+				local a5 = avg(depths, k - 4, k);
+				local x = cx + (k - .5) * bw;
+				local y = cy + ch - ch * a5 / maxD;
+				if prevX then lineSeg(body, prevX, prevY, x, y, C_LINE); end;
+				prevX, prevY = x, y;
+			end;
+			-- hits per run (small bars)
+			local hy, hh = cy + ch + 26, 46;
+			box(body, C_PANEL, cx, hy, cw, hh, 1);
+			label(body, "hits", 12, C_DIM, 0, hy + hh / 2 - 8, 40, 16, Enum.TextXAlignment.Right);
+			local maxH = 1;
+			for _, h in ipairs(hits) do maxH = math.max(maxH, h); end;
+			for k, h in ipairs(hits) do
+				local bh = hh * h / maxH;
+				box(body, C_HIT, cx + (k - 1) * bw + bw * .25, hy + hh - bh, bw * .5, bh, 2);
+			end;
+			-- recent 10 vs the 10 before
+			local n = #depths;
+			local r10, p10 = avg(depths, n - 9, n), avg(depths, n - 19, n - 10);
+			local h10, ph10 = avg(hits, n - 9, n), avg(hits, n - 19, n - 10);
+			local deaths = 0;
+			for k = math.max(1, n - 9), n do if runs[k].died then deaths = deaths + 1; end; end;
+			local best = 0;
+			for _, rr in ipairs(all) do best = math.max(best, tonumber(rr.depth) or 0); end;
+			local function pct(a, b) return (a and b and b > 0) and string.format("%+.0f%%", (a - b) / b * 100) or "n/a"; end;
+			local sy = hy + hh + 14;
+			label(body, string.format("Last 10 runs: avg depth %s m (%s vs the 10 before)", r10 and string.format("%.0f", r10) or "?", pct(r10, p10)), 15, C_TEXT, 16, sy, 600, 20);
+			label(body, string.format("Hits per run %s (%s)   Deaths %d of %d   Best ever %d m   Runs recorded %d",
+				h10 and string.format("%.1f", h10) or "?", pct(h10, ph10), deaths, math.min(10, n), best, #all), 14, C_TEXT, 16, sy + 22, 600, 20);
+			label(body, "Bars: green survived, red died, grey not learned from.  Gold line: 5-run average depth.", 12, C_DIM, 16, sy + 46, 600, 18);
+		end;
+		local function open()
+			if cv.gui and cv.gui.Parent then cv.gui.Enabled = true; draw(); return; end;
+			local sg = Instance.new("ScreenGui");
+			sg.Name, sg.ResetOnSpawn, sg.IgnoreGuiInset, sg.DisplayOrder = "DelveCurve", false, true, 9998;
+			local parent = type(gethui) == "function" and gethui() or nil;
+			if not (parent and pcall(function() sg.Parent = parent; end)) then
+				if not pcall(function() sg.Parent = game:GetService("CoreGui"); end) then sg.Parent = l:WaitForChild("PlayerGui"); end;
+			end;
+			local win = Instance.new("Frame");
+			win.Size, win.Position, win.AnchorPoint = UDim2.fromOffset(640, 380), UDim2.fromScale(.5, .5), Vector2.new(.5, .5);
+			win.BackgroundColor3, win.BackgroundTransparency, win.BorderSizePixel, win.Active = C_BG, .04, 0, true;
+			win.Parent = sg;
+			local corner = Instance.new("UICorner");
+			corner.CornerRadius = UDim.new(0, 6);
+			corner.Parent = win;
+			local stroke = Instance.new("UIStroke");
+			stroke.Color, stroke.Thickness, stroke.Transparency = C_LINE, 2, .3;
+			stroke.Parent = win;
+			label(win, "LEARNING CURVE", 20, C_LINE, 16, 8, 400, 24);
+			local close = Instance.new("TextButton");
+			close.Size, close.Position, close.BackgroundTransparency = UDim2.fromOffset(30, 30), UDim2.new(1, -38, 0, 6), 1;
+			close.FontFace, close.TextSize, close.TextColor3, close.Text = font(), 20, C_TEXT, "X";
+			close.Parent = win;
+			close.MouseButton1Click:Connect(function() sg.Enabled = false; end);
+			-- drag by the title area
+			local dragging, start, startPos;
+			win.InputBegan:Connect(function(io)
+				if io.UserInputType == Enum.UserInputType.MouseButton1 and io.Position.Y - win.AbsolutePosition.Y < 36 then
+					dragging, start, startPos = true, io.Position, win.Position;
+				end;
+			end);
+			win.InputEnded:Connect(function(io)
+				if io.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false; end;
+			end);
+			game:GetService("UserInputService").InputChanged:Connect(function(io)
+				if dragging and io.UserInputType == Enum.UserInputType.MouseMovement then
+					local dl = io.Position - start;
+					win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + dl.X, startPos.Y.Scale, startPos.Y.Offset + dl.Y);
+				end;
+			end);
+			cv.gui, cv.win = sg, win;
+			draw();
+		end;
+		r.curveOpen = function() pcall(open); end;
+		r.curveRefresh = function()
+			if cv.gui and cv.gui.Parent and cv.gui.Enabled then pcall(draw); end;
+		end;
+	end;
 	uiNotify = function(message, title)
 		if CFG.niceToasts ~= false and r.toast and pcall(r.toast, message, title) then return; end;
 		if type(WindUI.Notify) == "function" then
@@ -8010,7 +8176,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.9.6 | Brain",
+		Title = "Delve v5.10 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
@@ -8178,6 +8344,10 @@ end;
 				Callback = function()
 					task.spawn(indexAPI.scan, "manual");
 				end,
+			});
+			tab:Button({
+				Title = "Show learning curve (graph)",
+				Callback = function() if r.curveOpen then r.curveOpen(); end; end,
 			});
 			tab:Button({
 				Title = "Show recent reasoning (combat + relics)",
