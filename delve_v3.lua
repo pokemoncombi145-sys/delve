@@ -125,6 +125,7 @@ local m = {
 		startClosed = true,
 		niceToasts = true,
 		dangerView = false,
+		flankDodge = true,
 		uiGameFont = true,
 		mechNotify = true,
 		dangerTime = 10,
@@ -5330,9 +5331,70 @@ local function openGround(px, pz, now)
 	r.escTarget = { x = pick[1], z = pick[2], t = now, covered = best == nil };
 	return { x = pick[1], z = pick[2], t = now, gx = pick[1], gz = pick[2] };
 end;
+-- FLANK: in a fight, the best way out of an attack is often past the enemy, behind or beside it, where
+-- the attack isn't and your weapon still reaches. Before, it backed out to the far side of the zone and
+-- stood waiting for the attack to end, out of range. Candidates are behind the target (the side away
+-- from the attack) and 45/90 degrees around it, at about 80% of weapon reach; the closest safe one wins.
+local function flankSpot(px, pz, now)
+	if WQ ~= "combat" or not xQ then return nil; end;
+	local t = el[xQ];
+	if not (t and t.x) then return nil; end;
+	local tdx, tdz = t.x - px, t.z - pz;
+	local tdist = math.sqrt(tdx * tdx + tdz * tdz);
+	if tdist > 20 then return nil; end;
+	-- the attack we're standing in (or about to be): its centre tells which side of the enemy is dangerous
+	local zc;
+	for _, z in ipairs(Fl) do
+		if ul(z, px, pz, Vl + .5) then zc = z; break; end;
+	end;
+	if not zc then return nil; end;
+	local ax, az = t.x - zc.x, t.z - zc.z;
+	local al = math.sqrt(ax * ax + az * az);
+	if al < .5 then ax, az, al = tdx, tdz, math.max(tdist, .1); end; -- zone centred on the enemy: go through to the far side
+	ax, az = ax / al, az / al;
+	local reach = math.max(3, math.min(10, YQ() * .8));
+	local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+	local best, bd;
+	for _, ang in ipairs({ 0, .785, -.785, 1.571, -1.571 }) do
+		local ca, sa = math.cos(ang), math.sin(ang);
+		local dx, dz = ax * ca - az * sa, ax * sa + az * ca;
+		local cx, cz = t.x + dx * reach, t.z + dz * reach;
+		if not eh(Fl, cx, cz) then
+			local floorOk;
+			if nav.map then
+				floorOk = navOpenAt(cx, cz) >= 1;
+			elseif hrp then
+				local rp = RaycastParams.new();
+				rp.FilterType = Enum.RaycastFilterType.Exclude;
+				rp.FilterDescendantsInstances = { l.Character };
+				local hit = workspace:Raycast(Vector3.new(cx, hrp.Position.Y + 6, cz), Vector3.new(0, -14, 0), rp);
+				floorOk = hit ~= nil and hit.Position.Y < hrp.Position.Y - .5 and hit.Position.Y > hrp.Position.Y - 7;
+			end;
+			if floorOk then
+				local dd = math.sqrt((cx - px) ^ 2 + (cz - pz) ^ 2);
+				if dd <= 16 and (not bd or dd < bd) then best, bd = { cx, cz }, dd; end;
+			end;
+		end;
+	end;
+	if not best then return nil; end;
+	r.escTarget = { x = best[1], z = best[2], t = now, flank = true };
+	if r.why and now - (r.flankNoteAt or 0) > 6 then
+		r.flankNoteAt = now;
+		r.why("combat", string.format("dodging past %s to stay in reach (%.0f st move)", tostring(t.name), bd));
+	end;
+	return { x = best[1], z = best[2], t = now, gx = best[1], gz = best[2] };
+end;
 local function Nh(m, G, r)
 	if Qh and (r - Qh.t < .25 and not eh(Fl, Qh.gx or Qh.x, Qh.gz or Qh.z)) then
 		if not Qh.gx or (Qh.x - m) ^ 2 + (Qh.z - G) ^ 2 > (nav.cell * .6) ^ 2 then
+			return Qh;
+		end;
+	end;
+	-- fighting: try to get out past the enemy (keeps hitting it) before backing off
+	if CFG.flankDodge ~= false then
+		local okF, fs = pcall(flankSpot, m, G, r);
+		if okF and fs then
+			Qh = fs;
 			return Qh;
 		end;
 	end;
@@ -8167,6 +8229,7 @@ end;
 				{ k = "lowHpPct", t = "slider", text = "Stop chasing below HP", min = 0, max = 90, step = 5, suffix = " %" },
 				{ k = "crowdSize", t = "slider", text = "Fight when this many mobs are up", min = 2, max = 20, step = 1, suffix = "" },
 				{ k = "fightDist", t = "slider", text = "Circle distance", min = 2, max = 30, step = 1, suffix = " st" },
+				{ k = "flankDodge", t = "toggle", text = "Dodge past enemies to keep hitting them" },
 				{ k = "attackRoll", t = "combo", text = "Attack rolls (Auto = if your race has a roll perk)", items = { "Auto", "Always", "Off" } },
 				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
@@ -8593,7 +8656,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.12 | Brain",
+		Title = "Delve v5.13 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

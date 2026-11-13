@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.12 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.13 | Brain`).
+
+## v5.13: Dodge past enemies (not yet verified in gameplay)
+- In a fight, when you're inside an attack zone, it first looks for a safe spot **past the enemy**: behind it (on the side away from the attack) or 45/90 degrees around it, at about 80% of your weapon reach, on real floor and outside every zone, at most 16 studs away. It takes the closest one, so it keeps hitting instead of backing out of range and waiting for the attack to end. If the attack is centred on the enemy, "behind" means through to the far side.
+- Getting there uses the same walk-or-roll rule: it rolls (with invincibility) only when walking can't make it before the hit.
+- If no such spot is safe, it falls back to the normal escape (tile planner, then the open-ground search).
+- Combat tab toggle: **Dodge past enemies to keep hitting them** (on). Logged as "dodging past … to stay in reach".
 
 ## v5.12: Danger map (see what it sees)
 - Settings: **Show what it sees (danger map)** draws, live on the ground, everything the dodge logic detects: **red** attack zones, **orange** burning floor, **yellow** attacks timed to hit you soon, and a **green** marker where it's heading to get safe. Up to 90 zones within 90 studs, refreshed about 7 times a second while farming.
