@@ -1,6 +1,15 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.25.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.26 | Brain`).
+
+## v5.26: Projectile deaths and Play again (not yet verified in gameplay)
+- **Death (The Pale Warden, 4,760 m, 1 HP):** the boss filled the room with projectiles (55 tracked). The bot started an 11 st escape to open ground and was hit 0.1 s later outside any zone it knew about.
+  - On fragile runs (max HP 10 or less, e.g. Glass Soul) each projectile's danger lane now reaches **0.95 s** ahead (up to 32 st) instead of 0.6 s (20 st), so escapes don't cross where a shot is about to be.
+  - When only projectiles are between it and the target, it waits for them to pass instead of walking around them into the bullet field (the v5.23 walk-around is still used for ground zones).
+- **Play again stopped clicking:** F2 also switched "Play again" off and saved it, and re-running the script left an old F2 handler connected, so one press could stop and resume at once (11:06:47 in the log). Your setting ended up saved as off.
+  - F2 no longer touches the Play again setting: Play again simply pauses while F2 has farming stopped or Auto Farm is off.
+  - Only one F2 handler is ever connected, and presses within 0.4 s count once.
+  - Play again is switched back on once (it was turned off by this bug).
 
 ## v5.25.1: Review fixes (not yet verified in gameplay)
 - Turning **Auto Farm** off during a scan trip could still start a run from the hub afterwards. Off now cancels the trip's restart too.

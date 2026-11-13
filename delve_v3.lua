@@ -131,6 +131,7 @@ local m = {
 		uiGameFont = true,
 		uiFont = "Game font",
 		uiFontV = 0,
+		replayFixV = 0,
 		mechNotify = true,
 		dangerTime = 10,
 		forkPath = "Smart",
@@ -1958,8 +1959,16 @@ local yl = 1.05;
 local bl = Q.rollLead;
 local vl = Q.meleeReach;
 local nl = {};
-local function gl(m, G, r, Q)
-	local e = math.max(r / 2, .6);
+local function gl(m, G, psz, Q)
+	local e = math.max(psz / 2, .6);
+	-- fragile run (max HP 10 or less, e.g. Glass Soul): a single projectile ends the run, so each one's
+	-- danger lane reaches 0.95 s ahead (up to 32 st) instead of 0.6 s (20 st). A Pale Warden projectile
+	-- killed a 1-HP run 0.1 s after it started an 11 st escape through the bullet field.
+	if Q - (r.fragileAt or -1e9) > 1 then
+		r.fragileAt = Q;
+		local hm = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+		r.fragile = hm ~= nil and hm.MaxHealth > 0 and hm.MaxHealth <= 10;
+	end;
 	-- velocity is sampled over >= 40 ms and cached, so scanning every frame doesn't zero it out
 	local N = nl[m];
 	if not N or Q - N.t > .5 then
@@ -1975,7 +1984,7 @@ local function gl(m, G, r, Q)
 		local w = math.sqrt(r2 * r2 + S * S);
 		if w > 2 then
 			local m2, Q2 = r2 / w, S / w;
-			local N2 = math.min(w * il, sl);
+			local N2 = r.fragile and math.min(w * .95, 32) or math.min(w * il, sl);
 			return {
 				x = G.X + (m2 * N2) / 2,
 				z = G.Z + (Q2 * N2) / 2,
@@ -2815,7 +2824,7 @@ local function vQ()
 	VQ.phase = "idle";
 end;
 local function nQ(m)
-	if not Q.autoReplay then
+	if not Q.autoReplay or r.f2Paused or not (Q.on or Q.autoStage or r.autoStart) then
 		vQ();
 		VQ.seenAt = nil;
 		return false;
@@ -6488,6 +6497,20 @@ local function lh(m)
 						SQ(nil);
 						return;
 					end;
+					-- only projectiles in the way: they're gone in a moment, wait for them to pass instead of
+					-- walking around (into) the bullet field
+					local onlyShots = true;
+					for _, z in ipairs(Fl) do
+						if ul(z, ax, az, Vl + .5) and tostring(z.sig or ""):sub(1, 11) ~= "projectile:" then onlyShots = false; break; end;
+					end;
+					if onlyShots then
+						if r.why and m - (r.holdNoteAt or 0) > 5 then
+							r.holdNoteAt = m;
+							r.why("combat", string.format("projectiles between me and %s: waiting for them to pass", tostring(w.name)));
+						end;
+						SQ(nil);
+						return;
+					end;
 					local side = r.holdSide and m - r.holdSide.t < 1.5 and r.holdSide.addr == w.addr and r.holdSide.s or nil;
 					local pickX, pickZ, pickS;
 					for _, deg in ipairs({ 30, 50, 70, 90 }) do
@@ -9033,7 +9056,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.25.1 | Brain",
+		Title = "Delve v5.26 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -9133,7 +9156,7 @@ end;
 		autoStage = { "The one on/off switch (also F2). In a run: mines, fights, dodges and picks relics. In the hub: opens GO MINE!, picks the stage below and starts it; the farm turns on once the run loads.", "Recommended: ON for AFK farming." },
 		stage = { "Which stage Auto Farm starts from the hub.", "Recommended: Delve." },
 		stageOther = { "Type a stage name that isn't in the list. Anything here overrides the Stage list.", "Recommended: leave empty." },
-		autoReplay = { "Clicks BACK TO MINE on the end screen so the next run starts by itself.", "Recommended: ON for AFK farming." },
+		autoReplay = { "Clicks BACK TO MINE on the end screen so the next run starts by itself (only while Auto Farm is on; F2 pauses it).", "Recommended: ON for AFK farming." },
 		replayDelay = { "Seconds to wait on the end screen before playing again (gives the screenshot time to be taken).", "Recommended: 2.5 s. Don't go below 1.5 s if Discord posts are on." },
 		autoStartFarm = { "Turns the farm back on by itself after you rejoin or re-run the script.", "Recommended: ON." },
 		mine = { "Mines rocks and ores. Turning it off means fight-only.", "Recommended: ON. Delve needs ores mined to beat the timer." },
@@ -9550,12 +9573,14 @@ end;
 	end);
 	-- F2: stop everything (farm, Play again, Auto Farm, scan-trip restarts). F2 again: back on as it was.
 	pcall(function()
-		game:GetService("UserInputService").InputBegan:Connect(function(io)
+		if r.f2Conn then pcall(function() r.f2Conn:Disconnect(); end); end;
+		r.f2Conn = game:GetService("UserInputService").InputBegan:Connect(function(io)
 			if io.KeyCode ~= Enum.KeyCode.F2 then return; end;
+			if d() - (r.f2At or -1e9) < .4 then return; end;
+			r.f2At = d();
 			if not r.f2Paused then
-				r.f2Paused = { autoReplay = Q.autoReplay, autoStage = Q.autoStage, farm = Q.on == true };
+				r.f2Paused = { farm = Q.on == true };
 				r.autoStart = false;
-				Q.autoReplay, Q.autoStage = false, false;
 				r.hubForScan = nil;
 				farmSwitch(false);
 				if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
@@ -9563,9 +9588,7 @@ end;
 				notify("F2: Auto Farm off. Press F2 again to turn it back on.", "Delve");
 				if r.why then r.why("run", "F2 pressed: farming stopped"); end;
 			else
-				local was = r.f2Paused;
 				r.f2Paused = nil;
-				Q.autoReplay = was.autoReplay;
 				farmSwitch(true);
 				if farmToggle then pcall(farmToggle.Set, farmToggle, true); end;
 				pcall(dQ);
@@ -9611,6 +9634,14 @@ end;
 		end;
 		local origSize = setmetatable({}, { __mode = "k" });
 		local clean = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Medium);
+		if (tonumber(CFG.replayFixV) or 0) < 1 then
+			CFG.replayFixV = 1;
+			if CFG.autoReplay == false then
+				CFG.autoReplay = true;
+				notify("Play again was switched off by an F2 bug: turned back on.", "Delve");
+				task.defer(function() pcall(dQ); end);
+			end;
+		end;
 		if (tonumber(CFG.uiFontV) or 0) < 2 then
 			CFG.uiFontV, CFG.uiFont = 2, "Game font"; -- v5.25: the game's font (lighter) is the new default
 			task.defer(function() pcall(dQ); end);
