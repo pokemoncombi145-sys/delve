@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.18 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.18.1 | Brain`).
+
+## v5.18.1: Timer beats big mobs (not yet verified in gameplay)
+- **Bug (42,840 m run, Prestige II, caved in):** with 5 s left on the floor timer it went after "big mobs" (Crystal Golem, Magma Brute, Prism Sentinel, Glowcap) 25-45 st away for 7 s instead of mining, and the tunnel caved in. The "big mob" rule was checked before the timer danger zone.
+- **Fix:** in the timer danger zone (10 s or less by default) big mobs are ignored like any other mob. Real bosses, mob-kill objectives and a mob right on top of you still come first.
+- The right-hand portal after the Unmaker leads to **Vesper**, who buys your Mythic and Forsaken items for Strange Orbs. The script never sells anything to Vesper; Prestige stays the default.
 
 ## v5.18: Relic priorities follow the Worldheart path (not yet verified in gameplay)
 - After Worldheart, the path you take changes the relic order (second chance and luck stay on top):

@@ -5889,7 +5889,8 @@ local function wantFight(list, pos, now)
 	-- normal floors (340 m, 880 m) as boss floors and blocked early dodges against everything else.
 	run.bossNow = boss;
 	if boss then r.fightWhy = "boss"; return true; end;
-	if #list >= 2 and maxMax > 0 and maxMax >= minMax * 5 then r.fightWhy = "big mob"; return true; end;
+	-- (the "big mob" rule comes after the timer check: a 42,840 m run caved in chasing big mobs 25-45 st
+	-- away with 5 s left on the timer)
 	if stage:find("MOB") or stage:find("ENEM") or stage:find("FIGHT") or stage:find("HORDE") or stage:find("SLAY") or stage:find("KILL")
 		or stage:find("ELITE") or stage:find("DEFEAT") or stage:find("CLEAR") then
 		r.fightWhy = "mob stage";
@@ -5916,6 +5917,7 @@ local function wantFight(list, pos, now)
 		return false;
 	end;
 	r.danger = false;
+	if #list >= 2 and maxMax > 0 and maxMax >= minMax * 5 then r.fightWhy = "big mob"; return true; end;
 	if next(D) == nil then r.fightWhy = "no ores"; return true; end;
 	local nearest = math.huge;
 	for _, mob in ipairs(list) do
@@ -8913,7 +8915,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.18 | Brain",
+		Title = "Delve v5.18.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
