@@ -2273,7 +2273,7 @@ local function Xl(m, G)
 	-- around the Pale Warden. The real shots come from the plans.
 	local Pq = r.plan;
 	local planOn = Pq ~= nil and Pq.hooked == true and CFG.planFeed ~= false;
-	local skipFx = false;
+	local skipFx, skipSmall = false, false;
 	local function w(G)
 		local r, Q = pcall(function()
 				return G.Size;
@@ -2287,6 +2287,7 @@ local function Xl(m, G)
 			return;
 		end;
 		if skipFx and G:IsA("Part") and G.Shape == Enum.PartType.Ball then return; end;
+		if skipSmall and math.max(Q.X, Q.Y, Q.Z) < 3 and not (Dl(Q.X) or Dl(Q.Y) or Dl(Q.Z)) then return; end;
 		local l = math.max(Q.X, Q.Y, Q.Z) >= 1.5;
 		local d = Dl(Q.X) or Dl(Q.Y) or Dl(Q.Z);
 		if l or d then
@@ -2337,10 +2338,11 @@ local function Xl(m, G)
 		local r = workspace:FindFirstChild(G);
 		if r then
 			skipFx = planOn and (G == "Hazards" or (G == "MobTelegraphs" and Pq.shotHooked == true));
+			skipSmall = planOn and G == "Hazards";
 			q(r);
 		end;
 	end;
-	skipFx = false;
+	skipFx, skipSmall = false, false;
 	local l = {};
 	for G, r in ipairs(Ll(e)) do
 		local Q, e = nil, 0;
@@ -2746,7 +2748,7 @@ do
 		end;
 		local a = math.max(T1, s.spawnAt);
 		local b = math.min(T2, s.spawnAt + s.life);
-		local rr = (s.radius or 2) + .6;
+		local rr = (s.radius or 2) + (r.fragile and 1 or .6);
 		local t = a;
 		while t <= b + 1e-3 do
 			local sx, sz = P.shotPos(s, t);
@@ -2762,7 +2764,7 @@ do
 			return dress(mkCircle(s.arc.tx, s.arc.tz, (s.radius or 2) + .5), s);
 		end;
 		local t0 = math.max(now, s.spawnAt);
-		local t1 = math.min(s.spawnAt + s.life, t0 + 1);
+		local t1 = math.min(s.spawnAt + s.life, t0 + .6);
 		if t1 <= t0 then return nil; end;
 		local x0, z0 = P.shotPos(s, t0);
 		local x1, z1 = P.shotPos(s, t1);
@@ -2806,6 +2808,15 @@ do
 		for k = #P.shots, 1, -1 do
 			local sh = P.shots[k];
 			if sh.spawnAt + (sh.arc and sh.arc.flight + .3 or sh.life) < now - .2 then table.remove(P.shots, k); end;
+		end;
+		-- fromMob shots: follow the boss until each one spawns, then the start point is fixed (like the client)
+		for _, sh in ipairs(P.shots) do
+			if sh.fromMob and not sh.fixed then
+				local th = sh.thrower;
+				local pp = th and th.Parent and th.PrimaryPart;
+				if pp then sh.fx, sh.fz = pp.Position.X, pp.Position.Z; end;
+				if now >= sh.spawnAt then sh.fixed = true; end;
+			end;
 		end;
 		local lead = r.fragile and 1.6 or 1.25;
 		local zs, cl = {}, {};
@@ -2866,17 +2877,18 @@ do
 		return nil;
 	end;
 	local function mobName(id)
-		if id == nil then return "?"; end;
+		if id == nil then return "?", nil; end;
 		for _, o in ipairs(workspace:GetChildren()) do
-			if o:IsA("Model") and o:GetAttribute("MobId") == id then return o.Name; end;
+			if o:IsA("Model") and o:GetAttribute("MobId") == id then return o.Name, o; end;
 		end;
-		return "?";
+		return "?", nil;
 	end;
 	function P.onPlan(p)
 		if type(p) ~= "table" or type(p.t0) ~= "number" then return; end;
 		local now, nowL = srv(), d();
 		P.lastPlan, P.plans = nowL, P.plans + 1;
-		local mob = mobName(p.id);
+		local mob, thrower = mobName(p.id);
+		local fromMobN, offBoss = 0, nil;
 		local first, kinds, nh, ns = math.huge, {}, 0, 0;
 		for i, h in ipairs(type(p.hazards) == "table" and p.hazards or {}) do
 			if type(h) == "table" and typeof(h.at) == "Vector3" and type(h.hit) == "number" then
@@ -2907,6 +2919,14 @@ do
 					radius = tonumber(s0.radius) or 2, back = tonumber(s0.back), visual = s0.visual and true or nil,
 					recv = now, seenAt = nowL, what = "shot" };
 				if typeof(s0.vel) == "Vector3" then sh.vx, sh.vz = s0.vel.X, s0.vel.Z; else sh.vx, sh.vz = 0, 0; end;
+				-- "fromMob": the game starts the shot wherever the boss is when it spawns, not at "from"
+				-- (a Pale Warden sanctum storm killed a run from bullets the old model put somewhere else)
+				if s0.fromMob then
+					sh.fromMob, sh.thrower = true, thrower;
+					fromMobN = fromMobN + 1;
+					local pp = thrower and thrower.PrimaryPart;
+					if pp and not offBoss then offBoss = math.sqrt((pp.Position.X - sh.fx) ^ 2 + (pp.Position.Z - sh.fz) ^ 2); end;
+				end;
 				if type(s0.arc) == "table" and typeof(s0.arc.to) == "Vector3" then
 					sh.arc = { tx = s0.arc.to.X, tz = s0.arc.to.Z, flight = math.max(tonumber(s0.arc.flight) or 1, .05) };
 					sh.what = "lob";
@@ -2918,9 +2938,10 @@ do
 		end;
 		local parts = {};
 		for k, v in pairs(kinds) do parts[#parts + 1] = v > 1 and (k .. "x" .. v) or k; end;
-		f(string.format("plan #%s %s %s: %d hazards (%s), %d shots, first hit in %.2fs (sent %.2fs ago)",
+		f(string.format("plan #%s %s %s: %d hazards (%s), %d shots, first hit in %.2fs (sent %.2fs ago)%s",
 			tostring(p.id), mob, tostring(p.style or ""), nh, table.concat(parts, " "), ns,
-			first < math.huge and first - now or -1, now - p.t0));
+			first < math.huge and first - now or -1, now - p.t0,
+			fromMobN > 0 and string.format(", %d start at the boss (boss %.1f st from the plan's start point)", fromMobN, offBoss or -1) or ""));
 	end;
 	function P.onCancel(c)
 		if type(c) ~= "table" then return; end;
@@ -9027,8 +9048,17 @@ local brainTick = (function()
 			local sv = Pq.srv();
 			local _, e = Pq.hitAt(pos.X, pos.Z, sv - .35, sv + .05);
 			local esc, lr = r.escInfo, r.lastRoll;
-			local tail = string.format("escape picked %s, roll %s",
-				esc and string.format("%.2fs before", now - esc.t) or "never", lr and string.format("%.2fs before", now - lr) or "never");
+			local nearD;
+			for _, sh in ipairs(Pq.shots) do
+				local sx, sz = Pq.shotPos(sh, sv - .1);
+				if sx then
+					local dd0 = math.sqrt((sx - pos.X) ^ 2 + (sz - pos.Z) ^ 2);
+					if not nearD or dd0 < nearD then nearD = dd0; end;
+				end;
+			end;
+			local tail = string.format("escape picked %s, roll %s, nearest planned shot %s",
+				esc and string.format("%.2fs before", now - esc.t) or "never", lr and string.format("%.2fs before", now - lr) or "never",
+				nearD and string.format("%.1f st", nearD) or "none");
 			if e then
 				f(string.format("hit -%.0f by plan #%s %s %s: cue came %.2fs before it landed, %s", loss, tostring(e.id), tostring(e.mob),
 					tostring(e.what), (e.hitAt or e.spawnAt or sv) - (e.recv or sv), tail));
@@ -10034,7 +10064,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.31 | Brain",
+		Title = "Delve v5.31.1 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,

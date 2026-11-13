@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.31 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.31.1 | Brain`).
+
+## v5.31.1: Pale Warden bullet storm (not yet verified in gameplay)
+- **Death (Pale Warden, 22,280 m total, 1 HP, on v5.30):** the Warden's second-phase `sanctumstorm` sent one plan with **168 bullets** (6 spiral arms x 16 volleys + 4 rings with a gap, 16 st/s, radius 2, 70 st reach). The bot kept seeing planned hits 0.6-1.2 s out, retreated from 24 to 77 st, rolled 0.11 s before the hit (too late for the i-frames) and was hit inside a drawn bullet. The new hit log said no planned shot covered the spot.
+- **Cause:** those bullets are `fromMob`: the game starts each one wherever the boss is when it spawns (HazardView takes the boss's position at spawn), not at the plan's `from` point. The model used `from`, so its bullets were in the wrong place once the boss had moved.
+- **Fix:** fromMob shots follow the boss until each one spawns, then their start point is fixed, the same way the client draws them. The plan log line now says how many bullets start at the boss and how far the boss is from the plan's start point.
+- The drawn bullets themselves (marble bullets are 0.6 x 0.6 x 1.9) were read as moving attack zones and stretched up to 20 st ahead, which helped fill the screen with 136-190 "zones". With the plan feed on, small solid parts in `workspace.Hazards` are skipped; the plans cover them exactly.
+- Bullet lanes in the zone list look 0.6 s ahead (was 1 s) to cut clutter; the exact checks for escapes and rolls still look 1.2 s ahead. On 1-HP runs bullets get 1 st of extra room (was 0.6), since the server judges your position a moment late.
+- The hit log now also gives the distance to the nearest planned shot 0.1 s before the hit.
 
 ## v5.31: Moves forward the whole time, timer or not (not yet verified in gameplay)
 - Removed the "only push forward when the floor timer is low" rule. In a Delve it now always:
