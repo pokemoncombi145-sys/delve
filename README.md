@@ -43,6 +43,20 @@ Made for the **Volt** executor at 1920x1080; it falls back to the virtual input 
 ## Load automatically (Volt auto-execute)
 Put `delve_autoexec.lua` in `%LOCALAPPDATA%\Volt\autoexec`. Every time you join Delve it waits for the game to load, then 10 seconds, then loads the latest script from this repo. It does nothing in other games. Turn on **Auto Farm** in the Farm tab and it starts your stage from the hub on its own.
 
+## Game settings (Settings > Gameplay)
+| Setting | Use | Why |
+|---|---|---|
+| Attack color | **RED** (don't change) | Safe spots inside attacks are told apart by colour, and every learned attack is stored by its colour. Another colour can make red attack centres look safe and throws away what it learned. |
+| Camera angle | **TOP-DOWN** | What the script was built and tested with (aim, screenshots). |
+| Low GFX camera | OFF | Not tested with the script. |
+| Rune popups | **ALL** | Rare-drop posts read the "1 in N" pop-ups. (Forsaken also come through chat.) |
+| Mob HP bars | 5 NEAREST or ALL | Mob health is read from the game, not the bars. 5 NEAREST = more FPS. |
+| Damage numbers | any | Not read by the script. Fewer = more FPS. |
+| Hide flying items / other players / XP popups | ON is fine | Not read by the script, more FPS. |
+| Mob ghosts | any | Not read by the script. |
+| Name tag, Inventory tiles, Block party invites | any | Not used. |
+| Auto sell ores | your choice | The script never sells anything itself. |
+
 ## Discord posts and screenshots
 1. In Discord: Server Settings → Integrations → Webhooks → New Webhook → pick the channel → **Copy Webhook URL**.
 2. In the script's **Discord** tab: paste the URL, turn posting on, and press **Send test post**.
