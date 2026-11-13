@@ -157,7 +157,7 @@ local m = {
 		webhookDelay = 1.5,
 		dropWebhook = true,
 		rareDropOdds = 100000,
-		attackRoll = "Auto",
+		attackRoll = "On",
 		autoIndexScan = true,
 		scanEveryRuns = 10,
 		rareTopPct = 3,
@@ -2769,8 +2769,20 @@ end;
 local function bQ()
 	local m = l:FindFirstChild("PlayerGui");
 	local G = m and m:FindFirstChild("RunEnd");
-	local r = G and G:FindFirstChild("Verbs");
-	return r and r:FindFirstChild("Again");
+	local verbs = G and G:FindFirstChild("Verbs");
+	if not verbs then return nil; end;
+	-- a scan is due: go back to the hub first (scan there, then start the next run from GO MINE)
+	local okD, due = pcall(function() return r.scanDue and r.scanDue(); end);
+	local hub = verbs:FindFirstChild("Hub");
+	if okD and due and hub then
+		if not r.hubForScan then
+			r.hubForScan = d();
+			if r.why then r.why("scan", "scan due: returning to the hub to scan before the next run"); end;
+			notify("Scan due: returning to the hub first.", "Delve index");
+		end;
+		return hub;
+	end;
+	return verbs:FindFirstChild("Again");
 end;
 local function vQ()
 	if VQ.phase == "down" then
@@ -4661,8 +4673,7 @@ local function IQ(m)
 	end;
 end;
 -- ATTACK ROLLS: when nothing is about to hit you, spend the roll going INTO the target.
--- Auto = only when your race has a roll perk (read from the Races tab, e.g. Onibi Step: the roll
--- drops spirit flames that hunt mobs). The roll distance is learned from real rolls.
+-- On or Off (the old "Auto"/"Always" count as On). The roll distance is learned from real rolls.
 local function attackRoll(m)
 	local G = sQ();
 	-- measure how far a roll actually goes
@@ -4709,8 +4720,8 @@ local function attackRoll(m)
 		end;
 		return;
 	end;
-	local mode = CFG.attackRoll or "Auto";
-	if mode == "Off" or (mode == "Auto" and not r.rollPerk) or WQ ~= "combat" or not G or not inp.active() then return; end;
+	local mode = CFG.attackRoll or "On";
+	if mode == "Off" or WQ ~= "combat" or not G or not inp.active() then return; end;
 	if CFG.autoRoll == false or m - (r.lastRoll or -1e9) < yl + .35 or r.offRollAt then return; end;
 	-- a boss attack is predicted soon: keep the roll for it
 	local pr = dangerMem.predict;
@@ -4731,7 +4742,6 @@ local function attackRoll(m)
 	-- only mobs a roll can actually reach (about 12 st at most), not ones across the room
 	if dist > math.min(12, rd + 4) then return; end;
 	-- without a roll perk ("Always"), only use it to close the gap
-	if not r.rollPerk and dist < (tonumber(CFG.fightDist) or 8) + 2 then return; end;
 	local dx, dz = best.x - G.X, best.z - G.Z;
 	if dist < 2.5 then dx, dz = -dz, dx; end; -- already on top of it: roll around it, not through it
 	local len = math.sqrt(dx * dx + dz * dz);
@@ -4748,7 +4758,7 @@ local function attackRoll(m)
 	end;
 	r.forceDir = { x = dx, z = dz, untilT = m + .3 };
 	r.offRollAt = m + .06;
-	r.offRollWhy = string.format("%s, %.1f st%s", tostring(best.name), dist, r.rollPerk and (", " .. r.rollPerk) or "");
+	r.offRollWhy = string.format("%s, %.1f st%s", tostring(best.name), dist, "");
 end;
 -- move before a predicted boss attack lands
 local function prePosition(m)
@@ -7337,7 +7347,6 @@ local indexAPI = (function()
 		p.walkSpeed = numOf(you["WALK SPEED"]) or p.walkSpeed;
 		p.miningRange = numOf(you["MINING RANGE"]) or p.miningRange;
 		p.maxHealth = numOf(you["MAX HEALTH"]) or p.maxHealth;
-		p.race = you["RACE"] or p.race;
 		p.level = numOf(you["LEVEL"]) or p.level;
 		-- the Stats tab states the mining range directly: use it if the memory scan found nothing
 		if p.miningRange and p.miningRange > 0 and not r.statsFound then
@@ -7373,77 +7382,6 @@ local indexAPI = (function()
 	end;
 	-- ---------------------------------------------------------------- the scan
 	local busy, done = false, false;
-	local function scanRace()
-		local function perksLabel()
-			local pg = pgui();
-			for _, o in ipairs(pg and pg:GetDescendants() or {}) do
-				if isText(o) and shown(o) and trim(txt(o)):upper() == "RACE PERKS" then return o; end;
-			end;
-			return nil;
-		end;
-		if not perksLabel() then
-			local tab = tabLabels("RACES")[1];
-			if not tab then return nil; end;
-			clickVerified(tab, function() return perksLabel() ~= nil; end, "RACES tab");
-		end;
-		local pl = perksLabel();
-		if not pl then return nil; end;
-		local win = sizedAncestor(pl, 300, 300) or pl.Parent;
-		if not r.raceDumped then r.raceDumped = true; pcall(dump, win, "races"); end;
-		local race = { perks = {}, at = os.time() };
-		for _, o in ipairs(win:GetDescendants()) do
-			if isText(o) and shown(o) and trim(txt(o)):upper():find("WORN", 1, true) then
-				for _, s2 in ipairs(o.Parent:GetChildren()) do
-					if isText(s2) and s2 ~= o and trim(txt(s2)):match("%a") then race.name = trim(txt(s2)); break; end;
-				end;
-			end;
-		end;
-		local list;
-		for _, sf in ipairs(scrollers(win)) do
-			if sf.AbsolutePosition.Y >= pl.AbsolutePosition.Y - 5 then list = sf; break; end;
-		end;
-		local seen = {};
-		local function add(nm, desc)
-			nm = trim(nm or "");
-			if nm ~= "" and desc ~= "" and not seen[nm:upper()] then
-				seen[nm:upper()] = true;
-				race.perks[#race.perks + 1] = { name = nm, desc = desc };
-			end;
-		end;
-		local function readPerks()
-			local root = list or win;
-			local loose = {};
-			for _, row in ipairs(root:GetChildren()) do
-				if row:IsA("GuiObject") and row.Visible then
-					if isText(row) then
-						if trim(txt(row)) ~= "" then loose[#loose + 1] = row; end;
-					else
-						local ls = {};
-						for _, o in ipairs(row:GetDescendants()) do
-							if isText(o) and o.Visible and trim(txt(o)) ~= "" then ls[#ls + 1] = o; end;
-						end;
-						table.sort(ls, function(x, y) return x.AbsolutePosition.Y < y.AbsolutePosition.Y; end);
-						if #ls >= 2 then
-							local desc = {};
-							for k = 2, #ls do desc[#desc + 1] = trim(txt(ls[k])); end;
-							add(txt(ls[1]), table.concat(desc, " "));
-						end;
-					end;
-				end;
-			end;
-			-- name and description as separate labels straight in the list
-			table.sort(loose, function(x, y) return x.AbsolutePosition.Y < y.AbsolutePosition.Y; end);
-			for k = 1, #loose - 1, 2 do add(txt(loose[k]), trim(txt(loose[k + 1]))); end;
-		end;
-		if list then scrollThrough(list, readPerks, .25); else readPerks(); end;
-		race.rollPerk = nil;
-		for _, pk in ipairs(race.perks) do
-			if pk.desc:upper():find("ROLL") then race.rollPerk = pk.name; end;
-		end;
-		brain.race = race;
-		r.rollPerk = race.rollPerk;
-		return #race.perks;
-	end;
 	local function scan(reason)
 		if busy then return; end;
 		busy = true;
@@ -7494,12 +7432,6 @@ local indexAPI = (function()
 				scanEquipment(win);
 			else
 				summary.failed = (summary.failed or "") .. " Equipment";
-			end;
-			local okR, nPerks = pcall(scanRace);
-			if okR and nPerks then
-				summary.perks = nPerks;
-			else
-				summary.failed = (summary.failed or "") .. " Races";
 			end;
 			if opened then
 				pressT();
@@ -7851,7 +7783,6 @@ local indexAPI = (function()
 		launch.busy, r.launching = false, false;
 	end;
 	r.launchStage = function() launch.at, launch.fails, launch.lockedUntil = d(), 0, nil; task.spawn(launchStage); end;
-	if type(brain.race) == "table" then r.rollPerk = brain.race.rollPerk; end;
 	local tickAt, queueAt, startedAt = -1e9, -1e9, nil;
 	local function tick(now)
 		-- process newly appeared labels: drop pop-ups, and hand relic / results labels to the run tracker
@@ -7878,13 +7809,19 @@ local indexAPI = (function()
 		local every = math.max(1, math.floor(tonumber(CFG.scanEveryRuns) or 10));
 		local runsSince = (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtScan) or 0);
 		local due = brain.indexScannedAt == nil or runsSince >= every;
+		if r.hubForScan and inRun() and now - r.hubForScan > 30 then r.hubForScan = nil; end;
 		if due and not busy and not r.launching and CFG.autoIndexScan ~= false and now - startedAt > 10
-			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10 then
+			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10
+			and not workspace:FindFirstChild("RunEndRoom") then
 			r.scanTryAt = now;
 			task.spawn(scan, brain.indexScannedAt == nil and "first scan" or string.format("after %d runs", runsSince));
 		end;
 		-- in the hub with Auto Farm on: open GO MINE and start the chosen stage
-		if CFG.autoStage == true and not busy and not launch.busy and now - startedAt > 10 and not inRun()
+		-- after a scan trip to the hub, the next run starts from here even with Auto Farm off (scan first,
+		-- unless it keeps failing for 90 s)
+		local scanTrip = r.hubForScan and (not (CFG.autoIndexScan ~= false and due) or now - r.hubForScan > 90);
+		if (CFG.autoStage == true or scanTrip) and not busy and not launch.busy and now - startedAt > 10 and not inRun()
+			and not (CFG.autoStage == true and r.hubForScan and not scanTrip)
 			and not relicAPI.hasDraft() and now - launch.at > math.min(60, 8 + launch.fails * 6)
 			and now > (launch.lockedUntil or 0) and goMineButton() then
 			launch.at = now;
@@ -7908,6 +7845,11 @@ local indexAPI = (function()
 		return string.format("Index: %d items, %d found, %d studied, %d sources (mobs/rocks).\nYou: %s (%s power), %s (%s power), mine power %s, mining range %s, luck %s\nLifetime stats: %d",
 			total, found, studied, nsrc, tostring(p.pickaxe or "?"), tostring(p.pickPower or "?"), tostring(p.sword or "?"),
 			tostring(p.swordPower or "?"), tostring(p.power or "?"), tostring(p.miningRange or "?"), tostring(p.luck or "?"), life);
+	end;
+	r.scanDue = function()
+		if CFG.autoIndexScan == false then return false; end;
+		local every = math.max(1, math.floor(tonumber(CFG.scanEveryRuns) or 10));
+		return brain.indexScannedAt == nil or (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtScan) or 0) >= every;
 	end;
 	return { tick = tick, scan = function(reason) done = false; scan(reason); end, report = report };
 end)();
@@ -8488,7 +8430,7 @@ end;
 				{ k = "flankDodge", t = "toggle", text = "Dodge past enemies to keep hitting them" },
 				{ k = "exploreForMobs", t = "toggle", text = "Search the room until all mobs left are found" },
 				{ k = "rangedFirst", t = "toggle", text = "Take out shooters first when they're a threat" },
-				{ k = "attackRoll", t = "combo", text = "Attack rolls (Auto = if your race has a roll perk)", items = { "Auto", "Always", "Off" } },
+				{ k = "attackRoll", t = "combo", text = "Attack rolls (roll into the target)", items = { "On", "Off" } },
 				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
 		},
@@ -8915,7 +8857,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.18.1 | Brain",
+		Title = "Delve v5.19 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

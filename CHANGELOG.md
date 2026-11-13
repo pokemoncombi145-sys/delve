@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.18.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.19 | Brain`).
+
+## v5.19: Scans happen in the hub; races removed (not yet verified in gameplay)
+- **Scan trips:** when a scan is due (every N runs, set by "Scan every" in the UI), the end screen's **RETURN TO HUB** is clicked instead of BACK TO MINE. The Index/Stats/Equipment scan runs in the hub, then the next run is started from GO MINE with your chosen stage, even when Auto Farm is off. If the scan keeps failing for 90 s it starts the run anyway.
+- Scans never start on the end screen any more.
+- **Races removed:** no more Races tab scan, no race in the stats, no race perk lookups. Attack rolls are now simply **On** or **Off** (the old "Auto"/"Always" count as On, which is what your Onibi Step race had).
+- Script check: no script errors in the last session's logs; 17 brief stuck loops over the whole session.
 
 ## v5.18.1: Timer beats big mobs (not yet verified in gameplay)
 - **Bug (42,840 m run, Prestige II, caved in):** with 5 s left on the floor timer it went after "big mobs" (Crystal Golem, Magma Brute, Prism Sentinel, Glowcap) 25-45 st away for 7 s instead of mining, and the tunnel caved in. The "big mob" rule was checked before the timer danger zone.
