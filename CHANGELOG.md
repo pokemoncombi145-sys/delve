@@ -1,6 +1,15 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10.3 | Brain`).
+
+## v5.10.3: Reaching the Heart Pylons and the chest (not yet verified in gameplay)
+**What the logs showed:** the pylons were seen (110-168 st away) but only targeted when the straight line to them was clear; across the Worldheart arena it always crossed a burn strip or attack zone, so it kept "holding safe ground" (logged dozens of times a second) and drifted away. After Worldheart died, the last 2 mobs were pylons it would never go to, so it stood still, never left the fight, and never walked to the chest.
+
+**Fixed**
+- **Routes around hazards.** For far targets it plans a path over the floor tiles that skips tiles inside attack zones and ends on the first tile within weapon reach, then walks it ("routing to HeartPylon around hazards"). If there's no fully safe route for 4 s, it allows crossing lingering ground hazards (burn strips) instead of freezing; it still never walks through an incoming attack, and getting out of a zone you're standing in always comes first.
+- Priority targets (pylons) only need such a route, not a clear straight line.
+- The chest walk uses the same route around attack zones and burn strips.
+- The "holding" note is logged at most every 10 s per target.
 
 ## v5.10.2: Relic priority order
 1. A second chance you don't have yet.

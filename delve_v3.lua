@@ -4990,6 +4990,68 @@ local function navRoute(px, pz, gx, gz, now)
 	return path;
 end;
 r.navRoute = navRoute;
+-- ROUTE TO A TARGET AROUND HAZARDS: over the floor tiles, skipping tiles inside attack zones, ending on the
+-- first tile within `reach` of the target. ignoreFloor = also allow lingering ground hazards (burn strips),
+-- used only when there's no fully safe way (so it doesn't freeze). Cached 0.5 s per target.
+r.routeCache = {};
+r.routeTo = function(mob, G, reach, ignoreFloor)
+	if not (mob and mob.x and G) or not navBuild() then return nil; end;
+	local now = d();
+	local key = tostring(mob.addr) .. (ignoreFloor and ":f" or "");
+	local c = r.routeCache[key];
+	if c and now - c.t < .5 then return c.path; end;
+	local map = nav.map;
+	local function bad(t)
+		if (nav.blocked[t.cx * 4096 + t.cz] or 0) > now then return true; end;
+		for _, z in ipairs(Fl) do
+			local lingering = z.floor or tostring(z.sig or ""):find("Burn", 1, true);
+			if not (ignoreFloor and lingering) and ul(z, t.wx, t.wz, .5) then return true; end;
+		end;
+		return false;
+	end;
+	local scx, scz = navCellAt(G.X, G.Z);
+	local startKey = scx and (scx * 4096 + scz);
+	if not (startKey and map[startKey]) then r.routeCache[key] = { t = now }; return nil; end;
+	local dist, prev, heap, seen, goal = { [startKey] = 0 }, {}, {}, 0, nil;
+	local badMemo = {};
+	nav.push(heap, 0, startKey);
+	while true do
+		local cst, k = nav.pop(heap);
+		if not k then break; end;
+		seen = seen + 1;
+		if seen > 5000 then break; end;
+		local t = map[k];
+		if (t.wx - mob.x) ^ 2 + (t.wz - mob.z) ^ 2 <= reach * reach then goal = k; break; end;
+		if cst <= (dist[k] or math.huge) then
+			for _, dl in ipairs(nav.N8) do
+				local k2 = (t.cx + dl[1]) * 4096 + t.cz + dl[2];
+				local t2 = map[k2];
+				if t2 then
+					if badMemo[k2] == nil then badMemo[k2] = bad(t2); end;
+					if not badMemo[k2] then
+						local nc = cst + ((dl[1] ~= 0 and dl[2] ~= 0) and 1.42 or 1);
+						if nc < (dist[k2] or math.huge) then
+							dist[k2], prev[k2] = nc, k;
+							nav.push(heap, nc, k2);
+						end;
+					end;
+				end;
+			end;
+		end;
+	end;
+	local path;
+	if goal then
+		path = {};
+		local k = goal;
+		while k and k ~= startKey do
+			local t = map[k];
+			table.insert(path, 1, { x = t.wx, z = t.wz });
+			k = prev[k];
+		end;
+	end;
+	r.routeCache[key] = { t = now, path = path };
+	return path;
+end;
 r.steerDir = function(pos, tx, tz)
 	local now = d();
 	local dx, dz = tx - pos.X, tz - pos.Z;
@@ -5451,13 +5513,15 @@ function bossStudy.bias(mob)
 	if not cur or mob.addr == cur.addr then return 0; end;
 	local b = bossStudy.biasRaw(mob, cur);
 	if b > 0 and (tonumber(mob.d) or 0) > 12 then
-		local ok, why = bossStudy.pathSafe(mob);
-		if not ok then
-			-- not now: stay on safe ground (fight what's near) and go when the way is clear
-			local key = tostring(mob.addr) .. tostring(why);
-			if r.why and bossStudy.lastUnsafe ~= key then
-				bossStudy.lastUnsafe = key;
-				r.why("boss", string.format("%s is %.0f st away but %s: holding safe ground for now", tostring(mob.name), tonumber(mob.d) or 0, why));
+		-- go for it if there's a way around the hazards (straight lines across the arena always crossed a burn strip)
+		local G = sQ();
+		local reach = math.max(4, YQ());
+		local path = r.routeTo(mob, G, reach) or r.routeTo(mob, G, reach, true);
+		if not path then
+			bossStudy.noteAt = bossStudy.noteAt or {};
+			if r.why and d() - (bossStudy.noteAt[mob.addr] or 0) > 10 then
+				bossStudy.noteAt[mob.addr] = d();
+				r.why("boss", string.format("%s is %.0f st away and there's no way around the hazards yet: fighting what's near", tostring(mob.name), tonumber(mob.d) or 0));
 			end;
 			return 0;
 		end;
@@ -5720,6 +5784,34 @@ local function lh(m)
 		Fl, Cl = {}, {};
 	end;
 	if WQ == "combat" then uQ(m); end;
+	-- far target (e.g. a pylon across burn strips): walk the route around the hazards instead of a straight line.
+	-- No safe route for 4 s: allow crossing lingering ground hazards rather than standing still.
+	if WQ == "combat" and Q.chase and w and Q.dodge and not eh(Fl, G.X, G.Z) then
+		local reach = math.max(4, YQ());
+		if (tonumber(w.d) or 0) > reach + 2 then
+			local path = r.routeTo(w, G, reach);
+			if path then
+				r.noRouteSince = nil;
+			else
+				r.noRouteSince = r.noRouteSince or m;
+				if m - r.noRouteSince > 4 then path = r.routeTo(w, G, reach, true); end;
+			end;
+			if path and #path > 0 then
+				local wp;
+				for _, p0 in ipairs(path) do
+					if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+				end;
+				if wp then
+					if r.why and (r.routeNoteTo ~= w.addr or m - (r.routeNoteAt or 0) > 10) then
+						r.routeNoteTo, r.routeNoteAt = w.addr, m;
+						r.why("combat", string.format("routing to %s around hazards (%d tiles, %.0f st away)", tostring(w.name), #path, tonumber(w.d) or 0));
+					end;
+					SQ(wp.x - G.X, wp.z - G.Z);
+					return;
+				end;
+			end;
+		end;
+	end;
 	-- standing in an attack zone, or the next steps toward the target are in one: get safe first, don't chase
 	local chaseUnsafe = false;
 	if WQ == "combat" and Q.dodge and w and #Fl > 0 then
@@ -5830,8 +5922,20 @@ local function lh(m)
 			local Q, e = m.x - G.X, m.z - G.Z;
 			if Q * Q + e * e > 1 then
 				r.chestWalk = true;
-				local okS, sx, sz = pcall(r.steerDir, G, m.x, m.z);
-				if okS and sx then SQ(sx, sz); else SQ(Q, e); end;
+				-- around attack zones and burn strips when possible, otherwise the pillar-aware straight route
+				local okR, cpath = pcall(r.routeTo, { addr = "chest" .. math.floor(m.x) .. "_" .. math.floor(m.z), x = m.x, z = m.z }, G, 1.5);
+				local cwp;
+				if okR and cpath then
+					for _, p0 in ipairs(cpath) do
+						if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then cwp = p0; break; end;
+					end;
+				end;
+				if cwp then
+					SQ(cwp.x - G.X, cwp.z - G.Z);
+				else
+					local okS, sx, sz = pcall(r.steerDir, G, m.x, m.z);
+					if okS and sx then SQ(sx, sz); else SQ(Q, e); end;
+				end;
 				return;
 			end;
 		end;
@@ -8222,7 +8326,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10.2 | Brain",
+		Title = "Delve v5.10.3 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
