@@ -1,6 +1,17 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.10.1 | Brain`).
+
+## v5.10.1: Walking into Worldheart's red zone (not yet verified in gameplay)
+**What the death record showed:** at 9,060 m it was chasing Worldheart ("why=big mob") straight through big warning circles (in 2-3 of them for 1.5 s), and the moment before the killing hit it read as "in no zone". Three causes:
+- **Worldheart wasn't a boss.** It has no boss flag, so since v5.8.3 it counted as a "big mob": no boss rules (roll kept for defence, earlier rolls, boss study, pylon logic).
+- **The ring rule was backwards here.** A small circle inside a big one was assumed to be the safe spot; Worldheart's red inner circle is the danger, so standing in it read as safe.
+- **Chasing came before dodging.** In combat it moved toward the target before checking whether it was standing in, or about to step into, an attack zone.
+
+**Fixed**
+- A boss is also recognised by the **CONTRIBUTION** panel that boss fights show, and by name if it killed you before ("THE WORLDHEART"; elites excluded).
+- The inner circle only counts as a safe spot when it isn't red/orange/pink.
+- In combat: standing in an attack zone means get out first (no chasing); if the next 3 studs toward the target are inside one, it holds outside the zone (logged "not chasing … holding outside") and still attacks whatever is in reach.
 
 ## v5.10: Learning curve window
 - Brain tab: **Show learning curve (graph)** opens a separate, draggable window:

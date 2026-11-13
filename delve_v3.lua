@@ -2069,6 +2069,7 @@ function dangerMem.tag(z, part, kind)
 	z.sx = type(a) == "table" and tonumber(a.extra) or 0;
 	z.sl = type(a) == "table" and tonumber(a.lead) or 0;
 	z.noHole = type(a) == "table" and a.noHole == true or nil;
+	if z.color == nil and part then pcall(function() z.color = part.Color; end); end;
 	if not z.seenAt and kind ~= "mob" and kind ~= "floor" then
 		z.seenAt = d();
 		pcall(dangerMem.onAttack, z, z.seenAt);
@@ -2079,7 +2080,10 @@ function dangerMem.holes(list)
 	for i, big in ipairs(list) do
 		if big.circle and (big.h1 or 0) >= 7 and not big.noHole then
 			for j, small in ipairs(list) do
-				if j ~= i and small.circle and (small.h1 or 0) < big.h1 * .5 and (small.h1 or 0) >= 1.5
+				-- a red / orange / pink inner circle is the danger itself (Worldheart), not a safe spot
+				local c = small.color;
+				local reddish = c and c.R > c.G + .15 and c.R > c.B - .05;
+				if j ~= i and not reddish and small.circle and (small.h1 or 0) < big.h1 * .5 and (small.h1 or 0) >= 1.5
 					and (small.x - big.x) ^ 2 + (small.z - big.z) ^ 2 < 2.25 then
 					big.hole, small.safeHole = small.h1, true;
 				end;
@@ -3931,6 +3935,8 @@ local relicAPI = (function()
 						if u:find("WAVE%s*%d") then hud.wave = o; end;
 						if u == "DELVE" then hud.delve = o; end;
 						if u:find("BOSS") and #u <= 40 then hud.boss = o; end;
+						-- boss fights show a CONTRIBUTION panel (Worldheart has no boss flag)
+						if u == "CONTRIBUTION" then hud.contrib = o; end;
 						if u == "ACTIVE BUFFS" then hud.buffs = o; end;
 					end;
 				end;
@@ -4020,7 +4026,8 @@ local relicAPI = (function()
 				task.spawn(function() pcall(r.dumpGui, lc, "hud"); end);
 			end;
 		end;
-		run.bossHud = (hud.boss and hud.boss.Parent and shown(hud.boss)) and true or false;
+		run.bossHud = ((hud.boss and hud.boss.Parent and shown(hud.boss))
+			or (hud.contrib and hud.contrib.Parent and shown(hud.contrib))) and true or false;
 	end;
 	task.spawn(function()
 		local pg = l:WaitForChild("PlayerGui", 30);
@@ -5475,6 +5482,19 @@ local function wantFight(list, pos, now)
 	local boss = run.bossHud or stage:find("BOSS") ~= nil or stage:find("GUARDIAN") ~= nil;
 	local minMax, maxMax = math.huge, 0;
 	for _, mob in ipairs(list) do
+		-- a mob that killed you before and is named on the death screen ("THE WORLDHEART") is a boss,
+		-- unless it was an elite
+		if not mob.boss and not mob.knownChecked then
+			mob.knownChecked = true;
+			local nm = tostring(mob.name or ""):upper():gsub("%s", "");
+			for killer in pairs(type(brain.deaths) == "table" and brain.deaths or {}) do
+				local k = tostring(killer):upper();
+				if not k:find("^ELITE") then
+					k = k:gsub("^THE%s+", ""):gsub("%s", "");
+					if #k >= 4 and nm ~= "" and (nm == k or nm:find(k, 1, true) or k:find(nm, 1, true)) then mob.boss = true; end;
+				end;
+			end;
+		end;
 		if mob.boss then boss = true; end;
 		local mx = tonumber(mob.max) or 0;
 		if mx > 0 then minMax, maxMax = math.min(minMax, mx), math.max(maxMax, mx); end;
@@ -5697,7 +5717,30 @@ local function lh(m)
 		Fl, Cl = {}, {};
 	end;
 	if WQ == "combat" then uQ(m); end;
-	if WQ == "combat" and ((Q.combat and ((Q.chase and w)))) then
+	-- standing in an attack zone, or the next steps toward the target are in one: get safe first, don't chase
+	local chaseUnsafe = false;
+	if WQ == "combat" and Q.dodge and w and #Fl > 0 then
+		if eh(Fl, G.X, G.Z) then
+			chaseUnsafe = true;
+		else
+			local tdx, tdz = w.x - G.X, w.z - G.Z;
+			local tl2 = math.sqrt(tdx * tdx + tdz * tdz);
+			if tl2 > .1 then
+				local ax, az = G.X + tdx / tl2 * 3, G.Z + tdz / tl2 * 3;
+				if eh(Fl, ax, az) then
+					chaseUnsafe = true;
+					-- not in danger yet: hold here (keep attacking if in reach) instead of stepping in
+					if r.why and m - (r.holdNoteAt or 0) > 5 then
+						r.holdNoteAt = m;
+						r.why("combat", string.format("not chasing %s: attack zone between us, holding outside", tostring(w.name)));
+					end;
+					SQ(nil);
+					return;
+				end;
+			end;
+		end;
+	end;
+	if WQ == "combat" and ((Q.combat and ((Q.chase and w)))) and not chaseUnsafe then
 		qh(G, w, S, m);
 		return;
 	end;
@@ -8176,7 +8219,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10 | Brain",
+		Title = "Delve v5.10.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
