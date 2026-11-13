@@ -16,7 +16,9 @@
     script's record of what it knew (nearest planned shot, boss at spawn, start point used, the drawn bullet
     next to you, roll / server dodge) to <workspace>\DelveCaptures\<time>_<reason>\. Open index.html there.
     Nothing is uploaded and nothing here affects how the bot moves or dodges.
-    Options: -Fps 8 -Scale 0.6 -Quality 70 -PreMs 5000 -PostMs 2000
+    Automatic: hits in boss fights or while planned attacks are around, deaths, every bullet storm, and near
+    misses are saved without you; the newest 40 clips are kept (-Keep 0 keeps everything).
+    Options: -Fps 8 -Scale 0.6 -Quality 70 -PreMs 5000 -PostMs 2000 -Keep 40
 #>
 param(
     [string]$Workspace,
@@ -26,6 +28,7 @@ param(
     [int]$Quality = 70,
     [int]$PreMs = 5000,
     [int]$PostMs = 2000,
+    [int]$Keep = 40,
     [switch]$SelfTest
 )
 
@@ -292,6 +295,17 @@ show(k);
     return $out
 }
 
+# keep the newest $Keep clips (only folders this recorder made: <date>_<time>_<reason>)
+function Prune-Captures {
+    if ($Keep -le 0) { return }
+    $dirs = @(Get-ChildItem -LiteralPath $capRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d-\d{3}_[A-Za-z0-9_-]+$' } | Sort-Object Name)
+    if ($dirs.Count -le $Keep) { return }
+    foreach ($old in $dirs[0..($dirs.Count - $Keep - 1)]) {
+        Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Poll-CaptureRequests {
     foreach ($capFile in Get-ChildItem -Path $dir -Filter "cap_*.json" -File -ErrorAction SilentlyContinue) {
         try {
@@ -325,7 +339,8 @@ if ($SelfTest) {
 }
 
 if ($Capture) {
-    Write-Host ("Capture mode ON: keeping the last {0:N0} s at {1} fps; saves {0:N0} s before and {2:N0} s after hits, deaths and F8 to {3}" -f ($PreMs / 1000), $Fps, ($PostMs / 1000), $capRoot) -ForegroundColor Magenta
+    Write-Host ("Capture mode ON: keeping the last {0:N0} s at {1} fps; saves {0:N0} s before and {2:N0} s after hits, deaths, bullet storms, near misses and F8 to {3}" -f ($PreMs / 1000), $Fps, ($PostMs / 1000), $capRoot) -ForegroundColor Magenta
+    Write-Host ("Keeps the newest {0} clips. Keep Roblox visible on the main screen (it can be unattended; a locked screen records nothing useful)." -f $Keep) -ForegroundColor Magenta
 }
 Write-Host "Delve webhook helper running. Watching $dir" -ForegroundColor Green
 Write-Host "Leave this window open while you play. Ctrl+C to stop."
@@ -427,6 +442,7 @@ while ($true) {
                 $pending.RemoveAt($pIdx)
                 try {
                     $saved = Save-Capture $cap
+                    Prune-Captures
                     if ($SelfTest) { Write-Host "SELFTEST_OK $saved"; exit 0 }
                 } catch {
                     Write-Host ("[{0}] Capture save failed: {1} (line {2})" -f (Get-Date -Format T), $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber) -ForegroundColor Red

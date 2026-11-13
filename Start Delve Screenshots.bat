@@ -7,11 +7,12 @@ if not exist "%HELPER%" (
   exit /b 1
 )
 echo.
-echo   1 = Discord screenshots and pings only (default)
-echo   2 = also keep a local recording: saves the last 5 s and the next 2 s on hits,
-echo       deaths and F8, with the matching logs, to DelveCaptures in the Volt workspace
+echo   1 = Discord screenshots and pings only
+echo   2 = also record (default): saves the last 5 s and the next 2 s on boss-fight hits,
+echo       deaths, bullet storms, near misses and F8, with the matching logs, to
+echo       DelveCaptures in the Volt workspace (newest 40 kept). Works unattended.
 echo.
-choice /c 12 /t 8 /d 1 /m "Mode (1 is picked in 8 s)"
+choice /c 12 /t 8 /d 2 /m "Mode (2 is picked in 8 s)"
 if errorlevel 2 goto capture
 powershell -NoProfile -ExecutionPolicy Bypass -File "%HELPER%"
 goto done

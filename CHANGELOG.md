@@ -1,6 +1,16 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.32 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.32.1 | Brain`).
+
+## v5.32.1: Recorder works unattended (not yet verified in gameplay)
+- `Start Delve Screenshots.bat` now starts the recorder by default (mode 2 after 8 s); mode 1 is the plain helper.
+- Automatic captures, no F8 needed:
+  - every **bullet storm** (a plan with 40+ shots) gets one capture covering its first seconds;
+  - a **near miss** (a modelled bullet within 1.5 st of hitting you while you're alive) is captured;
+  - **hits** are captured during boss fights or while planned attacks are around (ordinary mob hits on normal floors aren't, so an AFK session doesn't fill the disk); **deaths** always.
+  - storm and near-miss captures are at most one per 8 s.
+- The helper keeps the newest 40 clips (`-Keep 40`; `-Keep 0` keeps everything). Only its own `<date>_<time>_<reason>` folders are ever removed.
+- Keep Roblox visible on the main screen while away (a locked screen records nothing useful).
 
 ## v5.32: Local recorder for checking the bullet model (not yet verified in gameplay)
 - **Recorder (optional, local only):** `Start Delve Screenshots.bat` now asks for a mode; **2** starts the helper with `-Capture`. It keeps the last seconds of the screen in memory (8 fps, 60% size, JPEG) and, on a hit, a death or **F8**, saves 5 s before and 2 s after to `<Volt workspace>\DelveCaptures\<date>_<time>_<reason>\`: the frames, `logs.txt` (dodge and reasoning lines on the same time line), `summary.txt`, the script's `impact.json`, the death black box on deaths, and `index.html` to step through it. Nothing is uploaded. Mode 1 (or waiting 8 s) behaves exactly as before.

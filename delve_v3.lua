@@ -2873,6 +2873,21 @@ do
 				end;
 			end);
 		end;
+		if pos and #P.shots > 0 and nowL - (P.nearAt or -1e9) >= 8 then
+			local hm = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+			if hm and hm.Health > 0 then
+				for _, sh in ipairs(P.shots) do
+					if not sh.visual and not sh.arc then
+						local sx, sz = P.shotPos(sh, now);
+						if sx and (sx - pos.X) ^ 2 + (sz - pos.Z) ^ 2 <= ((sh.radius or 2) + 1.5) ^ 2 then
+							P.nearAt = nowL;
+							pcall(P.requestCapture, "nearmiss", 0);
+							break;
+						end;
+					end;
+				end;
+			end;
+		end;
 		local lead = r.fragile and 1.6 or 1.25;
 		local zs, cl = {}, {};
 		for _, e in ipairs(P.hz) do
@@ -2991,6 +3006,11 @@ do
 				P.shots[#P.shots + 1] = sh;
 				if not sh.visual then ns = ns + 1; first = math.min(first, sh.spawnAt); end;
 			end;
+		end;
+		-- (v5.32.1) a bullet storm (40+ planned shots): one automatic capture covering its first seconds
+		if ns >= 40 and first < math.huge then
+			local delay = math.max(2, math.min(12, (first - now) + 5));
+			task.delay(delay, function() pcall(P.requestCapture, "storm", 0); end);
 		end;
 		local parts = {};
 		for k, v in pairs(kinds) do parts[#parts + 1] = v > 1 and (k .. "x" .. v) or k; end;
@@ -3145,6 +3165,10 @@ do
 	end;
 	function P.requestCapture(reason, loss)
 		local nowL = d();
+		if reason == "storm" or reason == "nearmiss" then
+			if nowL - (P.autoAt or -1e9) < 8 then return nil; end;
+			P.autoAt = nowL;
+		end;
 		if P.capLast and P.capLast.reason == reason and nowL - P.capLast.t < 1 then return nil; end;
 		P.capLast = { reason = reason, t = nowL };
 		local rec = P.snapshot(reason, loss);
@@ -9241,7 +9265,10 @@ local brainTick = (function()
 				f(string.format("hit -%.0f: no planned attack covered this spot (%d planned, %d shots): touch or untracked, %s", loss, #Pq.hz, #Pq.shots, tail));
 			end;
 			local humC = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
-			Pq.requestCapture((humC and humC.Health <= 0) and "death" or "hit", loss);
+			local dead = humC ~= nil and humC.Health <= 0;
+			if dead or r.bossFight or (#Pq.hz + #Pq.shots) > 0 then
+				Pq.requestCapture(dead and "death" or "hit", loss);
+			end;
 		end);
 		local dd = brain.dodge;
 		dd.hits = (tonumber(dd.hits) or 0) + 1;
@@ -10241,7 +10268,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.32 | Brain",
+		Title = "Delve v5.32.1 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,

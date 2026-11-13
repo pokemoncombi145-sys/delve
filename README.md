@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.32** (shown in the window title, `Delve v5.32 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.32.1** (shown in the window title, `Delve v5.32.1 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -70,12 +70,12 @@ powershell -ExecutionPolicy Bypass -File .\delve_webhook_helper.ps1
 ```
 
 ## Recorder (optional, local)
-Start `Start Delve Screenshots.bat` and press **2** (mode 1, or waiting 8 s, is the normal helper). While it runs it keeps the last few seconds of your screen in memory. On a hit, a death, or when you press **F8** in game, it saves 5 s before and 2 s after to `DelveCaptures\<date>_<time>_<reason>\` in the Volt workspace:
+Start `Start Delve Screenshots.bat`; after 8 s it starts the recorder on its own (press **1** for the plain helper). It works unattended: it keeps the last few seconds of your screen in memory and saves 5 s before and 2 s after to `DelveCaptures\<date>_<time>_<reason>\` in the Volt workspace on every death, hits during boss fights or planned attacks, every bullet storm, near misses, and when you press **F8**. The newest 40 clips are kept. Keep Roblox visible on the main screen while you're away.
 - `index.html`: step through the frames; log lines near each frame are highlighted
 - `summary.txt`: nearest planned shot (spawn time, boss position at spawn, start point used), your position at the HP loss, the drawn bullet next to you and how far the model was from it, roll / server dodge
 - `logs.txt`: dodge and reasoning log lines on the same time line, `impact.json`: the raw record, `death_blackbox.json` on deaths
 
-Nothing is uploaded, and the recorder never affects movement or dodging. Options (edit the .bat): `-Fps 8 -Scale 0.6 -Quality 70 -PreMs 5000 -PostMs 2000`.
+Nothing is uploaded, and the recorder never affects movement or dodging. Options (edit the .bat): `-Fps 8 -Scale 0.6 -Quality 70 -PreMs 5000 -PostMs 2000 -Keep 40`.
 
 ## Files it writes (in your executor's `workspace` folder)
 | File | What's in it |
