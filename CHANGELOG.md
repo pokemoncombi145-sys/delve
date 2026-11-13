@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.24 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.25 | Brain`).
+
+## v5.25: Cleaner window (not yet verified in gameplay)
+- Window **900 x 700** (was 760 x 640) so long setting names, the **i** icons and text boxes don't overlap.
+- **Open Delve** button is box-shaped (square corners) and the fish icon is gone (window and button).
+- **Window font** default is now **Game font**: the game's pixel font everywhere, titles at normal weight and all other text one step lighter so it reads easier. Your saved font setting is switched to it once; Mixed and Clean are still in Settings.
+- Final review: no script errors in the latest logs; syntax, scope and local-count checks pass; no clicks on reroll/buy/Robux/spin/gift; no personal info in the repo.
 
 ## v5.24: One Auto Farm switch (not yet verified in gameplay)
 - "Farm enabled" and "Auto Farm: start a stage from the hub" are now **one switch: Auto Farm**. On in a run: farms. On in the hub: starts your stage from GO MINE and the farm turns on once the run loads. Off: stops both.

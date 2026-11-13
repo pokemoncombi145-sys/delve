@@ -129,7 +129,8 @@ local m = {
 		exploreForMobs = true,
 		rangedFirst = true,
 		uiGameFont = true,
-		uiFont = "Mixed",
+		uiFont = "Game font",
+		uiFontV = 0,
 		mechNotify = true,
 		dangerTime = 10,
 		forkPath = "Smart",
@@ -8644,7 +8645,7 @@ end;
 			items = {
 				{ k = "startClosed", t = "toggle", text = "Start with this window closed" },
 				{ k = "niceToasts", t = "toggle", text = "Game-style pop-ups" },
-				{ k = "uiFont", t = "combo", text = "Window font", items = { "Mixed", "Game font", "Clean" } },
+				{ k = "uiFont", t = "combo", text = "Window font", items = { "Game font", "Mixed", "Clean" } },
 				{ k = "relicNotify", t = "toggle", text = "Pop-ups: relic, trader and path choices" },
 				{ k = "mechNotify", t = "toggle", text = "Pop-ups: new relics and mechanics" },
 				{ k = "background", t = "toggle", text = "Background mode (work while tabbed out)" },
@@ -9027,18 +9028,39 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.24 | Brain",
+		Title = "Delve v5.25 | Brain",
 		Folder = "DelveV3",
-		Icon = "fish",
-		Size = UDim2.fromOffset(760, 640),
+		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
 		OpenButton = {
 			Title = "Open Delve",
+			CornerRadius = UDim.new(0, 4),
 			Enabled = true,
 			Draggable = true,
 			OnlyMobile = false,
 		},
 	});
+	task.delay(1, function()
+		pcall(function()
+			local places = {};
+			if type(gethui) == "function" then pcall(function() places[#places + 1] = gethui(); end); end;
+			pcall(function() places[#places + 1] = game:GetService("CoreGui"); end);
+			for _, place in ipairs(places) do
+				for _, o in ipairs(place:GetDescendants()) do
+					if o:IsA("TextLabel") and o.Text == "Open Delve" then
+						local a = o.Parent;
+						for _ = 1, 4 do
+							if not a then break; end;
+							for _, c in ipairs(a:GetChildren()) do
+								if c:IsA("UICorner") then c.CornerRadius = UDim.new(0, 4); end;
+							end;
+							a = a.Parent;
+						end;
+					end;
+				end;
+			end;
+		end);
+	end);
 	local visible = true;
 	r.win = {
 		alive = true,
@@ -9147,7 +9169,7 @@ end;
 		rareDropOdds = { "Drops with no tier name are posted only if they're at least this rare.", "Recommended: 1 in 100,000." },
 		startClosed = { "Hides this window on load. Right Shift or Open Delve shows it.", "Recommended: ON." },
 		niceToasts = { "Pop-ups styled like the game instead of plain Roblox notifications.", "Recommended: ON." },
-		uiFont = { "Mixed: pixel font for titles, clean font for text. Game font: pixel everywhere. Clean: clean everywhere.", "Recommended: Mixed." },
+		uiFont = { "Game font: the game's pixel font everywhere, lighter for normal text. Mixed: pixel titles, clean text. Clean: clean font everywhere.", "Recommended: Game font." },
 		relicNotify = { "Pop-up for each relic, trader and path choice and why it picked it.", "Recommended: ON while watching, OFF if it's distracting." },
 		mechNotify = { "Pop-up when it meets a new relic or mechanic.", "Recommended: ON." },
 		background = { "Keeps farming while Roblox is tabbed out (sends input without your real mouse/keyboard).", "Recommended: ON if you use the PC while farming." },
@@ -9577,20 +9599,25 @@ end;
 		end;
 		local origSize = setmetatable({}, { __mode = "k" });
 		local clean = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Medium);
+		if (tonumber(CFG.uiFontV) or 0) < 2 then
+			CFG.uiFontV, CFG.uiFont = 2, "Game font"; -- v5.25: the game's font (lighter) is the new default
+		end;
 		local function fontMode()
-			local m = tostring(CFG.uiFont or "Mixed");
+			local m = tostring(CFG.uiFont or "Game font");
 			if CFG.uiGameFont == false and CFG.uiFont == nil then m = "Clean"; end;
 			return m;
 		end;
 		local function setOne(o, ff)
-			if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+			if (o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox")) and o.Name ~= "DelveInfoIcon" and not o:FindFirstAncestor("DelveInfoTip") then
 				if original[o] == nil then original[o], origSize[o] = o.FontFace, o.TextSize; end;
 				local mode = fontMode();
 				local size0 = origSize[o] or o.TextSize;
 				local isTitle = size0 >= 18 or tostring(o.Text):find("Delve v", 1, true) ~= nil or o.Text == "Open Delve";
 				if mode == "Game font" and ff then
-					o.FontFace = Font.new(ff.Family, original[o].Weight, original[o].Style);
+					-- titles keep their weight, everything else one step lighter so the pixel font isn't too heavy
+					o.FontFace = Font.new(ff.Family, isTitle and Enum.FontWeight.Regular or Enum.FontWeight.Light, original[o].Style);
 					o.TextSize = size0;
+					o.TextTransparency = math.max(o.TextTransparency, isTitle and 0 or .06);
 				elseif mode == "Mixed" and ff and isTitle then
 					o.FontFace = Font.new(ff.Family, original[o].Weight, original[o].Style);
 					o.TextSize = size0;
