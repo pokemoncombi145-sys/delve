@@ -1,6 +1,15 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.28.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.28.2 | Brain`).
+
+## v5.28.2: "Up the tunnel" points the right way (not yet verified in gameplay)
+- **Bug (17,060 m, caved in):** it ran backwards into the cave-in. v5.28 worked out "forward" from the middle of all loaded floor tiles; when earlier segments are still loaded that middle point lies behind you, so "forward" pointed back.
+- **Fix:** forward now only comes from where you've been:
+  1. away from the tiles that collapsed in the last 20 s, or
+  2. the way the depth has been going up (it remembers where the depth went up at each gate; the line from an earlier mark to the newest is the way the tunnel goes).
+  - With neither signal it doesn't push at all (keeps mining as before).
+  - The goal is the farthest safe tile that way, staying within 40 st of the line (no side pockets).
+- The log line now says which signal it used.
 
 ## v5.28.1: Pillars, 15 s timer, missed ores (not yet verified in gameplay)
 - **Stuck on a pillar again:** when it got stuck it planned a detour, but the v5.23.1 smoothing still eased the detour's turns, keeping part of its heading into the pillar (the edge check doesn't see a pillar it's standing against). Detours, the 3 s after getting stuck, and any moment it isn't actually moving now skip smoothing completely.

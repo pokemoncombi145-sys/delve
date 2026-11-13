@@ -4153,6 +4153,15 @@ local relicAPI = (function()
 		end;
 		run.curDepth = v;
 		if v > run.depth then run.depth = v; end;
+		if v > (r.markDepth or -1) then
+			r.markDepth = v;
+			local hrpM = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+			if hrpM then
+				r.depthMarks = type(r.depthMarks) == "table" and r.depthMarks or {};
+				table.insert(r.depthMarks, { x = hrpM.Position.X, z = hrpM.Position.Z, t = os.clock(), depth = v });
+				while #r.depthMarks > 8 do table.remove(r.depthMarks, 1); end;
+			end;
+		end;
 	end;
 	local function readHud(now)
 		local ls = leaderRead();
@@ -4329,6 +4338,7 @@ local relicAPI = (function()
 		run.stage, run.bossHud, run.isDelve, run.mobHits = "", false, false, 0;
 		run.timeLeft, run.inDanger, run.dangerCount, run.objective, run.rareSeen = nil, false, 0, "", {};
 		run.curDepth, run.prestige, run.prestigeTotal, run.worldPath = nil, 0, 0, nil;
+		r.depthMarks, r.markDepth = nil, nil;
 		run.buffSets, run.buffLines, run.hasLifeBuff, run.hasLife = {}, {}, false, false;
 		run.cash0 = cashNow();
 		run.cashExact0 = exactCash(now);
@@ -5359,36 +5369,48 @@ r.routeTo = function(mob, G, reach, ignoreFloor)
 	r.routeCache[key] = { t = now, path = path };
 	return path;
 end;
--- FORWARD (up the tunnel): the floor collapses from behind, so "forward" points from the tiles that
--- just vanished (or, before the collapse starts, from where we came into the room) to the middle of
--- what's left. Returns the direction and the farthest safe tile that way.
+-- FORWARD (up the tunnel). Two signals, both about where you've been, never about the shape of the map:
+--   1. away from the tiles that collapsed in the last 20 s (the collapse is always behind you)
+--   2. the way the depth has been going up: from an earlier depth mark to the newest (gates)
+-- v5.28 used the middle of all loaded tiles, which lies behind you when old segments are still loaded,
+-- and sent it running back into the cave-in. No signal = no push (it just keeps mining).
 r.forwardInfo = function(px, pz)
 	if not navBuild() or not nav.map then return nil; end;
-	local now = d();
-	local cx, cz, n = 0, 0, 0;
-	for _, t in pairs(nav.map) do cx, cz, n = cx + t.wx, cz + t.wz, n + 1; end;
-	if n == 0 then return nil; end;
-	cx, cz = cx / n, cz / n;
-	local bx, bz;
+	local now = os.clock();
+	local fx, fz, src;
 	local gx, gz, gn = 0, 0, 0;
 	if type(r.gone) == "table" then
 		for _, e in ipairs(r.gone) do
 			if now - e.t < 20 then gx, gz, gn = gx + e.x, gz + e.z, gn + 1; end;
 		end;
 	end;
-	if gn >= 3 then bx, bz = gx / gn, gz / gn;
-	elseif r.floorEntry then bx, bz = r.floorEntry.x, r.floorEntry.z;
-	else return nil; end;
-	local fx, fz = cx - bx, cz - bz;
-	local fl = math.sqrt(fx * fx + fz * fz);
-	if fl < 2 then return nil; end;
-	fx, fz = fx / fl, fz / fl;
+	if gn >= 3 then
+		local dx, dz = px - gx / gn, pz - gz / gn;
+		local dl = math.sqrt(dx * dx + dz * dz);
+		if dl >= 4 then fx, fz, src = dx / dl, dz / dl, "away from the collapse"; end;
+	end;
+	local mk = r.depthMarks;
+	if not fx and type(mk) == "table" and #mk >= 2 then
+		local newest = mk[#mk];
+		if now - newest.t < 240 then
+			for k = #mk - 1, 1, -1 do
+				local c = mk[k];
+				local dx, dz = newest.x - c.x, newest.z - c.z;
+				local dl = math.sqrt(dx * dx + dz * dz);
+				if dl >= 8 then fx, fz, src = dx / dl, dz / dl, "the way the depth goes up"; break; end;
+			end;
+		end;
+	end;
+	if not fx then return nil; end;
+	-- farthest safe tile that way, staying in the corridor (not a side pocket)
 	local best, bp;
 	for _, t in pairs(nav.map) do
-		local pr = (t.wx - px) * fx + (t.wz - pz) * fz;
-		if (not bp or pr > bp) and not eh(Fl, t.wx, t.wz) then best, bp = t, pr; end;
+		local ox, oz = t.wx - px, t.wz - pz;
+		local pr = ox * fx + oz * fz;
+		local side = math.abs(ox * fz - oz * fx);
+		if side < 40 and (not bp or pr > bp) and not eh(Fl, t.wx, t.wz) then best, bp = t, pr; end;
 	end;
-	return fx, fz, best and best.wx, best and best.wz, bp;
+	return fx, fz, best and best.wx, best and best.wz, bp, src;
 end;
 r.steerDir = function(pos, tx, tz)
 	local now = d();
@@ -6744,7 +6766,7 @@ local function lh(m)
 	do
 		local tlF = tonumber(run.timeLeft);
 		if CFG.pushForward ~= false and WQ ~= "combat" and tlF and tlF <= (tonumber(CFG.dangerTime) or 10) then
-			local okF, fx, fz, gx, gz, gp = pcall(r.forwardInfo, G.X, G.Z);
+			local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
 			if okF and fx and gx and (gp or 0) > 3 then
 				local behind = u and ((u.X - G.X) * fx + (u.Z - G.Z) * fz) < -4;
 				-- a missed ore behind still gets mined if it can walk there and mine it with time to spare
@@ -6762,7 +6784,7 @@ local function lh(m)
 				if not (WQ == "mine" and Q.walk and u) or (behind and not reachable) then
 					if r.why and m - (r.fwdNoteAt or 0) > 4 then
 						r.fwdNoteAt = m;
-						r.why("move", string.format("timer %ds: heading up the tunnel, away from the collapse (%.0f st)", tlF, gp));
+						r.why("move", string.format("timer %ds: heading up the tunnel (%s, %.0f st)", tlF, tostring(fsrc), gp));
 					end;
 					local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
 					local wp;
@@ -9183,7 +9205,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.28.1 | Brain",
+		Title = "Delve v5.28.2 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
