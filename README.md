@@ -6,14 +6,14 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.13** (shown in the window title, `Delve v5.13 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.14** (shown in the window title, `Delve v5.14 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
 ## What it does
 - **Auto Farm.** From the hub it clicks GO MINE!, scrolls to your stage (Delve or any mine), selects it and descends. **Play again when a run ends** repeats it.
 - **Mining.** Mines every ore (needed to progress). When the floor starts collapsing, ores near the collapse are mined last and holes in the floor are walked around. Pillars are mapped per floor and routed around.
-- **Combat.** Fights mobs that are close or threatening, bosses, and floors that need mobs dead ("2 MOBS LEFT"). Below 10 s on the Delve timer it ignores mobs except those right next to you. Mob types that have killed you 3+ times are taken out first.
+- **Combat.** Fights mobs that are close or threatening, bosses, and floors that need mobs dead ("2 MOBS LEFT"), searching the room for the ones it can't see yet. Below 10 s on the Delve timer it ignores mobs except those right next to you. Mob types that have killed you 3+ times are taken out first.
 - **Dodging.** Rolls out of attack zones (or walks, when walking is fast enough), rolls on a mob's learned wind-up, dodges past an enemy (behind or beside it) to keep hitting it, and keeps the roll for defence in boss fights and right after a hit. Every attack type learns its own safe distance and roll timing. Where there is no tile floor (the Arena) or no safe tile, it scans the real floor for open ground away from walls and rolls there only when walking is too slow; one-hit runs (Glass Soul) roll sooner.
 - **Bosses.** Recognised by the game's flag, the CONTRIBUTION panel or by name (e.g. THE WORLDHEART). It measures how much damage the boss really takes, goes for the things that make it vulnerable (Heart Pylons) along a route around hazards, never walks into an attack zone to chase, and keeps its distance at low HP.
 - **Relics.** Reads every draft, trader, blessing and fork, and picks by priority:

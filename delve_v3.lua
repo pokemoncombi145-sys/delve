@@ -126,6 +126,7 @@ local m = {
 		niceToasts = true,
 		dangerView = false,
 		flankDodge = true,
+		exploreForMobs = true,
 		uiGameFont = true,
 		mechNotify = true,
 		dangerTime = 10,
@@ -5292,6 +5293,12 @@ local function openGround(px, pz, now)
 		r.floorCache[key] = ok;
 		return ok;
 	end;
+	-- keep the open spot picked a moment ago while it's still safe
+	local et0 = r.escTarget;
+	if et0 and not et0.flank and not et0.covered and now - et0.t < 1.5 and not eh(Fl, et0.x, et0.z)
+		and (et0.x - px) ^ 2 + (et0.z - pz) ^ 2 < 36 * 36 then
+		return { x = et0.x, z = et0.z, t = et0.t, gx = et0.x, gz = et0.z };
+	end;
 	local best, bestScore, leastBad, leastScore;
 	for gx = -36, 36, 4 do
 		for gz = -36, 36, 4 do
@@ -5342,6 +5349,11 @@ local function flankSpot(px, pz, now)
 	local tdx, tdz = t.x - px, t.z - pz;
 	local tdist = math.sqrt(tdx * tdx + tdz * tdz);
 	if tdist > 20 then return nil; end;
+	-- keep the flank spot picked a moment ago while it's still safe and still next to the enemy
+	local et0 = r.escTarget;
+	if et0 and et0.flank and now - et0.t < 1.5 and not eh(Fl, et0.x, et0.z) and (et0.x - t.x) ^ 2 + (et0.z - t.z) ^ 2 < 144 then
+		return { x = et0.x, z = et0.z, t = et0.t, gx = et0.x, gz = et0.z };
+	end;
 	-- the attack we're standing in (or about to be): its centre tells which side of the enemy is dangerous
 	local zc;
 	for _, z in ipairs(Fl) do
@@ -5385,7 +5397,8 @@ local function flankSpot(px, pz, now)
 	return { x = best[1], z = best[2], t = now, gx = best[1], gz = best[2] };
 end;
 local function Nh(m, G, r)
-	if Qh and (r - Qh.t < .25 and not eh(Fl, Qh.gx or Qh.x, Qh.gz or Qh.z)) then
+	-- stick with the chosen spot (it was re-chosen 4 times a second, so the character zig-zagged)
+	if Qh and (r - Qh.t < 1.2 and not eh(Fl, Qh.gx or Qh.x, Qh.gz or Qh.z)) then
 		if not Qh.gx or (Qh.x - m) ^ 2 + (Qh.z - G) ^ 2 > (nav.cell * .6) ^ 2 then
 			return Qh;
 		end;
@@ -5481,7 +5494,7 @@ local function qh(m, G, e, N)
 			if not r.dodging then
 				f(string.format("escape to open ground (combat) %.1f studs away, zones=%d", math.sqrt(((G.x - m.X)) ^ 2 + ((G.z - m.Z)) ^ 2), #Fl));
 			end;
-			r.dodging = true;
+			r.dodging, r.lastDodgeAt = true, N; -- (d is a distance in here; N is the time)
 			SQ(G.x - m.X, G.z - m.Z);
 			return;
 		end;
@@ -6078,6 +6091,46 @@ local function lh(m)
 		Fl, Cl = {}, {};
 	end;
 	if WQ == "combat" then uQ(m); end;
+	-- FIND ALL THE MOBS: the HUD says "N MOBS LEFT"; far mobs (pylons at the top of a boss room) aren't
+	-- loaded until you get close, so when it sees fewer than N it moves up the room, away from where it came
+	-- in, along a safe route, until all of them are in sight. A mob right next to you is still fought first.
+	if run.depth ~= r.exploreDepth then
+		r.exploreDepth, r.floorEntry, r.exploreGoal = run.depth, { x = G.X, z = G.Z }, nil;
+	end;
+	do
+		local need = tonumber(tostring(run.objective or ""):match("(%d+)%s*MOBS?%s*LEFT"));
+		local nearest = math.huge;
+		for _, mob in ipairs(S) do nearest = math.min(nearest, tonumber(mob.d) or math.huge); end;
+		if CFG.exploreForMobs ~= false and need and #S < need and nearest > 8 and not eh(Fl, G.X, G.Z) and nav.map and r.floorEntry then
+			local goal = r.exploreGoal;
+			if not goal or (goal.x - G.X) ^ 2 + (goal.z - G.Z) ^ 2 < 16 or m - goal.t > 6 then
+				-- the floor tile farthest from where we came in (and from here, once there), not in an attack
+				local fromX, fromZ = r.floorEntry.x, r.floorEntry.z;
+				if goal and (goal.x - G.X) ^ 2 + (goal.z - G.Z) ^ 2 < 16 then fromX, fromZ = G.X, G.Z; end;
+				local best, bd;
+				for _, t in pairs(nav.map) do
+					local dd = (t.wx - fromX) ^ 2 + (t.wz - fromZ) ^ 2;
+					if (not bd or dd > bd) and not eh(Fl, t.wx, t.wz) then best, bd = t, dd; end;
+				end;
+				goal = best and { x = best.wx, z = best.wz, t = m } or nil;
+				r.exploreGoal = goal;
+				if goal and r.why then
+					r.why("move", string.format("see %d of %d mobs left: moving up the room to find the rest", #S, need));
+				end;
+			end;
+			if goal then
+				local okRt, path = pcall(r.routeTo, { addr = "explore", x = goal.x, z = goal.z }, G, 3);
+				local wp;
+				if okRt and path then
+					for _, p0 in ipairs(path) do
+						if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+					end;
+				end;
+				if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(goal.x - G.X, goal.z - G.Z); end;
+				return;
+			end;
+		end;
+	end;
 	-- LOW HP + BOSS: two Worldheart deaths came from charging it with 16 and 27 HP left. Below the low-HP
 	-- setting, keep out of the boss's reach and only fight what comes to you until health is back.
 	if WQ == "combat" and w and r.bossFight and tostring(w.name) == r.bossFight then
@@ -6152,6 +6205,10 @@ local function lh(m)
 			end;
 		end;
 	end;
+	if WQ == "combat" and w and r.lastDodgeAt and m - r.lastDodgeAt < .6 and not eh(Fl, G.X, G.Z) then
+		if Qh and (Qh.x - G.X) ^ 2 + (Qh.z - G.Z) ^ 2 > 2.25 then SQ(Qh.x - G.X, Qh.z - G.Z); else SQ(nil); end;
+		return;
+	end;
 	if WQ == "combat" and ((Q.combat and ((Q.chase and w)))) and not chaseUnsafe then
 		qh(G, w, S, m);
 		return;
@@ -6162,7 +6219,7 @@ local function lh(m)
 			if not r.dodging then
 				f(string.format("escape to open ground %.1f studs away, zones=%d", math.sqrt(((Q.x - G.X)) ^ 2 + ((Q.z - G.Z)) ^ 2), #Fl));
 			end;
-			r.dodging = true;
+			r.dodging, r.lastDodgeAt = true, d();
 			SQ(Q.x - G.X, Q.z - G.Z);
 			return;
 		end;
@@ -6196,7 +6253,7 @@ local function lh(m)
 				f(string.format("dodge start (out of combat) zones=%d dir=%.2f,%.2f", #Fl, N[1], N[2]));
 			end;
 			SQ(N[1], N[2]);
-			r.dodging = true;
+			r.dodging, r.lastDodgeAt = true, d();
 			return;
 		end;
 	end;
@@ -8230,6 +8287,7 @@ end;
 				{ k = "crowdSize", t = "slider", text = "Fight when this many mobs are up", min = 2, max = 20, step = 1, suffix = "" },
 				{ k = "fightDist", t = "slider", text = "Circle distance", min = 2, max = 30, step = 1, suffix = " st" },
 				{ k = "flankDodge", t = "toggle", text = "Dodge past enemies to keep hitting them" },
+				{ k = "exploreForMobs", t = "toggle", text = "Search the room until all mobs left are found" },
 				{ k = "attackRoll", t = "combo", text = "Attack rolls (Auto = if your race has a roll perk)", items = { "Auto", "Always", "Off" } },
 				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
@@ -8656,7 +8714,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.13 | Brain",
+		Title = "Delve v5.14 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

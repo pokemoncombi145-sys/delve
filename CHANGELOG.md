@@ -1,6 +1,13 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.13 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.14 | Brain`).
+
+## v5.14: Less jitter, find every mob (not yet verified in gameplay)
+**Jitter (from the dodge log):** 595 of the last 2,156 dodge starts came less than half a second after the previous one: it kept switching between escaping and going back.
+- It **commits to the chosen escape spot** for up to 1.2 s (was re-chosen every 0.25 s) while that spot stays safe and isn't reached, and the flank and open-ground searches keep their previous pick while it's still safe.
+- **Settle after a dodge:** for 0.6 s after getting out of an attack it finishes the move (or stands and attacks) instead of walking straight back into the zone.
+
+**Boss rooms and kill floors:** far mobs (pylons at the top of a boss room) aren't loaded until you get close. When the HUD says "N MOBS LEFT" and it sees fewer, it moves up the room (to the floor tile farthest from where it came in, then onward) along a safe route until all of them are in sight. A mob within 8 studs is still fought first. Combat tab toggle: **Search the room until all mobs left are found** (on).
 
 ## v5.13: Dodge past enemies (not yet verified in gameplay)
 - In a fight, when you're inside an attack zone, it first looks for a safe spot **past the enemy**: behind it (on the side away from the attack) or 45/90 degrees around it, at about 80% of your weapon reach, on real floor and outside every zone, at most 16 studs away. It takes the closest one, so it keeps hitting instead of backing out of range and waiting for the attack to end. If the attack is centred on the enemy, "behind" means through to the far side.
