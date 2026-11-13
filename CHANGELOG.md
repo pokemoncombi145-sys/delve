@@ -1,6 +1,12 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.9.2 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.9.3 | Brain`).
+
+## v5.9.3: Mining away from the collapse, end-of-run screenshot (not yet verified in gameplay)
+- **Collapse awareness.** When floor tiles vanish (the floor collapsing), it remembers where for 20 s. Every ore is still mined (you need them all to progress), but ores within 8 studs of the collapse are mined last (weight x0.1) and within 16 studs later (x0.4), so it works on the ores ahead instead of walking back into the collapse. Walking also treats vanished tiles as holes and routes around them instead of crossing the void.
+- **Screenshot of the right screen.** Auto Replay started the next run before the screenshot was taken, so posts showed the next run. Now, as soon as the run ends and the end screen shows (or after 2.5 s), the helper is asked to take the picture right away, Auto Replay waits for it (max 6 s), and the Run Complete post uses that picture.
+- The end screen's layout is saved once to `DelveGuiDump_runend.txt`, so its reader can be fixed (the 12,180 m run was read from live tracking: rocks, XP and materials missing).
+- **Restart `Start Delve Screenshots.bat`** to get the new helper (it understands the new "take the picture now" request).
 
 ## v5.9.2: Hits with no roll (from the first v5.9.1 session; not yet verified in gameplay)
 **What the logs showed:** 13 hits in 3 runs; only 2 now had a roll land just after (was 5 of 6), but 12 of 13 had no roll before. Three came while it walked 9-15 studs to safe ground with 0.4-0.7 s left; two had an attack roll fire 10-20 ms after the hit; the death at 6,840 m was an Elite Magma Brute hitting twice (185 + 269) from 9-10 studs with no warning zone and the roll ready, and the death was blamed on the floor. One burst (6 hits in 0.15 s) looked unavoidable.

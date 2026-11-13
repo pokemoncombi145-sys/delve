@@ -70,11 +70,25 @@ while ($true) {
         foreach ($jobFile in Get-ChildItem -Path $dir -Filter "job_*.json" -File -ErrorAction SilentlyContinue) {
             try {
                 $job = Get-Content -Raw -Path $jobFile.FullName | ConvertFrom-Json
+                # "snap" job: just take the picture now (the end-of-run screen) and keep it for the post
+                if ($job.snap) {
+                    $snapName = [System.IO.Path]::GetFileName([string]$job.snap)
+                    Take-Screenshot (Join-Path $dir $snapName)
+                    Write-Host ("[{0}] Captured end screen" -f (Get-Date -Format T)) -ForegroundColor Cyan
+                    continue
+                }
                 $url = [string]$job.url
                 if ($url -notmatch '^https://([a-z]+\.)?discord(app)?\.com/api/webhooks/') { throw "not a Discord webhook URL" }
                 $png = Join-Path $dir "run.png"
                 $payloadPath = Join-Path $dir "payload.json"
-                Take-Screenshot $png
+                $snapFile = $null
+                if ($job.image) { $snapFile = Join-Path $dir ([System.IO.Path]::GetFileName([string]$job.image)) }
+                if ($snapFile -and (Test-Path -LiteralPath $snapFile)) {
+                    Copy-Item -LiteralPath $snapFile -Destination $png -Force
+                    Remove-Item -LiteralPath $snapFile -Force -ErrorAction SilentlyContinue
+                } else {
+                    Take-Screenshot $png
+                }
                 [System.IO.File]::WriteAllText($payloadPath, ($job.payload | ConvertTo-Json -Depth 12 -Compress), $utf8)
                 $code = & $curl -s -o NUL -w "%{http_code}" -F "payload_json=<$payloadPath" -F "files[0]=@$png;type=image/png;filename=run.png" $url
                 if ($code -match '^2') {

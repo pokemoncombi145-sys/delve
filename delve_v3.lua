@@ -979,6 +979,7 @@ local function y(m)
 		D, E, a, r.lastAim = {}, e, nil, nil;
 		s, i, O, V = nil, {}, true, {};
 		r.groundTileCount = nil;
+		r.gone = {};
 		r.centerFarmTiles, r.centerFarmTile, r.centerFarmChest = nil, nil, nil;
 		r.statsFound = false;
 	end;
@@ -987,6 +988,7 @@ local function y(m)
 	local w = S and ((S[1] and instanceId(S[1])));
 	local tileCount = S and #S or 0;
 	if w ~= s or tileCount ~= r.groundTileCount then
+		local oldTiles, oldCount = i, r.groundTileCount;
 		s, i, O, V = w, {}, true, {};
 		r.groundTileCount = tileCount;
 		for m, G in ipairs(S or {}) do
@@ -1003,6 +1005,20 @@ local function y(m)
 					};
 				V[r * 4096 + Q] = true;
 			end;
+		end;
+		-- the floor is collapsing: remember where tiles just vanished (that side is about to fall away)
+		if oldCount and tileCount < oldCount and oldTiles and #oldTiles > 0 then
+			local now = d();
+			r.gone = type(r.gone) == "table" and r.gone or {};
+			local added = 0;
+			for _, t in ipairs(oldTiles) do
+				if not V[t.cx * 4096 + t.cz] then
+					r.gone[#r.gone + 1] = { x = t.wx, z = t.wz, t = now };
+					added = added + 1;
+				end;
+			end;
+			while #r.gone > 0 and (now - r.gone[1].t > 25 or #r.gone > 400) do table.remove(r.gone, 1); end;
+			if added > 0 then r.collapseAt = now; end;
 		end;
 	end;
 	local q = {};
@@ -1390,6 +1406,22 @@ local function cQ(m)
 	end;
 	return G;
 end;
+-- how close a point is to where the floor just collapsed: 1 = right next to it, .5 = near, 0 = safe
+local function collapseRisk(x, z)
+	local g = r.gone;
+	if type(g) ~= "table" or #g == 0 then return 0; end;
+	local now, best = d(), math.huge;
+	for k = #g, 1, -1 do
+		local e = g[k];
+		if now - e.t < 20 then
+			local dd = (e.x - x) ^ 2 + (e.z - z) ^ 2;
+			if dd < best then best = dd; end;
+		end;
+	end;
+	best = math.sqrt(best);
+	if best < 8 then return 1; elseif best < 16 then return .5; end;
+	return 0;
+end;
 local function Ql(m, G)
 	L, u = nil, nil;
 	local e = {};
@@ -1404,6 +1436,12 @@ local function Ql(m, G)
 			if (math.abs(Q) < 6 or (Q >= 6 and (Q < 40 and not r.settled))) and (pass == 2 or not rngSq or (r.wx - m.X) ^ 2 + (r.wz - m.Z) ^ 2 <= rngSq) then
 				r.name = rockName;
 				local wt = (r.skipUntil and r.skipUntil > G) and 0 or C(r.kind);
+				-- every ore still gets mined, but ores next to the collapsing edge go last (it was walking back
+				-- into the collapse and falling); ores away from it come first
+				if wt > 0 then
+					local risk = collapseRisk(r.wx, r.wz);
+					if risk > 0 then wt = wt * (risk >= 1 and .1 or .4); end;
+				end;
 				if wt > 0 and minTier > 1 then
 					local tn = tonumber(tostring(r.kind):match("(%d+)$"));
 					if tn and tn < minTier then
@@ -2704,6 +2742,10 @@ local function nQ(m)
 			VQ.seenAt = nil;
 			vQ();
 		end;
+	end;
+	local sp = r.snapPending;
+	if sp and d() - sp.at < 6 and not (sp.requested and type(isfile) == "function" and isfile("DelveWebhook/" .. sp.id .. ".png")) then
+		return false;
 	end;
 	if not VQ.seenAt or m - VQ.seenAt < Q.replayDelay then
 		return false;
@@ -4107,9 +4149,33 @@ local relicAPI = (function()
 		notify(string.format("Run scored %.0f (%s, %dm, %+.2f vs your average). Learned from %d relic pick%s.",
 			score, mode, math.floor(depth), zc, #snap.relics, #snap.relics == 1 and "" or "s"), "Delve brain");
 	end;
+	-- ask the screenshot helper for a picture of the end screen right away (before Auto Replay starts the next run)
+	r.helperAlive = function()
+		local alive = false;
+		pcall(function()
+			if type(isfile) == "function" and isfile("DelveWebhook/helper_alive.txt") then
+				local t = tonumber((readfile("DelveWebhook/helper_alive.txt") or ""):match("%d+"));
+				alive = t ~= nil and math.abs(os.time() - t) < 20;
+			end;
+		end);
+		return alive;
+	end;
+	r.requestSnap = function()
+		local sp = r.snapPending;
+		if not sp or sp.requested then return; end;
+		sp.requested = true;
+		pcall(function()
+			writefile("DelveWebhook/job_" .. sp.id .. ".json", game:GetService("HttpService"):JSONEncode({ snap = sp.id .. ".png" }));
+		end);
+		r.lastSnap = sp.id .. ".png";
+	end;
 	local function runFinish(now)
 		if not run.active then return; end;
 		run.active = false;
+		r.snapPending, r.lastSnap = nil, nil;
+		if CFG.webhookOn == true and type(writefile) == "function" and r.helperAlive() then
+			r.snapPending = { at = d(), id = "snap_" .. tostring(os.time()) .. "_" .. tostring(math.random(100, 999)) };
+		end;
 		local dur = now - run.startAt;
 		readHud(now);
 		local snap = {
@@ -4125,11 +4191,20 @@ local relicAPI = (function()
 			local res, prev;
 			while d() - t0 < 7 do
 				res = readResults(d());
+				-- the end screen is up (or 2.5 s passed): take the picture now
+				if res or d() - t0 >= 2.5 then pcall(r.requestSnap); end;
 				if res and prev and res.sig == prev.sig then break; end;
 				prev = res;
 				task.wait(res and .4 or .25);
 			end;
 			res = res or prev;
+			pcall(r.requestSnap);
+			-- save what the end screen looks like once, so its reader can be fixed if it misses fields
+			if not r.runEndDumped and r.dumpGui then
+				local pg = l:FindFirstChild("PlayerGui");
+				local re = pg and pg:FindFirstChild("RunEnd");
+				if re then r.runEndDumped = true; pcall(r.dumpGui, re, "runend"); end;
+			end;
 			local ok, err = pcall(finalizeRun, snap, res, dur);
 			if not ok then notify("Run finish error: " .. tostring(err), "Delve brain"); end;
 		end);
@@ -4872,7 +4947,7 @@ r.steerDir = function(pos, tx, tz)
 	local step = nav.cell * .5;
 	for k = step, len, step do
 		local cx, cz = navCellAt(pos.X + dx / len * k, pos.Z + dz / len * k);
-		if cx and (nav.blocked[cx * 4096 + cz] or 0) > now then hit = true; break; end;
+		if cx and ((nav.blocked[cx * 4096 + cz] or 0) > now or (nav.map and not nav.map[cx * 4096 + cz])) then hit = true; break; end;
 	end;
 	if not hit then r.steerPath = nil; return dx, dz; end;
 	local sp = r.steerPath;
@@ -5790,7 +5865,8 @@ r.sendRunWebhook = function(info, isTest)
 	end);
 	if helperAlive and type(writefile) == "function" then
 		embed.image = { url = "attachment://run.png" };
-		local job = { url = url, payload = { username = "Delve Brain", embeds = { embed } } };
+		local job = { url = url, payload = { username = "Delve Brain", embeds = { embed } }, image = (not isTest) and r.lastSnap or nil };
+		r.lastSnap = nil;
 		local ok = pcall(function()
 			writefile(string.format("DelveWebhook/job_%d_%d.json", os.time(), math.random(1000, 9999)), Hs:JSONEncode(job));
 		end);
@@ -7874,7 +7950,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.9.2 | Brain",
+		Title = "Delve v5.9.3 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
