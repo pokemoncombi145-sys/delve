@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.9.4 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.9.5 | Brain`).
+
+## v5.9.5: Luck first
+- **Luck and drop quantity are top priority** for relics: 1.8x weight (power/speed 1.6x, survival/time 1.35x). "Quantity" now counts as luck/drops, and the old 0.7x discount on luck is removed. A second chance you don't have yet still comes first.
+- **Manageable downsides are forgiven by half** on luck relics: things like slower walk, swing or mining speed. Dangerous downsides (damage taken, health, faster collapse, curses, elites) still count in full.
+- If no relic is good, it still takes the best-scoring one (drafts always pick); traders only buy above the minimum score, otherwise walk on by.
 
 ## v5.9.4: Discord pings
 - Discord tab: **Discord user ID to ping**, plus **Ping on Run Complete** and **Ping on rare drops**. The mention goes in the message text (mentions inside embeds don't notify), and only that one user can be pinged. No bot needed; the webhook does it. The test post pings too.

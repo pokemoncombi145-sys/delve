@@ -2825,7 +2825,7 @@ local relicAPI = (function()
 		{ "survival", { "DAMAGE TAKEN", "MAX HEALTH", "HEALTH", "MAX HP", " HP", "HEAL", "REGEN", "SHIELD", "ARMOR", "DEFENSE", "LIFESTEAL", "LIFE STEAL", "REVIVE", "INVULN", "BLOCK" } },
 		{ "damage", { "DAMAGE", "DPS", "CRIT", "OVERKILL", "ATTACK", "WEAPON", "STRIKE", "BLEED", "BURN", "POISON", "EXECUTE", "CHAIN", "EXPLO" } },
 		{ "mobility", { "MOVE SPEED", "MOVEMENT", "WALK SPEED", "ROLL", "DODGE", "DASH", "SPEED" } },
-		{ "luck", { "LUCK", "RARITY", "DROP" } },
+		{ "luck", { "LUCK", "RARITY", "DROP", "QUANTITY" } },
 		{ "econ", { "CASH", "MONEY", "GOLD", "COIN", "SELL", "VALUE", " XP", "EXP" } },
 	};
 	local BUTTON_WORDS = { SELECT = true, PICK = true, CHOOSE = true, TAKE = true, CLAIM = true, EQUIP = true };
@@ -2908,7 +2908,7 @@ local relicAPI = (function()
 			ctx = .6 + .8 * cf;
 		elseif cat == "mining" or cat == "range" then
 			ctx = .6 + .8 * (1 - cf);
-		elseif cat == "luck" or cat == "econ" then
+		elseif cat == "econ" then
 			ctx = .7;
 		end;
 		if cat == "survival" then ctx = ctx * (1 + math.min(1, run.hits / 8)); end;
@@ -3238,7 +3238,10 @@ local relicAPI = (function()
 			if v ~= 0 then
 				local w = catWeight(cat);
 				local pm, tag = 1, cat or "other";
-				if r.prio.has(uc, r.prio.power) then
+				-- luck and drop quantity are top priority in delves (more and rarer drops)
+				if cat == "luck" or uc:find(" LUCK", 1, true) or uc:find("QUANTITY", 1, true) then
+					pm, tag = 1.8, "luck/drops";
+				elseif r.prio.has(uc, r.prio.power) then
 					pm, tag = 1.6, "power/speed";
 				elseif cat == "survival" or r.prio.has(uc, r.prio.time) then
 					pm, tag = 1.35, "survival/time";
@@ -3251,6 +3254,28 @@ local relicAPI = (function()
 			if r.prio.has(uc, r.prio.life) and not uc:find("ENEM", 1, true) then c.life = true; end;
 		end;
 		c.effects = effects;
+		-- a luck relic with a manageable downside (walk speed, swing speed, mining speed...) is still worth it:
+		-- half of that downside is forgiven. Dangerous downsides (damage taken, health, faster collapse,
+		-- curses, elites) count in full.
+		local luckUp = false;
+		for _, ef in ipairs(effects) do
+			if ef.cat == "luck" and ef.v > 0 then luckUp = true; break; end;
+		end;
+		if luckUp then
+			local refund = 0;
+			for _, ef in ipairs(effects) do
+				if ef.v < 0 then
+					local ut = tostring(ef.text):upper();
+					local severe = ut:find("DAMAGE TAKEN", 1, true) or ut:find("HEALTH", 1, true) or ut:find(" HP", 1, true)
+						or ut:find("COLLAPSE", 1, true) or ut:find("CURSE", 1, true) or ut:find("ELITE", 1, true) or ut:find("FATAL", 1, true);
+					if not severe then refund = refund - ef.v * catWeight(ef.cat ~= "other" and ef.cat or nil) * .5; end;
+				end;
+			end;
+			if refund > 0 then
+				total = total + refund;
+				parts[#parts + 1] = string.format("manageable downside %+.0f", refund);
+			end;
+		end;
 		if c.life then
 			-- 1st priority: a second chance, unless you already carry one
 			local lb = (run.hasLife or run.hasLifeBuff) and 60 or 300;
@@ -7970,7 +7995,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.9.4 | Brain",
+		Title = "Delve v5.9.5 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
