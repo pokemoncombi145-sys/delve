@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.11.1** (shown in the window title, `Delve v5.11.1 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.12** (shown in the window title, `Delve v5.12 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -38,7 +38,7 @@ Made for the **Volt** executor at 1920x1080; it falls back to the virtual input 
 | Relics | relic picks, exploring, tunnel forks, after Worldheart, traders |
 | Brain | T-menu scans, learning curve, reasoning, what it learned |
 | Discord | webhook, screenshot delay, drop posts, ping user ID |
-| Settings | window, pop-ups, background mode, tool slots, logs |
+| Settings | window, pop-ups, danger map, background mode, tool slots, logs |
 
 ## Load automatically (Volt auto-execute)
 Put `delve_autoexec.lua` in `%LOCALAPPDATA%\Volt\autoexec`. Every time you join Delve it waits for the game to load, then 10 seconds, then loads the latest script from this repo. It does nothing in other games. Turn on **Auto Farm** in the Farm tab and it starts your stage from the hub on its own.

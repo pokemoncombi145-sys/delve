@@ -124,6 +124,7 @@ local m = {
 		stageOther = "",
 		startClosed = true,
 		niceToasts = true,
+		dangerView = false,
 		uiGameFont = true,
 		mechNotify = true,
 		dangerTime = 10,
@@ -5769,7 +5770,76 @@ local function wantFight(list, pos, now)
 	r.fightWhy = nil;
 	return false;
 end;
+-- DANGER MAP (Settings > "Show what it sees"): draws, live, what the dodge logic detects:
+-- red = attack zones, orange = burning floor, yellow = attacks timed to hit you soon, green = where it's heading.
+-- The marks are local, can't be touched or hit by rays, and sit in a folder, so detection never sees them.
+r.viewPool = {};
+r.dangerView = function(now)
+	if now - (r.viewAt or 0) < .15 then return; end;
+	r.viewAt = now;
+	local folder = r.viewFolder;
+	if CFG.dangerView ~= true then
+		if folder then pcall(function() folder:Destroy(); end); r.viewFolder, r.viewPool = nil, {}; end;
+		return;
+	end;
+	local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+	if not hrp then return; end;
+	if not (folder and folder.Parent) then
+		folder = Instance.new("Folder");
+		folder.Name = "DelveDangerView";
+		folder.Parent = workspace;
+		r.viewFolder, r.viewPool = folder, {};
+	end;
+	local y = hrp.Position.Y - 2.8;
+	local function mark(k)
+		local pt = r.viewPool[k];
+		if not pt then
+			pt = Instance.new("Part");
+			pt.Anchored, pt.CanCollide, pt.CanTouch, pt.CanQuery, pt.CastShadow = true, false, false, false, false;
+			pt.Material, pt.Transparency = Enum.Material.Neon, .72;
+			pt.Parent = folder;
+			r.viewPool[k] = pt;
+		end;
+		return pt;
+	end;
+	local timed = {};
+	for _, w in pairs(Cl) do if w.zone then timed[w.zone] = true; end; end;
+	local n = 0;
+	for _, z in ipairs(Fl) do
+		if n >= 90 then break; end;
+		if (z.x - hrp.Position.X) ^ 2 + (z.z - hrp.Position.Z) ^ 2 < 90 * 90 and not z.safeHole then
+			n = n + 1;
+			local pt = mark(n);
+			pt.Color = timed[z] and Color3.fromRGB(255, 220, 60) or ((z.floor or tostring(z.sig or ""):find("Burn", 1, true)) and Color3.fromRGB(255, 140, 40) or Color3.fromRGB(255, 50, 50));
+			if z.circle then
+				local dmt = math.max(.5, (z.h1 or 1) * 2);
+				pt.Shape = Enum.PartType.Cylinder;
+				pt.Size = Vector3.new(.15, dmt, dmt);
+				pt.CFrame = CFrame.new(z.x, y, z.z) * CFrame.Angles(0, 0, math.rad(90));
+			else
+				pt.Shape = Enum.PartType.Block;
+				pt.Size = Vector3.new(math.max(.5, (z.h1 or 1) * 2), .15, math.max(.5, (z.h2 or 1) * 2));
+				pt.CFrame = CFrame.fromMatrix(Vector3.new(z.x, y, z.z), Vector3.new(z.ax or 1, 0, z.az or 0), Vector3.new(0, 1, 0));
+			end;
+			pt.Transparency = .72;
+		end;
+	end;
+	-- where it's heading to get safe
+	local et = r.escTarget;
+	local goal = (et and now - et.t < 1) and et or (Qh and now - (Qh.t or 0) < 1 and Qh) or nil;
+	n = n + 1;
+	local gp = mark(n);
+	if goal then
+		gp.Shape, gp.Color, gp.Transparency = Enum.PartType.Cylinder, Color3.fromRGB(70, 230, 110), .35;
+		gp.Size = Vector3.new(.3, 3, 3);
+		gp.CFrame = CFrame.new(goal.x, y + .1, goal.z) * CFrame.Angles(0, 0, math.rad(90));
+	else
+		gp.Transparency = 1;
+	end;
+	for k = n + 1, #r.viewPool do r.viewPool[k].Transparency = 1; end;
+end;
 local function lh(m)
+	pcall(r.dangerView, m);
 	local G = sQ();
 	if not G then
 		WQ, L, u, xQ = "idle", nil, nil, nil;
@@ -8154,6 +8224,7 @@ end;
 				{ k = "weaponSlot", t = "slider", text = "Weapon slot", min = 1, max = 9, step = 1, suffix = "" },
 				{ k = "antiAfk", t = "toggle", text = "Anti-AFK" },
 				{ k = "dodgeLog", t = "toggle", text = "Log dodges to file" },
+				{ k = "dangerView", t = "toggle", text = "Show what it sees (danger map)" },
 			},
 		},
 	};
@@ -8522,7 +8593,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.11.1 | Brain",
+		Title = "Delve v5.12 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),

@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.11.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.12 | Brain`).
+
+## v5.12: Danger map (see what it sees)
+- Settings: **Show what it sees (danger map)** draws, live on the ground, everything the dodge logic detects: **red** attack zones, **orange** burning floor, **yellow** attacks timed to hit you soon, and a **green** marker where it's heading to get safe. Up to 90 zones within 90 studs, refreshed about 7 times a second while farming.
+- The marks are local only, can't be touched, collided with or hit by rays, and sit in their own folder, so the script's own detection never mistakes them for hazards or floor. Turning it off removes them.
 
 ## v5.11: Open-ground dodging (Arena, map-wide attacks, Glass Soul) (not yet verified in gameplay)
 **What the Arena logs showed:** the Arena has no tile floor, so the escape planner had no map and fell back to judging only a few studs in each direction ("dodge start … dir=-0.71,0.71" over and over with 30-110 attack zones up): it walked into corners.
