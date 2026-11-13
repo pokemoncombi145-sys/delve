@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.29** (shown in the window title, `Delve v5.29 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.30** (shown in the window title, `Delve v5.30 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -25,6 +25,7 @@ Made for the **Volt** executor at 1920x1080; it falls back to the virtual input 
   Manageable downsides on luck relics count half. Everything is adjusted by what it learned from past runs (per relic, per combo, per category), and it builds the sets you already have going.
 - **Paths.** Tunnel forks are chosen by how the run is going; after Worldheart it takes **Descend** (or Ascend, your choice), and relic picks then favour combat boosts on Descend (unless the run is short on mining or a massive mining relic shows up) or mining power/range on Ascend, and after the Unmaker it walks into the **Prestige** portal as soon as its sign appears (or the **Rare shop (?????)** portal, where Vesper buys Mythic/Forsaken items for Strange Orbs; the script never sells there, or neither).
 - **Index, Stats and Equipment.** Every few runs it returns to the hub and scans the T menu there (with "in progress / finished in" notices) to learn drop odds, your gear and your lifetime stats, then starts the next run.
+- **Attack plans and rooms.** Listens to the game's own attack plans (what lands where, and exactly when) so escapes and roll landings are checked against the moment you'd be there, and reads the chamber layout so "forward" is always the current chamber's exit.
 - **Discord.** A Run Complete post with the end-screen screenshot and real stats, alerts with a screenshot for Mythic-or-higher drops (including Forsaken and Eternal), and an optional ping.
 - **Learning curve.** A graph window (Brain tab) for Delve and Mines separately: the last 100 runs, a 10-run average, and the last 50 runs against the 50 before.
 - **Autosave.** Settings and everything learned are saved and restored; the brain file is backed up automatically.

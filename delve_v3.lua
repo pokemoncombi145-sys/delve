@@ -126,6 +126,7 @@ local m = {
 		niceToasts = true,
 		dangerView = false,
 		flankDodge = true,
+		planFeed = true,
 		pushForward = true,
 		bossRolls = true,
 		exploreForMobs = true,
@@ -2267,6 +2268,12 @@ local function Xl(m, G)
 	local e = G or d();
 	local N = {};
 	local S = {};
+	-- (v5.30) with the game's attack plans coming in, small flung parts and puffs in Hazards/MobTelegraphs
+	-- are effects (impact debris, smoke, slam bursts), not attacks: they made 55-100 fake "projectiles"
+	-- around the Pale Warden. The real shots come from the plans.
+	local Pq = r.plan;
+	local planOn = Pq ~= nil and Pq.hooked == true and CFG.planFeed ~= false;
+	local skipFx = false;
 	local function w(G)
 		local r, Q = pcall(function()
 				return G.Size;
@@ -2279,6 +2286,7 @@ local function Xl(m, G)
 		if m and ((q.X - m.X)) ^ 2 + ((q.Z - m.Z)) ^ 2 >= 3600 then
 			return;
 		end;
+		if skipFx and G:IsA("Part") and G.Shape == Enum.PartType.Ball then return; end;
 		local l = math.max(Q.X, Q.Y, Q.Z) >= 1.5;
 		local d = Dl(Q.X) or Dl(Q.Y) or Dl(Q.Z);
 		if l or d then
@@ -2301,7 +2309,7 @@ local function Xl(m, G)
 				S[#S + 1] = r;
 			end;
 		end;
-		if not l and (not d and ((G.Transparency or 0)) < .95) then
+		if not l and not skipFx and (not d and ((G.Transparency or 0)) < .95) then
 			local r, S, w, l = gl(instanceId(G), q, math.max(Q.X, Q.Y, Q.Z), e);
 			Fl[#Fl + 1] = r;
 			dangerMem.tag(r, G, "projectile");
@@ -2328,9 +2336,11 @@ local function Xl(m, G)
 	for m, G in ipairs(jl) do
 		local r = workspace:FindFirstChild(G);
 		if r then
+			skipFx = planOn and (G == "Hazards" or (G == "MobTelegraphs" and Pq.shotHooked == true));
 			q(r);
 		end;
 	end;
+	skipFx = false;
 	local l = {};
 	for G, r in ipairs(Ll(e)) do
 		local Q, e = nil, 0;
@@ -2422,6 +2432,17 @@ local function Xl(m, G)
 			Tl[m] = nil;
 		end;
 	end;
+	if planOn then
+		local okP, pzs, pcl = pcall(Pq.frame, e, m);
+		if okP and pzs then
+			for _, z in ipairs(pzs) do Fl[#Fl + 1] = z; end;
+			Pq.cl = pcl;
+		else
+			Pq.cl = nil;
+		end;
+	elseif Pq then
+		Pq.cl = nil;
+	end;
 	r.zoneCount = #Fl;
 	r.zones = Fl;
 	if Q.autoRoll then
@@ -2436,6 +2457,13 @@ local function Xl(m, G)
 					seen = true,
 					rolled = r and r.rolled,
 				};
+		end;
+		-- planned attacks: the exact moment each one lands (the roll timing uses this)
+		if planOn and Pq.cl then
+			for key, it in pairs(Pq.cl) do
+				local old = Cl[key];
+				Cl[key] = { zone = it.zone, p = 0, t0 = old and old.t0 or e, hitAt = it.hitAt, seen = true, rolled = old and old.rolled, plan = it.e };
+			end;
 		end;
 	end;
 end;
@@ -2531,6 +2559,447 @@ local function NQ(m, G)
 		inp.key(GQ, false);
 		GQ = nil;
 	end;
+end;
+-- ===================================================================================
+-- ATTACK PLANS (v5.30). The game tells the client about every attack before it lands:
+--   MobPlan {id, t0, style, hazards = {...}, shots = {...}}: each hazard has at/shape/size/dir and
+--     warn/hit/dur in seconds after t0 on the server clock (workspace:GetServerTimeNow()).
+--   MobPlanCancel {id, at, all, lava}: the parts of that attack that haven't landed yet are off.
+--   MobShot {shots = {from, vel, life}} or {lob = {from, target, flight, radius}}: a mob's volley.
+-- The bot only listens (the game's HazardView / MobTelegraph draw from these same events) and checks
+-- spots with a copy of the game's hit test (ReplicatedStorage.Strata.Shared.Hazards.test), so it knows
+-- WHEN each spot gets hit, not just where the drawn shapes are right now. Read from decompiled client
+-- code: shapes and timings match the drawing code; the server's exact damage rules can't be seen.
+-- ===================================================================================
+do
+	local P = { hz = {}, shots = {}, lastPlan = -1e9, lastShot = -1e9, plans = 0, hooked = false, unknown = {} };
+	r.plan = P;
+	local PR = 1.2; -- Hazards.PlayerRadius in the game
+	local KNOWN = { circle = true, lane = true, crack = true, cone = true, donut = true, ring = true, sweep = true };
+	local function srv()
+		local ok, t = pcall(function() return workspace:GetServerTimeNow(); end);
+		return ok and t or os.clock();
+	end;
+	P.srv = srv;
+	local function unit(x, z)
+		local ln = math.sqrt(x * x + z * z);
+		if ln < 1e-6 then return 0, -1; end;
+		return x / ln, z / ln;
+	end;
+	local function angTo(px, pz, dx, dz)
+		return ((math.deg(math.atan2(-px, -pz) - math.atan2(-dx, -dz)) + 180) % 360) - 180;
+	end;
+	-- Shared.Hazards.test: is (x, z) hit by hazard h between a3 and a4 seconds after its hit time
+	function P.test(h, x, z, a3, a4)
+		if h.visual then return false; end;
+		local px, pz = x - h.ax, z - h.az;
+		local dur = math.max(h.dur or 0, 1e-6);
+		local sh = h.shape;
+		if sh == "circle" then
+			local rr = (h.r or 0) + PR;
+			if not h.vx then return px * px + pz * pz <= rr * rr; end;
+			local sx, sz = h.ax + h.vx * a3, h.az + h.vz * a3;
+			local ex, ez = h.vx * (a4 - a3), h.vz * (a4 - a3);
+			local ll = ex * ex + ez * ez;
+			local t = ll > 1e-9 and math.clamp(((x - sx) * ex + (z - sz) * ez) / ll, 0, 1) or 0;
+			return (x - sx - ex * t) ^ 2 + (z - sz - ez * t) ^ 2 <= rr * rr;
+		elseif sh == "lane" or sh == "crack" then
+			local along = px * h.dx + pz * h.dz;
+			if math.abs(px * h.dz - pz * h.dx) > (h.w or 0) * .5 + (h.beam and .4 or PR) then return false; end;
+			if sh == "lane" then return along >= -PR and along <= (h.len or 0) + PR; end;
+			local l0 = (h.len or 0) * math.clamp(a3 / dur, 0, 1);
+			local l1 = (h.len or 0) * math.clamp(a4 / dur, 0, 1);
+			return along >= l0 - 2 and along <= l1 + PR;
+		end;
+		local dd = math.sqrt(px * px + pz * pz);
+		if sh == "cone" then
+			if dd > (h.r or 0) + PR then return false; end;
+			if dd < 1.8 then return true; end;
+			return math.abs(angTo(px, pz, h.dx, h.dz)) <= (h.angle or 0) * .5 + math.deg(math.asin(math.min(PR / dd, 1)));
+		elseif sh == "donut" then
+			return dd > (h.inner or 0) and dd <= (h.r or 0) + PR;
+		elseif sh == "ring" then
+			local r0, r1 = h.r0 or 0, h.r1 or 0;
+			local ra = r0 + (r1 - r0) * math.clamp(a3 / dur, 0, 1);
+			local rb = r0 + (r1 - r0) * math.clamp(a4 / dur, 0, 1);
+			local band = (h.band or 0) * .5 + PR;
+			return dd >= math.min(ra, rb) - band and dd <= math.max(ra, rb) + band;
+		elseif sh == "sweep" then
+			if h.inner and dd < h.inner then return false; end;
+			if dd > (h.r or 0) + PR then return false; end;
+			if dd < .5 then return true; end;
+			local slack = math.deg(math.asin(math.min(((h.w or 0) * .5 + (h.beam and .4 or PR)) / dd, 1)));
+			local a0, a1 = h.a0 or 0, h.a1 or 0;
+			local aa = a0 + (a1 - a0) * math.clamp(a3 / dur, 0, 1);
+			local ab = a0 + (a1 - a0) * math.clamp(a4 / dur, 0, 1);
+			local rel = angTo(px, pz, h.dx, h.dz);
+			return rel >= math.min(aa, ab) - slack and rel <= math.max(aa, ab) + slack;
+		end;
+		return false; -- the game's test ignores shapes it doesn't know too
+	end;
+	local function norm(h)
+		local hh = {
+			shape = h.shape or (h.trail and "lane") or ((h.pool or h.patch) and "circle") or nil,
+			visual = h.visual and true or nil, r = tonumber(h.r), inner = tonumber(h.inner),
+			r0 = tonumber(h.r0), r1 = tonumber(h.r1), band = tonumber(h.band), len = tonumber(h.len),
+			w = tonumber(h.w), angle = tonumber(h.angle), a0 = tonumber(h.a0), a1 = tonumber(h.a1),
+			beam = h.beam and true or nil, dur = tonumber(h.dur), pool = h.pool and true or nil, trail = h.trail and true or nil,
+			ax = h.at.X, az = h.at.Z,
+		};
+		if typeof(h.dir) == "Vector3" then hh.dx, hh.dz = unit(h.dir.X, h.dir.Z); else hh.dx, hh.dz = 0, -1; end;
+		if typeof(h.vel) == "Vector3" then hh.vx, hh.vz = h.vel.X, h.vel.Z; end;
+		return hh;
+	end;
+	-- a circle around everything the hazard can touch (quick reject)
+	local function bounds(e)
+		local hh = e.h;
+		local cx, cz = hh.ax, hh.az;
+		local reach = math.max(hh.r or 0, hh.r1 or 0, hh.len or 0) + (hh.w or 0) + (hh.band or 0) + PR + 1;
+		if hh.shape == "lane" or hh.shape == "crack" then
+			local L = hh.len or 0;
+			cx, cz = hh.ax + hh.dx * L * .5, hh.az + hh.dz * L * .5;
+			reach = L * .5 + (hh.w or 0) * .5 + PR + 2.5;
+		elseif hh.vx then
+			local D = hh.dur or 0;
+			cx, cz = hh.ax + hh.vx * D * .5, hh.az + hh.vz * D * .5;
+			reach = (hh.r or 0) + math.sqrt(hh.vx ^ 2 + hh.vz ^ 2) * D * .5 + PR + 1;
+		end;
+		e.cx, e.cz, e.bound = cx, cz, reach;
+	end;
+	local function sigFor(style, kind, size)
+		local bucket = size < 2 and "XS" or size < 4 and "S" or size < 8 and "M" or size < 16 and "L" or "XL";
+		-- shots keep the "projectile:" prefix: they never block routes or the approach (v5.27)
+		return (kind == "shot" and "projectile:" or "") .. "plan:" .. tostring(style or "?") .. ":" .. tostring(kind) .. "-" .. bucket;
+	end;
+	-- zones in the bot's own format (what the escape planner and the roll logic understand)
+	local function mkCircle(x, z, rad)
+		return { x = x, z = z, ax = 1, az = 0, bx = 0, bz = 1, h1 = rad, h2 = rad, circle = true, pm = Vl, plan = true };
+	end;
+	local function mkRect(x0, z0, x1, z1, half)
+		local dx, dz = x1 - x0, z1 - z0;
+		local L = math.sqrt(dx * dx + dz * dz);
+		if L < .2 then return mkCircle(x0, z0, half); end;
+		local ux, uz = dx / L, dz / L;
+		return { x = (x0 + x1) * .5, z = (z0 + z1) * .5, ax = ux, az = uz, bx = -uz, bz = ux, h1 = L * .5, h2 = half, circle = false, pm = Vl, plan = true };
+	end;
+	local function dress(z, e)
+		z.sig, z.seenAt = e.sig, e.seenAt;
+		local a = type(brain.attacks) == "table" and brain.attacks[e.sig];
+		z.sx = type(a) == "table" and tonumber(a.extra) or 0;
+		z.sl = type(a) == "table" and tonumber(a.lead) or 0;
+		return z;
+	end;
+	function P.zoneOf(e, now)
+		local hh = e.h;
+		local sh = hh.shape or "circle";
+		if hh.vx and now >= e.hitAt then
+			-- moving circle: from where it is now to where it ends up
+			local D = hh.dur or 0;
+			local t0 = math.min(now - e.hitAt, D);
+			return dress(mkRect(hh.ax + hh.vx * t0, hh.az + hh.vz * t0, hh.ax + hh.vx * D, hh.az + hh.vz * D, hh.r or 1), e);
+		end;
+		if e.zone then return e.zone; end;
+		local z;
+		if sh == "lane" or sh == "crack" then
+			local L = hh.len or 0;
+			z = mkRect(hh.ax, hh.az, hh.ax + hh.dx * L, hh.az + hh.dz * L, (hh.w or 0) * .5);
+		elseif sh == "cone" or sh == "sweep" then
+			local span = sh == "cone" and (hh.angle or 90) or (math.abs((hh.a1 or 0) - (hh.a0 or 0)) + 20);
+			local rad = hh.r or 6;
+			if span >= 150 then
+				z = mkCircle(hh.ax, hh.az, rad);
+			else
+				local mid = sh == "cone" and 0 or ((hh.a0 or 0) + (hh.a1 or 0)) * .5;
+				local v = CFrame.Angles(0, math.rad(mid), 0) * Vector3.new(hh.dx, 0, hh.dz);
+				local half = math.max(rad * math.sin(math.rad(span * .5)), (hh.w or 0) * .5, 1.5);
+				z = mkRect(hh.ax, hh.az, hh.ax + v.X * rad, hh.az + v.Z * rad, half);
+			end;
+		elseif sh == "ring" then
+			z = mkCircle(hh.ax, hh.az, (hh.r1 or 6) + (hh.band or 0) * .5);
+			local hole = (hh.r0 or 0) - (hh.band or 0) * .5;
+			if hole > 2 then z.hole = hole; end;
+		elseif sh == "donut" then
+			z = mkCircle(hh.ax, hh.az, hh.r or 6);
+			if (hh.inner or 0) > 1.5 then z.hole = hh.inner; end;
+		else
+			z = mkCircle(hh.ax, hh.az, hh.r or 4);
+		end;
+		dress(z, e);
+		e.zone = z;
+		pcall(dangerMem.onAttack, z, d());
+		return z;
+	end;
+	function P.shotPos(s, t)
+		local el0 = t - s.spawnAt;
+		if el0 < 0 or el0 > s.life then return nil; end;
+		if s.back and el0 > s.back then
+			return s.fx + s.vx * s.back - s.vx * (el0 - s.back), s.fz + s.vz * s.back - s.vz * (el0 - s.back);
+		end;
+		return s.fx + s.vx * el0, s.fz + s.vz * el0;
+	end;
+	function P.shotHit(s, x, z, T1, T2)
+		if s.visual then return nil; end;
+		if s.arc then
+			local land = s.spawnAt + s.arc.flight;
+			if land >= T1 - .1 and land <= T2 and (x - s.arc.tx) ^ 2 + (z - s.arc.tz) ^ 2 <= ((s.radius or 2) + PR) ^ 2 then return land; end;
+			return nil;
+		end;
+		local a = math.max(T1, s.spawnAt);
+		local b = math.min(T2, s.spawnAt + s.life);
+		local rr = (s.radius or 2) + .6;
+		local t = a;
+		while t <= b + 1e-3 do
+			local sx, sz = P.shotPos(s, t);
+			if sx and (sx - x) ^ 2 + (sz - z) ^ 2 <= rr * rr then return t; end;
+			t = t + .04;
+		end;
+		return nil;
+	end;
+	function P.shotZone(s, now)
+		if s.arc then
+			local land = s.spawnAt + s.arc.flight;
+			if now < land - 1.25 or now > land + .3 then return nil; end;
+			return dress(mkCircle(s.arc.tx, s.arc.tz, (s.radius or 2) + .5), s);
+		end;
+		local t0 = math.max(now, s.spawnAt);
+		local t1 = math.min(s.spawnAt + s.life, t0 + 1);
+		if t1 <= t0 then return nil; end;
+		local x0, z0 = P.shotPos(s, t0);
+		local x1, z1 = P.shotPos(s, t1);
+		if s.back and t0 - s.spawnAt < s.back and t1 - s.spawnAt > s.back then
+			x1, z1 = s.fx + s.vx * s.back, s.fz + s.vz * s.back;
+		end;
+		if not (x0 and x1) then return nil; end;
+		return dress(mkRect(x0, z0, x1, z1, (s.radius or 2) + .3), s);
+	end;
+	-- earliest server time in [T1, T2] at which standing on (x, z) gets hit by a planned attack or shot
+	function P.hitAt(x, z, T1, T2)
+		local best, bestE;
+		for _, e in ipairs(P.hz) do
+			local a = math.max(T1, e.hitAt);
+			local b = math.min(T2, e.endAt);
+			if a <= b + 1e-3 and (not best or a < best) and not e.h.visual then
+				local dx, dz = x - e.cx, z - e.cz;
+				if dx * dx + dz * dz <= e.bound * e.bound and P.test(e.h, x, z, a - e.hitAt, math.max(a, b) - e.hitAt) then
+					best, bestE = a, e;
+				end;
+			end;
+		end;
+		for _, sh in ipairs(P.shots) do
+			if not best or sh.spawnAt < best then
+				local t = P.shotHit(sh, x, z, T1, best and math.min(T2, best) or T2);
+				if t and (not best or t < best) then best, bestE = t, sh; end;
+			end;
+		end;
+		return best, bestE;
+	end;
+	-- zones for this frame (Fl) and timed entries (Cl) for the planned attacks and shots near now
+	function P.frame(nowL, pos)
+		local now = srv();
+		local off = nowL - now;
+		if nowL - (P.fragAt or -1e9) > 1 then
+			P.fragAt = nowL;
+			local hm = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+			r.fragile = hm ~= nil and hm.MaxHealth > 0 and hm.MaxHealth <= 10;
+		end;
+		for k = #P.hz, 1, -1 do if P.hz[k].endAt < now - .5 then table.remove(P.hz, k); end; end;
+		for k = #P.shots, 1, -1 do
+			local sh = P.shots[k];
+			if sh.spawnAt + (sh.arc and sh.arc.flight + .3 or sh.life) < now - .2 then table.remove(P.shots, k); end;
+		end;
+		local lead = r.fragile and 1.6 or 1.25;
+		local zs, cl = {}, {};
+		for _, e in ipairs(P.hz) do
+			if not e.h.visual and now >= math.min(e.warnAt, e.hitAt - lead) and now <= e.endAt + .1 then
+				local z = P.zoneOf(e, now);
+				if z then
+					z.hitAt, z.endAt = e.hitAt + off, e.endAt + off;
+					zs[#zs + 1] = z;
+					if e.hitAt >= now - .05 and e.hitAt - now <= 1.4 then
+						cl["plan" .. e.key] = { zone = z, hitAt = e.hitAt + off, e = e };
+					end;
+				end;
+			end;
+		end;
+		for _, sh in ipairs(P.shots) do
+			if not sh.visual and now >= sh.spawnAt - lead then
+				local z = P.shotZone(sh, now);
+				if z then
+					zs[#zs + 1] = z;
+					if pos then
+						local ht = P.shotHit(sh, pos.X, pos.Z, now, now + 1.2);
+						if ht then cl["shot" .. sh.key] = { zone = z, hitAt = ht + off, e = sh }; end;
+					end;
+				end;
+			end;
+		end;
+		return zs, cl;
+	end;
+	-- a roll keeps its i-frames for 0.35 s (Config.Dodge.Iframes): after that the landing spot has to be
+	-- clear. Returns a better direction only if the current heading lands where a planned attack hits.
+	function P.rollDir(G, dir)
+		local rd = math.min(12, tonumber(brain.rollDist) or 6);
+		local sv = srv();
+		local function landingOk(dx, dz)
+			local ex, ez = G.X + dx * rd, G.Z + dz * rd;
+			if r.navOpenAt then
+				local okO, open = pcall(r.navOpenAt, ex, ez);
+				if okO and (tonumber(open) or 99) < 1 then return false; end;
+			end;
+			for _, z in ipairs(Fl) do
+				if not z.plan and ul(z, ex, ez, Vl) then return false; end;
+			end;
+			return P.hitAt(ex, ez, sv + .35, sv + 1.1) == nil;
+		end;
+		local cx, cz = dir and dir[1] or 0, dir and dir[2] or 0;
+		if (cx ~= 0 or cz ~= 0) and landingOk(cx, cz) then return nil; end;
+		local best, bs;
+		for k = 0, 7 do
+			local a = k * math.pi / 4;
+			local dx, dz = math.cos(a), math.sin(a);
+			if landingOk(dx, dz) then
+				local sc = -(dx * cx + dz * cz);
+				if not bs or sc < bs then best, bs = { dx, dz }, sc; end;
+			end;
+		end;
+		if best then return best[1], best[2]; end;
+		return nil;
+	end;
+	local function mobName(id)
+		if id == nil then return "?"; end;
+		for _, o in ipairs(workspace:GetChildren()) do
+			if o:IsA("Model") and o:GetAttribute("MobId") == id then return o.Name; end;
+		end;
+		return "?";
+	end;
+	function P.onPlan(p)
+		if type(p) ~= "table" or type(p.t0) ~= "number" then return; end;
+		local now, nowL = srv(), d();
+		P.lastPlan, P.plans = nowL, P.plans + 1;
+		local mob = mobName(p.id);
+		local first, kinds, nh, ns = math.huge, {}, 0, 0;
+		for i, h in ipairs(type(p.hazards) == "table" and p.hazards or {}) do
+			if type(h) == "table" and typeof(h.at) == "Vector3" and type(h.hit) == "number" then
+				local hh = norm(h);
+				local e = { h = hh, id = p.id, mob = mob, style = p.style, key = tostring(p.id) .. ":" .. tostring(p.t0) .. ":" .. i,
+					warnAt = p.t0 + (tonumber(h.warn) or 0), hitAt = p.t0 + h.hit, recv = now, seenAt = nowL };
+				e.endAt = e.hitAt + (hh.dur or 0);
+				e.what = tostring(hh.shape) .. (hh.pool and "/pool" or "") .. (hh.trail and "/trail" or "");
+				e.sig = sigFor(p.style, hh.shape or "?", math.max(hh.r or 0, hh.r1 or 0, (hh.len or 0) * .5, (hh.w or 0) * .5));
+				bounds(e);
+				P.hz[#P.hz + 1] = e;
+				if not hh.visual then
+					nh = nh + 1;
+					first = math.min(first, e.hitAt);
+					kinds[e.what] = (kinds[e.what] or 0) + 1;
+					local nm = tostring(hh.shape);
+					if not KNOWN[nm] and not P.unknown[nm] then
+						P.unknown[nm] = true;
+						f("plan: hazard shape '" .. nm .. "' isn't known here (the game's hit test ignores it too)");
+					end;
+				end;
+			end;
+		end;
+		for i, s0 in ipairs(type(p.shots) == "table" and p.shots or {}) do
+			if type(s0) == "table" and typeof(s0.from) == "Vector3" then
+				local sh = { key = tostring(p.id) .. ":" .. tostring(p.t0) .. ":s" .. i, id = p.id, mob = mob, style = p.style,
+					fx = s0.from.X, fz = s0.from.Z, spawnAt = p.t0 + (tonumber(s0.spawn) or 0), life = tonumber(s0.life) or 1,
+					radius = tonumber(s0.radius) or 2, back = tonumber(s0.back), visual = s0.visual and true or nil,
+					recv = now, seenAt = nowL, what = "shot" };
+				if typeof(s0.vel) == "Vector3" then sh.vx, sh.vz = s0.vel.X, s0.vel.Z; else sh.vx, sh.vz = 0, 0; end;
+				if type(s0.arc) == "table" and typeof(s0.arc.to) == "Vector3" then
+					sh.arc = { tx = s0.arc.to.X, tz = s0.arc.to.Z, flight = math.max(tonumber(s0.arc.flight) or 1, .05) };
+					sh.what = "lob";
+				end;
+				sh.sig = sigFor(p.style, sh.what, sh.radius);
+				P.shots[#P.shots + 1] = sh;
+				if not sh.visual then ns = ns + 1; first = math.min(first, sh.spawnAt); end;
+			end;
+		end;
+		local parts = {};
+		for k, v in pairs(kinds) do parts[#parts + 1] = v > 1 and (k .. "x" .. v) or k; end;
+		f(string.format("plan #%s %s %s: %d hazards (%s), %d shots, first hit in %.2fs (sent %.2fs ago)",
+			tostring(p.id), mob, tostring(p.style or ""), nh, table.concat(parts, " "), ns,
+			first < math.huge and first - now or -1, now - p.t0));
+	end;
+	function P.onCancel(c)
+		if type(c) ~= "table" then return; end;
+		local at = tonumber(c.at) or srv();
+		local gone = 0;
+		for k = #P.hz, 1, -1 do
+			local e = P.hz[k];
+			if e.id == c.id and (at < e.hitAt or (c.lava and (e.h.pool or e.h.trail))) then table.remove(P.hz, k); gone = gone + 1; end;
+		end;
+		for k = #P.shots, 1, -1 do
+			local sh = P.shots[k];
+			if sh.id == c.id and (c.all or sh.spawnAt > at) then table.remove(P.shots, k); gone = gone + 1; end;
+		end;
+		f(string.format("plan #%s cancelled (%d parts dropped%s%s)", tostring(c.id), gone, c.all and ", all shots" or "", c.lava and ", lava too" or ""));
+	end;
+	function P.onShot(p)
+		if type(p) ~= "table" then return; end;
+		local now, nowL = srv(), d();
+		P.lastShot = nowL;
+		local n = 0;
+		if type(p.lob) == "table" and typeof(p.lob.target) == "Vector3" then
+			local lb = p.lob;
+			local fl = math.max(tonumber(lb.flight) or 1, .05);
+			local hh = { shape = "circle", r = tonumber(lb.radius) or 4, ax = lb.target.X, az = lb.target.Z, dx = 0, dz = -1, dur = .2 };
+			local e = { h = hh, id = "shot", mob = "?", style = p.style, key = "lob:" .. tostring(now), warnAt = now, hitAt = now + fl,
+				recv = now, seenAt = nowL, what = "lob" };
+			e.endAt = e.hitAt + .2;
+			e.sig = sigFor(p.style, "lob", hh.r);
+			bounds(e);
+			P.hz[#P.hz + 1] = e;
+			n = 1;
+		end;
+		for i, s0 in ipairs(type(p.shots) == "table" and p.shots or {}) do
+			if type(s0) == "table" and typeof(s0.from) == "Vector3" and typeof(s0.vel) == "Vector3" then
+				P.shots[#P.shots + 1] = { key = "ms:" .. tostring(now) .. ":" .. i, id = "shot", mob = "?", style = p.style,
+					fx = s0.from.X, fz = s0.from.Z, vx = s0.vel.X, vz = s0.vel.Z, spawnAt = now, life = tonumber(s0.life) or 1,
+					radius = 2, recv = now, seenAt = nowL, what = "shot", sig = sigFor(p.style, "shot", 2) };
+				n = n + 1;
+			end;
+		end;
+		if n > 0 then f(string.format("mob volley: %d %s", n, p.lob and "lob" or "shots")); end;
+	end;
+	function P.onDodged(p)
+		P.dodged = (P.dodged or 0) + 1;
+		local bits = {};
+		if type(p) == "table" then
+			for k, v in pairs(p) do
+				if #bits < 6 then bits[#bits + 1] = tostring(k) .. "=" .. tostring(v); end;
+			end;
+		end;
+		f("server: dodged (" .. table.concat(bits, " ") .. ")");
+	end;
+	-- listen (a re-run of the script drops the old listeners first)
+	for _, c in ipairs(type(r.planConns) == "table" and r.planConns or {}) do pcall(function() c:Disconnect(); end); end;
+	r.planConns = {};
+	task.spawn(function()
+		local net = game:GetService("ReplicatedStorage"):WaitForChild("StrataNet", 30);
+		if not net then return; end;
+		local function hook(name, fn)
+			local ev = net:WaitForChild(name, 15);
+			if not (ev and ev:IsA("RemoteEvent")) then return false; end;
+			r.planConns[#r.planConns + 1] = ev.OnClientEvent:Connect(function(...)
+				local ok, err = pcall(fn, ...);
+				if not ok and not P.errLogged then
+					P.errLogged = true;
+					f("plan feed error (" .. name .. "): " .. tostring(err));
+				end;
+			end);
+			return true;
+		end;
+		local okPlan = hook("MobPlan", P.onPlan);
+		hook("MobPlanCancel", P.onCancel);
+		local okShot = hook("MobShot", P.onShot);
+		hook("Dodged", P.onDodged);
+		hook("SessionSync", function(p) if r.room and r.room.onSession then r.room.onSession(p); end; end);
+		P.hooked = okPlan and true or false;
+		P.shotHooked = okShot and true or false;
+		f("attack plan feed: " .. (P.hooked and "listening (MobPlan, MobPlanCancel, MobShot, Dodged, SessionSync)" or "not available, using the drawn shapes only"));
+	end);
 end;
 local function SQ(m, G)
 	local R0 = r; -- r becomes a number further down
@@ -4994,7 +5463,20 @@ local function mh(m)
 				local N = w.hitAt and math.max(w.hitAt - m, 0) or 0;
 				local justHit = r.lastHitAt and m - r.lastHitAt < .3 and N < .05;
 				if not justHit and ul(w.zone, G.X + Q * N, G.Z + e * N, Vl) and (inp.active() and m - ((r.lastRoll or -1000000000.0)) >= yl) then
-					if eQ(m) then
+					-- (v5.30) the i-frames end 0.35 s into the roll: if the planned attacks hit where this roll lands
+					-- after that (the Warden's shards after its charge), turn first and roll a frame later
+					local turn;
+					if r.plan and r.plan.hooked and CFG.planFeed ~= false and not r.escRoll then
+						local okT, tx, tz = pcall(r.plan.rollDir, G, run.lastDir);
+						if okT and tx then turn = { tx, tz }; end;
+					end;
+					if turn then
+						w.rolled = true;
+						r.forceDir = { x = turn[1], z = turn[2], untilT = m + .25 };
+						SQ(turn[1], turn[2]);
+						r.escRoll = { at = m + .03, w = w, sig = w.zone and w.zone.sig, hitIn = N, walkT = 0, left = N };
+						f(string.format("roll turned: its landing spot gets hit after the i-frames (zone %.1f,%.1f, hitIn=%.2f)", w.zone.x, w.zone.z, N));
+					elseif eQ(m) then
 						w.rolled = true;
 						r.lastRoll = m;
 						r.lastRollSig = w.zone and w.zone.sig;
@@ -5031,7 +5513,12 @@ local function mh(m)
 						local ex, ez = G.X + ox * rd, G.Z + oz * rd;
 						local safe = true;
 						for _, z2 in ipairs(Fl) do
-							if ul(z2, ex, ez, Vl) then safe = false; break; end;
+							if not z2.plan and ul(z2, ex, ez, Vl) then safe = false; break; end;
+						end;
+						-- planned attacks: the landing spot has to be clear once the i-frames are over
+						if safe and r.plan and r.plan.hooked and CFG.planFeed ~= false then
+							local sv = r.plan.srv();
+							if r.plan.hitAt(ex, ez, sv + .35, sv + 1.1) then safe = false; end;
 						end;
 						if safe and r.navOpenAt then
 							local okO, open = pcall(r.navOpenAt, ex, ez);
@@ -5385,6 +5872,179 @@ r.routeTo = function(mob, G, reach, ignoreFloor)
 	r.routeCache[key] = { t = now, path = path };
 	return path;
 end;
+-- ===================================================================================
+-- ROOMS (v5.30). Delve is one straight shaft: its rows run along -Z (Shared/Grid.toWorld for the shaft
+-- plate), chambers follow each other along those rows (Shared/Delve startOf/depthOf/bounds, a gate every
+-- 5th chamber), and every floor tile is named Tile_<row>_<col> at exactly that row's spot, so the row of
+-- any position is read straight off the tiles. The chamber you're in comes from the game's SessionSync
+-- event, or from the depth label when it is exactly a chamber's last row x 10 m (4,760 m = chamber 30,
+-- the Pale Warden; 9,060 m = 50, the Worldheart; 17,520 m = 90, the Unmaker). Forward = that chamber's
+-- exit row (where the ChamberWall stands); once you're there, the next chamber's exit.
+-- ===================================================================================
+do
+	local RM = { s = {}, sAt = -1e9 };
+	r.room = RM;
+	local CELL = 8;
+	-- a copy of Shared/Delve's layout maths with the exported Config values (used if require() fails)
+	local function port()
+		local D = {};
+		local function bossDepth(c)
+			if c == 50 then return 22; end;
+			if c > 50 and (c - 50) % 40 == 0 then return 22; end;
+			if c == 30 then return 20; end;
+			return nil;
+		end;
+		function D.depthOf(c)
+			c = math.max(math.floor(c), 1);
+			if c % 5 == 0 then return bossDepth(c) or 8; end;
+			return math.min(5 + (c - 1), 24);
+		end;
+		local st = { 1 };
+		function D.startOf(c)
+			c = math.max(math.floor(c), 1);
+			for n = #st, c - 1 do st[n + 1] = st[n] + D.depthOf(n); end;
+			return st[c];
+		end;
+		function D.bounds(c)
+			local a = D.startOf(c);
+			return a, a + D.depthOf(c) - 1;
+		end;
+		function D.metresAt(c)
+			local _, b = D.bounds(math.max(math.floor(c), 1));
+			return b * 10;
+		end;
+		return D;
+	end;
+	local okD, Dv = pcall(function()
+		local st = game:GetService("ReplicatedStorage"):FindFirstChild("Strata");
+		local sh = st and st:FindFirstChild("Shared");
+		local dm = sh and sh:FindFirstChild("Delve");
+		return dm and require(dm) or nil;
+	end);
+	if okD and type(Dv) == "table" and type(Dv.bounds) == "function" and type(Dv.metresAt) == "function" then
+		RM.D, RM.dsrc = Dv, "the game's Delve module";
+	else
+		RM.D, RM.dsrc = port(), "built-in copy of the layout";
+	end;
+	pcall(function()
+		local st = game:GetService("ReplicatedStorage"):FindFirstChild("Strata");
+		local cm = st and st:FindFirstChild("Config");
+		local cfg = cm and require(cm);
+		CELL = tonumber(cfg and cfg.Grid and cfg.Grid.CellSize) or CELL;
+	end);
+	function RM.onSession(p)
+		if type(p) ~= "table" then return; end;
+		if p.active then
+			for k, v in pairs(p) do RM.s[k] = v; end;
+			RM.sAt = d();
+			if p.chamber ~= nil and p.chamber ~= RM.lastChamber then
+				RM.lastChamber = p.chamber;
+				f(string.format("session: chamber %s%s", tostring(p.chamber),
+					p.collapseX and string.format(", collapse front at row %.1f (+%.2f rows/s)", tonumber(p.collapseX) or 0, tonumber(p.collapseSpeed) or 0) or ""));
+			end;
+		else
+			RM.s, RM.lastChamber = {}, nil;
+		end;
+	end;
+	-- the plate's row-1 Z, averaged over a few tiles; nil if the tiles don't agree (not a shaft plate)
+	function RM.originZ()
+		local sp = workspace:FindFirstChild("StrataPlate");
+		local gr = sp and sp:FindFirstChild("Ground");
+		if not gr then RM.og = nil; return nil; end;
+		local c = RM.og;
+		if c and c.g == gr and c.z then return c.z; end;
+		local sum, n, lo, hi = 0, 0, math.huge, -math.huge;
+		for _, t in ipairs(gr:GetChildren()) do
+			local row = tonumber((t.Name:match("^Tile_(%-?%d+)_")));
+			if row and t:IsA("BasePart") then
+				local oz = t.Position.Z + (row - 1) * CELL;
+				sum, n = sum + oz, n + 1;
+				lo, hi = math.min(lo, oz), math.max(hi, oz);
+				if n >= 24 then break; end;
+			end;
+		end;
+		if n < 3 or hi - lo > 1 then return nil; end;
+		RM.og = { g = gr, z = sum / n };
+		return RM.og.z;
+	end;
+	function RM.chamberFromDepth(m)
+		m = tonumber(m);
+		if not m or m <= 0 then return nil; end;
+		RM.mc = RM.mc or {};
+		local hit = RM.mc[m];
+		if hit == nil then
+			hit = false;
+			for c = 1, 800 do
+				local okM, mt = pcall(RM.D.metresAt, c);
+				if not okM or type(mt) ~= "number" then break; end;
+				if mt == m then hit = c; break; end;
+				if mt > m then break; end;
+			end;
+			RM.mc[m] = hit;
+		end;
+		return hit or nil;
+	end;
+	-- chamber, where it came from, your row, the chamber's rows; nil + reason when it's uncertain
+	function RM.current(pz)
+		if not run.isDelve then return nil, "not in a Delve"; end;
+		local oz = RM.originZ();
+		if not oz then return nil, "no shaft floor tiles to read rows from"; end;
+		local myRow = (oz - pz) / CELL + 1;
+		local c, src;
+		local sc = tonumber(RM.s.chamber);
+		if sc and sc >= 1 then c, src = sc, "session sync"; end;
+		if not c then
+			c = RM.chamberFromDepth(run.curDepth);
+			src = c and "depth label" or nil;
+		end;
+		if not c then return nil, "chamber unknown (depth " .. tostring(run.curDepth) .. " m isn't a chamber's end)"; end;
+		local okB, a, b = pcall(RM.D.bounds, c);
+		if not okB or type(a) ~= "number" then return nil, "no rows for chamber " .. tostring(c); end;
+		if myRow < a - 4 or myRow > b + 4 then
+			return nil, string.format("chamber %d (%s) is rows %d-%d but you're at row %.0f", c, src, a, b, myRow);
+		end;
+		return c, src, myRow, a, b, oz;
+	end;
+	function RM.goal(px, pz)
+		local c, src, myRow, a, b, oz = RM.current(pz);
+		if not c then return nil, src; end;
+		local goalRow, why = b, "exit";
+		if myRow >= b - .5 then
+			local okN, _, b2 = pcall(RM.D.bounds, c + 1);
+			if okN and type(b2) == "number" then goalRow, why = b2, "next chamber's exit"; end;
+		end;
+		return oz - (goalRow - 1) * CELL, goalRow, c, src, myRow, why;
+	end;
+	-- the collapse front in rows, on the game's clock (PlateRenderer._collapseStep)
+	function RM.front()
+		local s0 = RM.s;
+		local x0 = tonumber(s0.collapseX);
+		if not x0 then return nil; end;
+		local spd = tonumber(s0.collapseSpeed) or 0;
+		local t0 = math.max(tonumber(s0.collapseAt) or 0, tonumber(s0.collapseFrom) or 0);
+		local now = r.plan and r.plan.srv() or os.clock();
+		return x0 + spd * math.max(now - t0, 0), spd;
+	end;
+	-- Settings button: one line per signal, so a test can see what picked the destination
+	function RM.report()
+		local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+		if not hrp then notify("No character yet.", "Delve"); return; end;
+		local px, pz = hrp.Position.X, hrp.Position.Z;
+		local c, src, myRow, a, b = RM.current(pz);
+		local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, px, pz);
+		local fr, spd = RM.front();
+		local Pq = r.plan;
+		local lines = {
+			c and string.format("chamber %d (%s), rows %d-%d, you at row %.1f", c, src, a, b, myRow) or ("chamber: uncertain, " .. tostring(src)),
+			(okF and fx) and string.format("forward goal: %s, %.0f st (heading %.2f, %.2f)", tostring(fsrc), gp or 0, fx, fz) or "forward goal: none (no signal: it keeps mining)",
+			fr and string.format("collapse front at row %.1f (%.2f rows/s)%s", fr, spd, myRow and string.format(", %.1f rows behind you", myRow - fr) or "") or "collapse front: no SessionSync data yet",
+			Pq and string.format("attack plans: feed %s, %d planned, %d shots, %d plans so far, %d server dodges", Pq.hooked and "on" or "off", #Pq.hz, #Pq.shots, Pq.plans, Pq.dodged or 0) or "attack plans: module missing",
+			"layout from " .. tostring(RM.dsrc),
+		};
+		for _, ln in ipairs(lines) do if r.why then r.why("move", "[check] " .. ln); end; end;
+		notify(table.concat(lines, "\n"), "Delve forward check");
+	end;
+end;
 -- FORWARD (up the tunnel). Two signals, both about where you've been, never about the shape of the map:
 --   1. away from the tiles that collapsed in the last 20 s (the collapse is always behind you)
 --   2. the way the depth has been going up: from an earlier depth mark to the newest (gates)
@@ -5392,6 +6052,25 @@ end;
 -- and sent it running back into the cave-in. No signal = no push (it just keeps mining).
 r.forwardInfo = function(px, pz)
 	if not navBuild() or not nav.map then return nil; end;
+	-- 0. (v5.30) the chamber layout: a safe tile at the current chamber's exit row (never past it), only when
+	--    the chamber and your row agree. Otherwise the signals below (collapse, depth marks, learned direction).
+	do
+		local okR, gzR, rowR, cR, srcR, myRow, why = pcall(function() return r.room.goal(px, pz); end);
+		if okR and gzR then
+			local fzR = gzR < pz and -1 or 1;
+			local best, bs;
+			for _, t in pairs(nav.map) do
+				if (t.wz - gzR) * fzR <= 2 and not eh(Fl, t.wx, t.wz) then
+					local sc = math.abs(t.wz - gzR) * 3 + math.abs(t.wx - px) * .5;
+					if not bs or sc < bs then best, bs = t, sc; end;
+				end;
+			end;
+			if best then
+				return 0, fzR, best.wx, best.wz, math.abs(best.wz - pz),
+					string.format("chamber %d %s, row %d (%s; you're at row %.0f)", cR, why, rowR, srcR, myRow);
+			end;
+		end;
+	end;
 	local now = os.clock();
 	local fx, fz, src;
 	local gx, gz, gn = 0, 0, 0;
@@ -5479,7 +6158,28 @@ local function navEscape(px, pz, zones, now)
 	local near = {};
 	for _, z in ipairs(zones) do
 		local reach = math.max(z.h1, z.h2) + 70;
-		if (z.x - px) ^ 2 + (z.z - pz) ^ 2 < reach * reach then near[#near + 1] = z; end;
+		if not z.plan and (z.x - px) ^ 2 + (z.z - pz) ^ 2 < reach * reach then near[#near + 1] = z; end;
+	end;
+	-- (v5.30) planned attacks are checked at the time you'd reach each tile (walk speed), and the tile you
+	-- stop on has to stay clear for 1.2 s after you get there. Arriving after a slab lands is fine; being
+	-- there when it lands is not.
+	local Pq = r.plan;
+	local usePlan = Pq ~= nil and Pq.hooked == true and CFG.planFeed ~= false and (#Pq.hz + #Pq.shots) > 0;
+	local srv0 = usePlan and Pq.srv() or 0;
+	local humW = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+	local wsp = math.max(6, humW and humW.WalkSpeed or 16);
+	local distS, pdMemo = {}, {};
+	local function planDanger(key, studs, stay)
+		if not usePlan then return 0; end;
+		local ta = srv0 + studs / wsp + .05;
+		local mk = key * 64 + (math.floor(ta * 4) % 32) * 2 + (stay and 1 or 0);
+		local v = pdMemo[mk];
+		if v == nil then
+			local t = map[key];
+			v = Pq.hitAt(t.wx, t.wz, ta - .15, ta + (stay and 1.2 or .25)) and 4 or 0;
+			pdMemo[mk] = v;
+		end;
+		return v;
 	end;
 	-- rocks block movement: tiles under ores are expensive
 	local rockCells = {};
@@ -5516,6 +6216,7 @@ local function navEscape(px, pz, zones, now)
 	local edgeSafe = tonumber(CFG.edgeSafe) or 6;
 	local cornerOn = CFG.cornerAvoid ~= false;
 	local dist, prev, heap = { [startKey] = 0 }, {}, {};
+	distS[startKey] = 0;
 	nav.push(heap, 0, startKey);
 	local best, bestScore, fallback, fallbackScore = nil, nil, nil, nil;
 	local pops = 0;
@@ -5527,7 +6228,7 @@ local function navEscape(px, pz, zones, now)
 		if c <= (dist[key] or math.huge) + 1e-6 then
 			if bestScore and c > bestScore then break; end;
 			local t = map[key];
-			local dg = danger(key);
+			local dg = danger(key) + planDanger(key, distS[key] or 0, true);
 			local studsOpen = ((open[key] or 0) + .5) * cell;
 			local edgeCost = cornerOn and math.max(0, edgeSafe - studsOpen) * 2.5 or 0;
 			if dg == 0 and not rockCells[key] then
@@ -5546,9 +6247,11 @@ local function navEscape(px, pz, zones, now)
 						local blockedUntil = nav.blocked[k2];
 						if not (blockedUntil and blockedUntil > now) then
 							local step = (diag and 1.4142 or 1) * cell;
-							local cost = c + step + danger(k2) * cell * 3 + (rockCells[k2] and cell * 3 or 0);
+							local dS = (distS[key] or 0) + step;
+							local cost = c + step + (danger(k2) + planDanger(k2, dS)) * cell * 3 + (rockCells[k2] and cell * 3 or 0);
 							if cost < (dist[k2] or math.huge) then
 								dist[k2], prev[k2] = cost, key;
+								distS[k2] = dS;
 								nav.push(heap, cost, k2);
 							end;
 						end;
@@ -5575,6 +6278,10 @@ local function navEscape(px, pz, zones, now)
 			local f2 = s / steps;
 			local sx, sz = px + dx * f2, pz + dz * f2;
 			if not pQ(sx, sz) then return false; end;
+			if usePlan then
+				local ta = srv0 + (len * f2) / wsp + .05;
+				if Pq.hitAt(sx, sz, ta - .15, ta + .2) then return false; end;
+			end;
 			local scx2, scz2 = navCellAt(sx, sz);
 			local k2 = scx2 and (scx2 * 4096 + scz2);
 			if k2 and map[k2] and (danger(k2) > startDanger + .01 or rockCells[k2]) then return false; end;
@@ -5587,6 +6294,7 @@ local function navEscape(px, pz, zones, now)
 		if lineClear(t) then wp = t; break; end;
 	end;
 	local gt = map[goal];
+	r.escInfo = { t = d(), safe = best ~= nil, len = #path, plan = usePlan };
 	return { x = wp.wx, z = wp.wz, gx = gt.wx, gz = gt.wz, t = now, safe = best ~= nil, len = #path };
 end;
 -- OPEN GROUND (maps without a tile floor, like the Arena): look at points around you every 4 studs
@@ -5617,6 +6325,17 @@ local function openGround(px, pz, now)
 		and (et0.x - px) ^ 2 + (et0.z - pz) ^ 2 < 36 * 36 then
 		return { x = et0.x, z = et0.z, t = et0.t, gx = et0.x, gz = et0.z };
 	end;
+	local Pq = r.plan;
+	local usePlan = Pq ~= nil and Pq.hooked == true and CFG.planFeed ~= false and (#Pq.hz + #Pq.shots) > 0;
+	local srv0 = usePlan and Pq.srv() or 0;
+	local humW = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+	local wsp = math.max(6, humW and humW.WalkSpeed or 16);
+	local function blockedAt(x, z, ta, stay)
+		for _, zz in ipairs(Fl) do
+			if not zz.plan and ul(zz, x, z, Vl + .5) then return true; end;
+		end;
+		return usePlan and Pq.hitAt(x, z, ta - .15, ta + stay) ~= nil;
+	end;
 	local best, bestScore, leastBad, leastScore;
 	for gx = -36, 36, 4 do
 		for gz = -36, 36, 4 do
@@ -5626,8 +6345,9 @@ local function openGround(px, pz, now)
 				if floorAt(cx, cz) then
 					local hits = 0;
 					for _, z in ipairs(Fl) do
-						if ul(z, cx, cz, Vl + .5) then hits = hits + 1; end;
+						if not z.plan and ul(z, cx, cz, Vl + .5) then hits = hits + 1; end;
 					end;
+					if usePlan and Pq.hitAt(cx, cz, srv0 + dist / wsp - .1, srv0 + dist / wsp + 1.2) then hits = hits + 1; end;
 					-- walls/void around it (corners score worst)
 					local edge = 0;
 					for _, dv in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { .7, .7 }, { -.7, .7 }, { .7, -.7 }, { -.7, -.7 } }) do
@@ -5637,7 +6357,7 @@ local function openGround(px, pz, now)
 					local cross = 0;
 					for k = 1, 3 do
 						local f2 = k / 4;
-						if eh(Fl, px + gx * f2, pz + gz * f2) then cross = cross + 1; end;
+						if blockedAt(px + gx * f2, pz + gz * f2, srv0 + dist * f2 / wsp, .2) then cross = cross + 1; end;
 					end;
 					local score = dist + edge * 6 + cross * 8;
 					if hits == 0 then
@@ -6322,6 +7042,14 @@ local function lh(m)
 			x = math.floor(G.X), z = math.floor(G.Z), zones = #Fl, inZones = inZ,
 			target = tgt and tostring(tgt.name) or nil, dist = tgt and tgt.d and math.floor(tgt.d * 10) / 10 or nil,
 			rollReady = m - (r.lastRoll or -1e9) >= yl, why = r.fightWhy, timer = run.timeLeft, stuck = r.stuckStreak,
+			planned = r.plan and #r.plan.hz or nil,
+			planHitIn = (function()
+				local Pq = r.plan;
+				if not (Pq and Pq.hooked) then return nil; end;
+				local sv = Pq.srv();
+				local t = Pq.hitAt(G.X, G.Z, sv, sv + 1.2);
+				return t and math.floor((t - sv) * 100) / 100 or nil;
+			end)(),
 		});
 		while #r.box > 20 do table.remove(r.box, 1); end;
 	end;
@@ -6466,9 +7194,23 @@ local function lh(m)
 		local pick = CFG.afterUnmaker or "Prestige I";
 		local wantShop = pick == "?????" or tostring(pick):find("shop", 1, true) ~= nil;
 		local bb = r.portalSigns and (wantShop and r.portalSigns.mystery or r.portalSigns.prestige);
-		if pick ~= "Don't enter" and bb and bb.Parent then
+		if bb and not bb.Parent then bb = nil; end;
+		-- (v5.30) PortalFx tracks prestige portals by the CollectionService tag "PrestigePortal"; Vesper's gate
+		-- is tagged "VesperInGate". The tag wins for the prestige portal; for the shop the sign text comes first.
+		local tagPos, tagSrc;
+		if pick ~= "Don't enter" then
+			pcall(function()
+				for _, mdl in ipairs(game:GetService("CollectionService"):GetTagged(wantShop and "VesperInGate" or "PrestigePortal")) do
+					if mdl.Parent and mdl:IsA("Model") then
+						tagPos, tagSrc = mdl:GetPivot().Position, wantShop and "VesperInGate tag" or "PrestigePortal tag";
+						break;
+					end;
+				end;
+			end);
+		end;
+		if pick ~= "Don't enter" and (bb or tagPos) then
 			-- the sign may hang on a part, an attachment or a model
-			local holder = bb.Adornee or bb.Parent;
+			local holder = bb and (bb.Adornee or bb.Parent) or nil;
 			local part, pos = holder, nil;
 			if holder and holder:IsA("Attachment") then
 				pos, part = holder.WorldPosition, holder.Parent;
@@ -6479,13 +7221,15 @@ local function lh(m)
 				pos = part and part.Position;
 			end;
 			if not (part and part.Parent) then part = bb; end;
+			local how = "sign text";
+			if tagPos and (not wantShop or not pos) then pos, how = tagPos, tagSrc; end;
 			local nearest = math.huge;
 			for _, mob in ipairs(S) do nearest = math.min(nearest, tonumber(mob.d) or math.huge); end;
-			if pos and nearest > 25 and (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(G.X, 0, G.Z)).Magnitude < 250 then
+			if pos and nearest > 25 and (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(G.X, 0, G.Z)).Magnitude < (tagPos and 800 or 250) then
 				local tx, tz = pos.X, pos.Z;
-				if r.why and r.portalNote ~= pick .. tostring(bb) then
-					r.portalNote = pick .. tostring(bb);
-					r.why("move", "walking into the " .. (wantShop and "rare shop" or "prestige") .. " portal");
+				if r.why and r.portalNote ~= pick .. tostring(bb) .. how then
+					r.portalNote = pick .. tostring(bb) .. how;
+					r.why("move", "walking into the " .. (wantShop and "rare shop" or "prestige") .. " portal (found by " .. how .. "; ahead of walking up the road)");
 					notify("Taking the " .. (wantShop and "rare shop" or "prestige") .. " portal.", "Delve run");
 					if not r.portalDumped and type(writefile) == "function" then
 						r.portalDumped = true;
@@ -8254,6 +8998,23 @@ local brainTick = (function()
 		if CFG.dodgeLearn == false then return; end;
 		local pos = sQ();
 		if not pos then return; end;
+		-- (v5.30) lead-time record: the plan that covered this spot, how long before the hit it arrived, and
+		-- when the escape and the roll started
+		pcall(function()
+			local Pq = r.plan;
+			if not (Pq and Pq.hooked) then return; end;
+			local sv = Pq.srv();
+			local _, e = Pq.hitAt(pos.X, pos.Z, sv - .35, sv + .05);
+			local esc, lr = r.escInfo, r.lastRoll;
+			local tail = string.format("escape picked %s, roll %s",
+				esc and string.format("%.2fs before", now - esc.t) or "never", lr and string.format("%.2fs before", now - lr) or "never");
+			if e then
+				f(string.format("hit -%.0f by plan #%s %s %s: cue came %.2fs before it landed, %s", loss, tostring(e.id), tostring(e.mob),
+					tostring(e.what), (e.hitAt or e.spawnAt or sv) - (e.recv or sv), tail));
+			else
+				f(string.format("hit -%.0f: no planned attack covered this spot (%d planned, %d shots): touch or untracked, %s", loss, #Pq.hz, #Pq.shots, tail));
+			end;
+		end);
 		local dd = brain.dodge;
 		dd.hits = (tonumber(dd.hits) or 0) + 1;
 		local inZone = false;
@@ -8706,6 +9467,10 @@ r.stop = function()
 		end;
 		dh = true;
 		r.disconnectAntiAfk();
+		pcall(function()
+			for _, c in ipairs(type(r.planConns) == "table" and r.planConns or {}) do c:Disconnect(); end;
+			r.planConns = {};
+		end);
 		pcall(function() r.stopBrain(); end);
 		pcall(function() r.stopIndex(); end);
 		pcall(function() relicAPI.finish(); end);
@@ -8814,6 +9579,7 @@ end;
 				{ k = "crowdSize", t = "slider", text = "Fight when this many mobs are up", min = 2, max = 20, step = 1, suffix = "" },
 				{ k = "fightDist", t = "slider", text = "Circle distance", min = 2, max = 30, step = 1, suffix = " st" },
 				{ k = "flankDodge", t = "toggle", text = "Dodge past enemies to keep hitting them" },
+				{ k = "planFeed", t = "toggle", text = "Use the game's attack plans (exact timing)" },
 				{ k = "exploreForMobs", t = "toggle", text = "Search the room until all mobs left are found" },
 				{ k = "rangedFirst", t = "toggle", text = "Take out shooters first when they're a threat" },
 				{ k = "attackRoll", t = "combo", text = "Attack rolls (roll into the target)", items = { "On", "Off" } },
@@ -9247,7 +10013,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.29 | Brain",
+		Title = "Delve v5.30 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -9372,6 +10138,7 @@ end;
 		crowdSize = { "When this many mobs are up at once, it clears them before mining.", "Recommended: 5." },
 		fightDist = { "How close it circles the target while fighting.", "Recommended: 8 st. Lower hits more but gets hit more." },
 		flankDodge = { "Dodges past the enemy (behind or beside it) instead of backing away, so it keeps hitting.", "Recommended: ON." },
+		planFeed = { "Reads the game's own attack plans (what will hit where, and exactly when) instead of guessing from the drawn shapes: escapes avoid spots that get hit while it's walking there, rolls land on spots that stay clear, and impact debris/smoke stop counting as attacks.", "Recommended: ON. Turn off only if dodging gets worse, then send the dodge log." },
 		exploreForMobs = { "When the HUD says more mobs are left than it can see (pylons at the top of a boss room), it walks up the room to find them.", "Recommended: ON." },
 		rangedFirst = { "Kills mobs that shoot or hit from far away first, but only when they're actually firing at you.", "Recommended: ON." },
 		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step).", "Recommended: On." },
@@ -9468,6 +10235,10 @@ end;
 			tab:Button({ Title = "Stop and unload", Callback = r.stop });
 		end;
 		if group.name == "Settings" then
+			tab:Button({
+				Title = "Check forward goal + attack plans",
+				Callback = function() if r.room and r.room.report then pcall(r.room.report); end; end,
+			});
 			tab:Button({
 				Title = "Test background support",
 				Callback = function()

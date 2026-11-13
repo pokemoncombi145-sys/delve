@@ -1,6 +1,26 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.29 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.30 | Brain`).
+
+## v5.30: Reads the game's attack plans and chamber layout (not yet verified in gameplay)
+Built from the game's own client code (decompiled exports of ReplicatedStorage and PlayerScripts).
+
+**Attack plans (dodging)**
+- The game sends every attack to the client before it lands: `MobPlan` (hazards with shape, size and warn/hit/duration on the server clock), `MobPlanCancel`, and `MobShot` (mob volleys). The script now listens to them (listen only) and checks spots with a copy of the game's own hit test (`Shared.Hazards.test`, player radius 1.2). The copy matched the game's formula on 100,000 random checks.
+- **Why the Pale Warden kept killing 1-HP runs:** its moves have no projectiles at all (a 0.45 s charge along a lane, 6 shard circles landing one after another along the charge 0.47-1.07 s later, slab lanes 0.3 s apart, a marching sentence ending in a big circle). The "55-100 projectiles" were the game's own impact debris and smoke puffs, which the scanner read as projectiles and growing attacks. The shards also stay invisible until just before they land.
+- With the feed on: debris/smoke/burst parts are ignored; planned attacks show up as zones up to 1.25 s (1.6 s on 1-HP runs) before they land, even before they're drawn; rolls are timed to the exact landing moment.
+- **Escapes are checked in time:** the tile planner asks whether each tile gets hit at the moment you'd be on it (walk speed), and the spot you stop on must stay clear for 1.2 s. Same for open-ground escapes (Arena).
+- **Roll landing spots:** the roll's i-frames last 0.35 s (Config.Dodge.Iframes); if the planned attacks hit the landing spot after that (e.g. the shards after the charge), it turns toward a clear landing spot first and rolls a frame later.
+- Cancelled attacks are dropped the way the game does it (parts not landed yet; pools/trails too when lava is cancelled; shots not spawned yet, or all shots).
+- Logging for lead time: each plan (mob, shapes, first hit, delay), each cancel, server-confirmed dodges, and every hit with the plan that covered the spot, how early its cue came, and when the escape and roll started. The death black box records planned hazards and the next planned hit on your spot.
+- Toggle: **Use the game's attack plans (exact timing)** (Combat tab).
+
+**Rooms (forward routing)**
+- Delve is one straight shaft: rows run along -Z, chambers follow each other along the rows (`Shared/Delve`), and every floor tile is named `Tile_<row>_<col>` at its row's position. Depth label = the current chamber's last row x 10 m (4,760 m = chamber 30 Pale Warden, 9,060 m = 50 Worldheart, 17,520 m = 90 Unmaker, all matching the logs).
+- The current chamber comes from the game's `SessionSync` event (also gives the collapse front), else from the depth label when it is exactly a chamber's end. When the chamber and your row agree, forward = the chamber's exit row (next chamber's exit once you're there), routed through the existing floor, obstacle, collapse and hazard checks. Otherwise the old signals (collapse, depth marks, learned direction).
+- Portals: the prestige portal is found by the game's `PrestigePortal` tag (sign text as backup) and always comes before walking up the road; the shop uses its sign first, `VesperInGate` tag second.
+- Log lines say which signal picked the destination, e.g. `walking up the road (chamber 34 exit, row 512 (session sync; you're at row 501), 88 st)`.
+- New Settings button **Check forward goal + attack plans** writes the chamber, rows, forward goal, collapse front and plan-feed status to the reasoning log.
 
 ## v5.29: Keeps walking up the road (not yet verified in gameplay)
 - **Bug:** it stood still after the Unmaker (17,520 to 17,760 m, no timer) and in a boss room whose boss was out of sight (14,260 m). The forward push only ran when the floor timer was low.
