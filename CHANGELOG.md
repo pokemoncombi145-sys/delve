@@ -1,6 +1,17 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.30 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.31 | Brain`).
+
+## v5.31: Moves forward the whole time, timer or not (not yet verified in gameplay)
+- Removed the "only push forward when the floor timer is low" rule. In a Delve it now always:
+  - mines ores ahead (up the road) first and ores behind (toward the collapse) last;
+  - with nothing to walk to, heads for the chamber's exit (this replaces the separate v5.29 "nothing to do here" walk);
+  - turns back for a missed ore only if it can get there and mine it before that spot collapses. The time left comes from the collapse front in the game's SessionSync event, else the floor timer, else nothing is collapsing (e.g. after the Unmaker);
+  - keeps mining an ore already in reach unless the floor under it is about to fall.
+- If it's already at the exit and an ore behind can't be reached in time, it waits at the exit instead of walking back into the collapse.
+- Log line: `walking up the road (<signal>, <distance>): <reason>`, e.g. `nothing left to walk to` or `ore behind needs 3.1s, the collapse leaves 2.4s`.
+- The forward goal is cached for 0.4 s (it's asked every few frames now).
+- The "ignore mobs" switch still uses the floor timer (Delve timer setting); only moving forward stopped depending on it.
 
 ## v5.30: Reads the game's attack plans and chamber layout (not yet verified in gameplay)
 Built from the game's own client code (decompiled exports of ReplicatedStorage and PlayerScripts).

@@ -1467,11 +1467,11 @@ local function Ql(m, G)
 	local rng = tonumber(Q.mineRange) or 0;
 	local rngSq = rng > 0 and rng * rng or nil;
 	local minTier = tonumber(Q.minTier) or 1;
-	-- floor timer low: ores up the tunnel (ahead) first, ores behind (toward the collapse) last
+	-- in a Delve: ores up the road (ahead) first, ores behind (toward the collapse) last, all the time
+	-- (v5.31; before, only when the floor timer was low)
 	local fwd;
 	do
-		local tl = tonumber(run.timeLeft);
-		if Q.pushForward ~= false and tl and tl <= (tonumber(Q.dangerTime) or 10) and r.forwardInfo then
+		if Q.pushForward ~= false and run.isDelve and r.forwardInfo then
 			local okF, fx, fz = pcall(r.forwardInfo, m.X, m.Z);
 			if okF and fx then fwd = { fx, fz }; end;
 		end;
@@ -6025,6 +6025,15 @@ do
 		local now = r.plan and r.plan.srv() or os.clock();
 		return x0 + spd * math.max(now - t0, 0), spd;
 	end;
+	-- seconds until the floor at world Z falls (rows below the front fall); nil without SessionSync data
+	function RM.secondsUntilFalls(z)
+		local fr, spd = RM.front();
+		local oz = RM.originZ();
+		if not (fr and oz) then return nil; end;
+		if not spd or spd <= 0 then return math.huge; end;
+		local row = (oz - z) / CELL + 1;
+		return (row - .5 - fr) / spd;
+	end;
 	-- Settings button: one line per signal, so a test can see what picked the destination
 	function RM.report()
 		local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
@@ -6050,7 +6059,7 @@ end;
 --   2. the way the depth has been going up: from an earlier depth mark to the newest (gates)
 -- v5.28 used the middle of all loaded tiles, which lies behind you when old segments are still loaded,
 -- and sent it running back into the cave-in. No signal = no push (it just keeps mining).
-r.forwardInfo = function(px, pz)
+r.forwardInfoRaw = function(px, pz)
 	if not navBuild() or not nav.map then return nil; end;
 	-- 0. (v5.30) the chamber layout: a safe tile at the current chamber's exit row (never past it), only when
 	--    the chamber and your row agree. Otherwise the signals below (collapse, depth marks, learned direction).
@@ -6112,6 +6121,16 @@ r.forwardInfo = function(px, pz)
 		if side < 40 and (not bp or pr > bp) and not eh(Fl, t.wx, t.wz) then best, bp = t, pr; end;
 	end;
 	return fx, fz, best and best.wx, best and best.wz, bp, src;
+end;
+r.forwardInfo = function(px, pz)
+	local fc = r.fwdCache;
+	local nowC = os.clock();
+	if fc and nowC - fc.t < .4 and (fc.px - px) ^ 2 + (fc.pz - pz) ^ 2 < 9 then
+		return fc[1], fc[2], fc[3], fc[4], fc[5], fc[6];
+	end;
+	local a1, a2, a3, a4, a5, a6 = r.forwardInfoRaw(px, pz);
+	r.fwdCache = { a1, a2, a3, a4, a5, a6, t = nowC, px = px, pz = pz };
+	return a1, a2, a3, a4, a5, a6;
 end;
 r.steerDir = function(pos, tx, tz)
 	local now = d();
@@ -7527,40 +7546,62 @@ local function lh(m)
 		end;
 	end;
 	r.chestWalk = false;
-	-- FLOOR TIMER LOW: at the danger time (10 s by default) head up the tunnel, away from the collapse.
-	-- With nothing left to mine it walks to the far end; under 5 s it won't walk back for an ore behind it.
+	-- KEEP MOVING FORWARD (Delve, v5.31): all the time, not only when the floor timer runs low. Ores ahead
+	-- come first (Ql); with nothing to walk to it heads for the chamber's exit. A missed ore behind is still
+	-- mined if it can get there and mine it before that spot falls (collapse front from SessionSync, else
+	-- the floor timer, else nothing is collapsing). An ore in reach is mined unless the floor under you
+	-- falls first.
 	do
-		local tlF = tonumber(run.timeLeft);
-		if CFG.pushForward ~= false and WQ ~= "combat" and tlF and tlF <= (tonumber(CFG.dangerTime) or 10) then
+		if CFG.pushForward ~= false and run.isDelve and WQ ~= "combat" and Q.on then
 			local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
-			if okF and fx and gx and (gp or 0) > 3 then
-				local behind = u and ((u.X - G.X) * fx + (u.Z - G.Z) * fz) < -4;
-				-- a missed ore behind still gets mined if it can walk there and mine it with time to spare
-				local reachable = true;
-				if behind then
-					local humS = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
-					local spd = math.max(8, humS and humS.WalkSpeed or 16);
-					local need = math.sqrt((u.X - G.X) ^ 2 + (u.Z - G.Z) ^ 2) / spd + 1.5;
-					reachable = need < tlF - 1;
-					if not reachable and r.why and m - (r.fwdSkipAt or 0) > 4 then
-						r.fwdSkipAt = m;
-						r.why("move", string.format("timer %ds: ore behind needs %.1f s, not enough time: going up instead", tlF, need));
-					end;
+			if okF and fx then
+				local humS = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+				local spd = math.max(8, humS and humS.WalkSpeed or 16);
+				local tlF = tonumber(run.timeLeft);
+				local function timeLeftAt(z)
+					local okC, sec = pcall(function() return r.room and r.room.secondsUntilFalls(z); end);
+					if okC and sec then return sec, "the collapse"; end;
+					if tlF then return tlF, "the floor timer"; end;
+					return math.huge, "nothing collapsing";
 				end;
-				if not (WQ == "mine" and Q.walk and u) or (behind and not reachable) then
-					if r.why and m - (r.fwdNoteAt or 0) > 4 then
-						r.fwdNoteAt = m;
-						r.why("move", string.format("timer %ds: heading up the tunnel (%s, %.0f st)", tlF, tostring(fsrc), gp));
+				local reason, stuckBack;
+				if u and ((u.X - G.X) * fx + (u.Z - G.Z) * fz) < -4 then
+					local need = math.sqrt((u.X - G.X) ^ 2 + (u.Z - G.Z) ^ 2) / spd + 1.5;
+					local left, how = timeLeftAt(u.Z);
+					if need >= left - 1 then
+						reason = string.format("ore behind needs %.1fs, %s leaves %.1fs", need, how, left);
+						stuckBack = true;
 					end;
-					local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
-					local wp;
-					if okRt and path then
-						for _, p0 in ipairs(path) do
-							if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+				elseif not u and L then
+					local left, how = timeLeftAt(G.Z);
+					if left < 1.5 then
+						reason = string.format("%s reaches this spot in %.1fs", how, left);
+						stuckBack = true;
+					end;
+				elseif not u then
+					reason = "nothing left to walk to";
+				end;
+				if reason then
+					local key = reason:sub(1, 14);
+					if r.why and (m - (r.fwdNoteAt or 0) > 5 or r.fwdNoteKey ~= key) then
+						r.fwdNoteAt, r.fwdNoteKey = m, key;
+						r.why("move", string.format("walking up the road (%s, %.0f st): %s", tostring(fsrc), gp or 0, reason));
+					end;
+					if gx and (gp or 0) > 3 then
+						local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
+						local wp;
+						if okRt and path then
+							for _, p0 in ipairs(path) do
+								if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+							end;
 						end;
+						if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(gx - G.X, gz - G.Z); end;
+						return;
+					elseif stuckBack then
+						-- already at the exit: don't walk back into the collapse for it
+						SQ(nil);
+						return;
 					end;
-					if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(gx - G.X, gz - G.Z); end;
-					return;
 				end;
 			end;
 		end;
@@ -7569,26 +7610,6 @@ local function lh(m)
 		local okS, sx, sz = pcall(r.steerDir, G, u.X, u.Z);
 		if okS and sx then SQ(sx, sz); else SQ(u.X - G.X, u.Z - G.Z); end;
 		return;
-	end;
-	-- NOTHING TO DO HERE (Delve): no ore to walk to, no fight, no chest. Standing still wastes the run
-	-- (after the Unmaker, in a boss room whose boss is out of sight, on an empty stretch): walk up the road.
-	if CFG.pushForward ~= false and run.isDelve and WQ ~= "combat" and not u and not L and Q.on then
-		local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
-		if okF and fx and gx and (gp or 0) > 3 then
-			if r.why and m - (r.idleFwdAt or 0) > 6 then
-				r.idleFwdAt = m;
-				r.why("move", string.format("nothing to do here: walking up the road (%s, %.0f st)", tostring(fsrc), gp));
-			end;
-			local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
-			local wp;
-			if okRt and path then
-				for _, p0 in ipairs(path) do
-					if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
-				end;
-			end;
-			if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(gx - G.X, gz - G.Z); end;
-			return;
-		end;
 	end;
 	SQ(nil);
 end;
@@ -10013,7 +10034,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.30 | Brain",
+		Title = "Delve v5.31 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -10143,7 +10164,7 @@ end;
 		rangedFirst = { "Kills mobs that shoot or hit from far away first, but only when they're actually firing at you.", "Recommended: ON." },
 		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step).", "Recommended: On." },
 		bossRolls = { "In boss fights, rolls through the boss for extra damage, but only when no attack zone is within 18 st (25 st on a 1-HP run), nothing is winding up and no boss attack is expected for 2 s.", "Recommended: ON." },
-		pushForward = { "Keeps it moving up the road in Delve: whenever there's nothing to mine, fight or loot it walks forward (also after the Unmaker and in boss rooms whose boss is out of sight). When the floor timer reaches the danger time, ores ahead come first; it still turns back for a missed ore if it can get there and mine it in time.", "Recommended: ON." },
+		pushForward = { "Keeps it moving forward in Delve the whole time, timer or not: ores ahead come first, and with nothing to walk to it heads for the chamber's exit (also after the Unmaker and in boss rooms whose boss is out of sight). It still turns back for a missed ore if it can get there and mine it before that spot collapses.", "Recommended: ON." },
 		rollKey = { "The key your game uses for roll / dash.", "Recommended: Q (the game's default). Change only if you rebound it." },
 		cardPick = { "Picks relics, blessings, forks and trader buys by itself using the brain's scores.", "Recommended: ON for AFK. OFF shows the pick but lets you choose." },
 		relicExplore = { "Now and then takes a relic it has never taken, so the brain learns the whole relic index. Never instead of a second chance, luck relic or set completion.", "Recommended: ON." },
