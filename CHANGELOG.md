@@ -1,6 +1,11 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.31.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.31.2 | Brain`).
+
+## v5.31.2: Final check before more runs (not yet verified in gameplay)
+- **Bullet checks solved exactly instead of sampled.** Each bullet was tested every 0.04 s along its path; a 168-bullet storm made that about 5,000 steps per question and the escape planner asks hundreds, enough to stall frames mid-dodge. It's now one closest-approach calculation per bullet (out-and-back bullets too); checked against brute-force sampling on 20,000 random bullets, same answers within 0.5 ms.
+- Verified: the GitHub raw file (what the autoexec loads), the repo, and both Volt copies are identical; the helper and the autoexec match the repo.
+- README: Delve timer threshold is 15 s (was still saying 10), tabs list the newer switches and the check button.
 
 ## v5.31.1: Pale Warden bullet storm (not yet verified in gameplay)
 - **Death (Pale Warden, 22,280 m total, 1 HP, on v5.30):** the Warden's second-phase `sanctumstorm` sent one plan with **168 bullets** (6 spiral arms x 16 volleys + 4 rings with a gap, 16 st/s, radius 2, 70 st reach). The bot kept seeing planned hits 0.6-1.2 s out, retreated from 24 to 77 st, rolled 0.11 s before the hit (too late for the i-frames) and was hit inside a drawn bullet. The new hit log said no planned shot covered the spot.

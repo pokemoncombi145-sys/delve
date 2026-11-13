@@ -2739,6 +2739,23 @@ do
 		end;
 		return s.fx + s.vx * el0, s.fz + s.vz * el0;
 	end;
+	-- earliest time in [a, b] at which a point moving as (px, pz) + (vx, vz) * (t - t0) is within rr of (x, z).
+	-- Solved exactly (a quadratic), not sampled: a 168-bullet storm asked hundreds of these per frame.
+	local function segHit(px, pz, vx, vz, t0, a, b, x, z, rr)
+		if b < a then return nil; end;
+		local dx, dz = px - x, pz - z;
+		local A = vx * vx + vz * vz;
+		local B = 2 * (vx * dx + vz * dz);
+		local C = dx * dx + dz * dz - rr * rr;
+		if A < 1e-9 then return C <= 0 and a or nil; end;
+		local disc = B * B - 4 * A * C;
+		if disc < 0 then return nil; end;
+		local sq = math.sqrt(disc);
+		local lo = math.max((-B - sq) / (2 * A), a - t0);
+		local hi = math.min((-B + sq) / (2 * A), b - t0);
+		if lo <= hi then return t0 + lo; end;
+		return nil;
+	end;
 	function P.shotHit(s, x, z, T1, T2)
 		if s.visual then return nil; end;
 		if s.arc then
@@ -2748,14 +2765,16 @@ do
 		end;
 		local a = math.max(T1, s.spawnAt);
 		local b = math.min(T2, s.spawnAt + s.life);
+		if b < a then return nil; end;
 		local rr = (s.radius or 2) + (r.fragile and 1 or .6);
-		local t = a;
-		while t <= b + 1e-3 do
-			local sx, sz = P.shotPos(s, t);
-			if sx and (sx - x) ^ 2 + (sz - z) ^ 2 <= rr * rr then return t; end;
-			t = t + .04;
+		if s.back and s.back < s.life then
+			-- out, then back the same way
+			local tb = s.spawnAt + s.back;
+			local h1 = segHit(s.fx, s.fz, s.vx, s.vz, s.spawnAt, a, math.min(b, tb), x, z, rr);
+			if h1 then return h1; end;
+			return segHit(s.fx + s.vx * s.back, s.fz + s.vz * s.back, -s.vx, -s.vz, tb, math.max(a, tb), b, x, z, rr);
 		end;
-		return nil;
+		return segHit(s.fx, s.fz, s.vx, s.vz, s.spawnAt, a, b, x, z, rr);
 	end;
 	function P.shotZone(s, now)
 		if s.arc then
@@ -10064,7 +10083,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.31.1 | Brain",
+		Title = "Delve v5.31.2 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
