@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.10.8 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.11.1 | Brain`).
+
+## v5.11: Open-ground dodging (Arena, map-wide attacks, Glass Soul) (not yet verified in gameplay)
+**What the Arena logs showed:** the Arena has no tile floor, so the escape planner had no map and fell back to judging only a few studs in each direction ("dodge start … dir=-0.71,0.71" over and over with 30-110 attack zones up): it walked into corners.
+
+- **Open-ground search.** When there's no tile map (Arena), or the tile planner finds no safe tile (Delve), it checks points every 4 studs within 36 studs: real floor only (a short ray down must hit ground, not a wall or the void), outside every attack zone, scored by distance, walls/void nearby (corners score worst) and attack zones crossed on the way. It goes to the best one.
+- **Map-wide attacks.** If every spot is covered, it heads for the spot covered by the fewest attacks and relies on the timed roll.
+- **Roll only when needed.** It walks there when walking is fast enough; when it can't get out of the attack in time, it rolls (Q) toward that open ground, only if the landing spot is safe.
+- **One-hit runs (Glass Soul, max health 1):** it rolls out sooner (0.25 s of slack instead of 0.05 s; for attacks without a known timing at 45% instead of 60%).
 
 ## v5.10.8: Forsaken drops, kill-first learning (from the Pirates Cove session; not yet verified in gameplay)
 **What the logs showed:** 22 Pirates Cove wave runs (average wave 139, best 227), 21 deaths, every one a single big hit. 13 were an Elite Powder Gunner shooting from 22-40 studs. The end screen is now read correctly (rocks, XP and materials are in every run). Normal mobs that had killed you once (Powder Gunner, Skeleton Deckhand) were being treated as bosses.

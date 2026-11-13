@@ -4752,11 +4752,19 @@ local function mh(m)
 		for _, w in pairs(Cl) do
 			if not w.rolled and w.zone then
 				local depth, ox, oz = ul(w.zone, G.X, G.Z, Vl);
+				local et = r.escTarget;
+				if depth and ox and et and m - et.t < .4 then
+					local ddx, ddz = et.x - G.X, et.z - G.Z;
+					local dl = math.sqrt(ddx * ddx + ddz * ddz);
+					if dl > 1 then ox, oz = ddx / dl, ddz / dl; end;
+				end;
 				if depth and ox then
 					local walkT = depth / ws;
 					local left = w.hitAt and (w.hitAt - m) or nil;
-					local late = (left and left > 0 and walkT > left - .05)
-						or (not w.hitAt and (tonumber(w.p) or 0) >= .6 and walkT > .35);
+					-- one-hit runs (Glass Soul: max health 1) leave no room for a close call: roll sooner
+					local glass = hum and hum.MaxHealth <= 5;
+					local late = (left and left > 0 and walkT > left - (glass and .25 or .05))
+						or (not w.hitAt and (tonumber(w.p) or 0) >= (glass and .45 or .6) and walkT > (glass and .2 or .35));
 					if late then
 						local rd = math.min(12, tonumber(brain.rollDist) or 6);
 						local ex, ez = G.X + ox * rd, G.Z + oz * rd;
@@ -5260,6 +5268,67 @@ local function navEscape(px, pz, zones, now)
 	local gt = map[goal];
 	return { x = wp.wx, z = wp.wz, gx = gt.wx, gz = gt.wz, t = now, safe = best ~= nil, len = #path };
 end;
+-- OPEN GROUND (maps without a tile floor, like the Arena): look at points around you every 4 studs
+-- (36 st radius), keep the ones that are real floor (a short ray down hits ground, not a wall), outside every
+-- attack zone, and not hemmed in by walls; take the one that's quickest to reach and keeps you off the edges.
+r.floorCache, r.floorCacheN = {}, 0;
+local function openGround(px, pz, now)
+	local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+	if not hrp then return nil; end;
+	local y = hrp.Position.Y;
+	local rp = RaycastParams.new();
+	rp.FilterType = Enum.RaycastFilterType.Exclude;
+	rp.FilterDescendantsInstances = { l.Character };
+	local function floorAt(x, z)
+		local key = math.floor(x / 2) * 100000 + math.floor(z / 2);
+		local c = r.floorCache[key];
+		if c ~= nil then return c; end;
+		local hit = workspace:Raycast(Vector3.new(x, y + 6, z), Vector3.new(0, -14, 0), rp);
+		local ok = hit ~= nil and hit.Position.Y < y - .5 and hit.Position.Y > y - 7;
+		r.floorCacheN = r.floorCacheN + 1;
+		if r.floorCacheN > 6000 then r.floorCache, r.floorCacheN = {}, 0; end;
+		r.floorCache[key] = ok;
+		return ok;
+	end;
+	local best, bestScore, leastBad, leastScore;
+	for gx = -36, 36, 4 do
+		for gz = -36, 36, 4 do
+			local dist = math.sqrt(gx * gx + gz * gz);
+			if dist <= 36 and dist >= 3 then
+				local cx, cz = px + gx, pz + gz;
+				if floorAt(cx, cz) then
+					local hits = 0;
+					for _, z in ipairs(Fl) do
+						if ul(z, cx, cz, Vl + .5) then hits = hits + 1; end;
+					end;
+					-- walls/void around it (corners score worst)
+					local edge = 0;
+					for _, dv in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { .7, .7 }, { -.7, .7 }, { .7, -.7 }, { -.7, -.7 } }) do
+						if not floorAt(cx + dv[1] * 6, cz + dv[2] * 6) then edge = edge + 1; end;
+					end;
+					-- attack zones crossed on the way there
+					local cross = 0;
+					for k = 1, 3 do
+						local f2 = k / 4;
+						if eh(Fl, px + gx * f2, pz + gz * f2) then cross = cross + 1; end;
+					end;
+					local score = dist + edge * 6 + cross * 8;
+					if hits == 0 then
+						if not bestScore or score < bestScore then best, bestScore = { cx, cz }, score; end;
+					else
+						-- whole-map attacks: remember the spot covered by the fewest zones
+						local s2 = score + hits * 25;
+						if not leastScore or s2 < leastScore then leastBad, leastScore = { cx, cz }, s2; end;
+					end;
+				end;
+			end;
+		end;
+	end;
+	local pick = best or leastBad;
+	if not pick then return nil; end;
+	r.escTarget = { x = pick[1], z = pick[2], t = now, covered = best == nil };
+	return { x = pick[1], z = pick[2], t = now, gx = pick[1], gz = pick[2] };
+end;
 local function Nh(m, G, r)
 	if Qh and (r - Qh.t < .25 and not eh(Fl, Qh.gx or Qh.x, Qh.gz or Qh.z)) then
 		if not Qh.gx or (Qh.x - m) ^ 2 + (Qh.z - G) ^ 2 > (nav.cell * .6) ^ 2 then
@@ -5270,6 +5339,14 @@ local function Nh(m, G, r)
 	if esc then
 		Qh = esc;
 		return Qh;
+	end;
+	-- no tile map here (Arena), or the tile planner found nothing: scan the real floor for open ground
+	do
+		local okO, og = pcall(openGround, m, G, r); -- (r is the time inside Nh)
+		if okO and og then
+			Qh = og;
+			return Qh;
+		end;
 	end;
 	local Q = {};
 	for r, e in ipairs(Fl) do
@@ -8445,7 +8522,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.10.8 | Brain",
+		Title = "Delve v5.11.1 | Brain",
 		Folder = "DelveV3",
 		Icon = "pickaxe",
 		Size = UDim2.fromOffset(620, 480),
