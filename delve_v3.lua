@@ -126,6 +126,8 @@ local m = {
 		niceToasts = true,
 		dangerView = false,
 		flankDodge = true,
+		pushForward = true,
+		bossRolls = true,
 		exploreForMobs = true,
 		rangedFirst = true,
 		uiGameFont = true,
@@ -1463,6 +1465,15 @@ local function Ql(m, G)
 	local rng = tonumber(Q.mineRange) or 0;
 	local rngSq = rng > 0 and rng * rng or nil;
 	local minTier = tonumber(Q.minTier) or 1;
+	-- floor timer low: ores up the tunnel (ahead) first, ores behind (toward the collapse) last
+	local fwd;
+	do
+		local tl = tonumber(run.timeLeft);
+		if Q.pushForward ~= false and tl and tl <= (tonumber(Q.dangerTime) or 10) and r.forwardInfo then
+			local okF, fx, fz = pcall(r.forwardInfo, m.X, m.Z);
+			if okF and fx then fwd = { fx, fz }; end;
+		end;
+	end;
 	for pass = 1, 2 do
 		local hasTarget = false;
 		for rockName, r in pairs(D) do
@@ -1475,6 +1486,10 @@ local function Ql(m, G)
 				if wt > 0 then
 					local risk = collapseRisk(r.wx, r.wz);
 					if risk > 0 then wt = wt * (risk >= 1 and .1 or .4); end;
+					if fwd then
+						local pr = (r.wx - m.X) * fwd[1] + (r.wz - m.Z) * fwd[2];
+						if pr < -4 then wt = wt * .25; elseif pr > 4 then wt = wt * 1.6; end;
+					end;
 				end;
 				if wt > 0 and minTier > 1 then
 					local tn = tonumber(tostring(r.kind):match("(%d+)$"));
@@ -4783,10 +4798,23 @@ local function attackRoll(m)
 			brain.rollDist = math.max(2, math.min(12, (tonumber(brain.rollDist) or dist) * .8 + dist * .2));
 		end;
 	end;
-	-- boss fights: keep every roll for defence. Cancel a queued attack roll too (and its lean toward the target).
-	if r.bossFight then
-		if r.offRollAt then r.offRollAt, r.forceDir = nil, nil; f("attack roll cancelled: boss fight"); end;
-		return;
+	-- boss fights: rolling through the boss deals damage, so roll into it while it's quiet: no attack zone
+	-- within 18 st (25 st on a 1-HP run), nothing timed or winding up, no boss attack predicted for 2 s.
+	-- Otherwise keep the roll for defence (and cancel a queued attack roll).
+	local inBoss = r.bossFight ~= nil;
+	if inBoss then
+		local quiet = CFG.bossRolls ~= false and G ~= nil and next(Cl) == nil;
+		if quiet then
+			local qr = r.fragile and 25 or 18;
+			for _, z in ipairs(Fl) do
+				local zr = qr + math.max(z.h1 or 0, z.h2 or 0);
+				if (z.x - G.X) ^ 2 + (z.z - G.Z) ^ 2 < zr * zr then quiet = false; break; end;
+			end;
+		end;
+		if not quiet then
+			if r.offRollAt then r.offRollAt, r.forceDir = nil, nil; f("attack roll cancelled: boss attack nearby"); end;
+			return;
+		end;
 	end;
 	-- just got hit: more hits are likely, so keep the roll for defence (cancel a queued attack roll too)
 	if r.lastHitAt and m - r.lastHitAt < 1 then
@@ -4803,7 +4831,7 @@ local function attackRoll(m)
 			end;
 		end;
 		local pr0 = dangerMem.predict;
-		if pr0 and pr0.at - m < 1.2 and pr0.at - m > -.5 then danger = true; end;
+		if pr0 and pr0.at - m < (inBoss and 2 or 1.2) and pr0.at - m > -.5 then danger = true; end;
 		if danger then
 			r.forceDir = nil;
 			f("attack roll cancelled: an attack is coming");
@@ -4822,7 +4850,7 @@ local function attackRoll(m)
 	if CFG.autoRoll == false or m - (r.lastRoll or -1e9) < yl + .35 or r.offRollAt then return; end;
 	-- a boss attack is predicted soon: keep the roll for it
 	local pr = dangerMem.predict;
-	if pr and pr.at - m < 1.2 and pr.at - m > -.5 then return; end;
+	if pr and pr.at - m < (inBoss and 2 or 1.2) and pr.at - m > -.5 then return; end;
 	-- keep the roll for dodging while an attack is coming
 	if next(Cl) then return; end;
 	for _, mob in pairs(el) do
@@ -4833,6 +4861,11 @@ local function attackRoll(m)
 		local dd = (mob.x - G.X) ^ 2 + (mob.z - G.Z) ^ 2;
 		if not bd or dd < bd then best, bd = mob, dd; end;
 	end;
+	-- in a boss fight, roll at the current target (the boss or its pylon), not just the nearest mob
+	if inBoss and xQ and el[xQ] and el[xQ].x then
+		best = el[xQ];
+		bd = (best.x - G.X) ^ 2 + (best.z - G.Z) ^ 2;
+	end;
 	if not best then return; end;
 	local dist = math.sqrt(bd);
 	local rd = tonumber(brain.rollDist) or 6;
@@ -4840,7 +4873,7 @@ local function attackRoll(m)
 	if dist > math.min(12, rd + 4) then return; end;
 	-- without a roll perk ("Always"), only use it to close the gap
 	local dx, dz = best.x - G.X, best.z - G.Z;
-	if dist < 2.5 then dx, dz = -dz, dx; end; -- already on top of it: roll around it, not through it
+	if dist < 2.5 and not inBoss then dx, dz = -dz, dx; end; -- on top of a mob: roll around it (a boss: straight through)
 	local len = math.sqrt(dx * dx + dz * dz);
 	if len < .01 then return; end;
 	dx, dz = dx / len, dz / len;
@@ -4855,7 +4888,7 @@ local function attackRoll(m)
 	end;
 	r.forceDir = { x = dx, z = dz, untilT = m + .3 };
 	r.offRollAt = m + .06;
-	r.offRollWhy = string.format("%s, %.1f st%s", tostring(best.name), dist, "");
+	r.offRollWhy = string.format("%s, %.1f st%s", tostring(best.name), dist, inBoss and ", through the boss" or "");
 end;
 -- move before a predicted boss attack lands
 local function prePosition(m)
@@ -5315,6 +5348,37 @@ r.routeTo = function(mob, G, reach, ignoreFloor)
 	if r.routeCacheN > 300 then r.routeCache, r.routeCacheN = {}, 0; end;
 	r.routeCache[key] = { t = now, path = path };
 	return path;
+end;
+-- FORWARD (up the tunnel): the floor collapses from behind, so "forward" points from the tiles that
+-- just vanished (or, before the collapse starts, from where we came into the room) to the middle of
+-- what's left. Returns the direction and the farthest safe tile that way.
+r.forwardInfo = function(px, pz)
+	if not navBuild() or not nav.map then return nil; end;
+	local now = d();
+	local cx, cz, n = 0, 0, 0;
+	for _, t in pairs(nav.map) do cx, cz, n = cx + t.wx, cz + t.wz, n + 1; end;
+	if n == 0 then return nil; end;
+	cx, cz = cx / n, cz / n;
+	local bx, bz;
+	local gx, gz, gn = 0, 0, 0;
+	if type(r.gone) == "table" then
+		for _, e in ipairs(r.gone) do
+			if now - e.t < 20 then gx, gz, gn = gx + e.x, gz + e.z, gn + 1; end;
+		end;
+	end;
+	if gn >= 3 then bx, bz = gx / gn, gz / gn;
+	elseif r.floorEntry then bx, bz = r.floorEntry.x, r.floorEntry.z;
+	else return nil; end;
+	local fx, fz = cx - bx, cz - bz;
+	local fl = math.sqrt(fx * fx + fz * fz);
+	if fl < 2 then return nil; end;
+	fx, fz = fx / fl, fz / fl;
+	local best, bp;
+	for _, t in pairs(nav.map) do
+		local pr = (t.wx - px) * fx + (t.wz - pz) * fz;
+		if (not bp or pr > bp) and not eh(Fl, t.wx, t.wz) then best, bp = t, pr; end;
+	end;
+	return fx, fz, best and best.wx, best and best.wz, bp;
 end;
 r.steerDir = function(pos, tx, tz)
 	local now = d();
@@ -6665,6 +6729,32 @@ local function lh(m)
 		end;
 	end;
 	r.chestWalk = false;
+	-- FLOOR TIMER LOW: at the danger time (10 s by default) head up the tunnel, away from the collapse.
+	-- With nothing left to mine it walks to the far end; under 5 s it won't walk back for an ore behind it.
+	do
+		local tlF = tonumber(run.timeLeft);
+		if CFG.pushForward ~= false and WQ ~= "combat" and tlF and tlF <= (tonumber(CFG.dangerTime) or 10) then
+			local okF, fx, fz, gx, gz, gp = pcall(r.forwardInfo, G.X, G.Z);
+			if okF and fx and gx and (gp or 0) > 3 then
+				local behind = u and ((u.X - G.X) * fx + (u.Z - G.Z) * fz) < -4;
+				if not (WQ == "mine" and Q.walk and u) or (behind and tlF <= 5) then
+					if r.why and m - (r.fwdNoteAt or 0) > 4 then
+						r.fwdNoteAt = m;
+						r.why("move", string.format("timer %ds: heading up the tunnel, away from the collapse (%.0f st)", tlF, gp));
+					end;
+					local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
+					local wp;
+					if okRt and path then
+						for _, p0 in ipairs(path) do
+							if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
+						end;
+					end;
+					if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(gx - G.X, gz - G.Z); end;
+					return;
+				end;
+			end;
+		end;
+	end;
 	if WQ == "mine" and ((Q.walk and u)) then
 		local okS, sx, sz = pcall(r.steerDir, G, u.X, u.Z);
 		if okS and sx then SQ(sx, sz); else SQ(u.X - G.X, u.Z - G.Z); end;
@@ -8641,6 +8731,8 @@ end;
 				{ k = "exploreForMobs", t = "toggle", text = "Search the room until all mobs left are found" },
 				{ k = "rangedFirst", t = "toggle", text = "Take out shooters first when they're a threat" },
 				{ k = "attackRoll", t = "combo", text = "Attack rolls (roll into the target)", items = { "On", "Off" } },
+				{ k = "bossRolls", t = "toggle", text = "Roll through bosses when no attack is near" },
+				{ k = "pushForward", t = "toggle", text = "Low timer: head up the tunnel" },
 				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
 		},
@@ -9069,7 +9161,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.27 | Brain",
+		Title = "Delve v5.28 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -9196,7 +9288,9 @@ end;
 		flankDodge = { "Dodges past the enemy (behind or beside it) instead of backing away, so it keeps hitting.", "Recommended: ON." },
 		exploreForMobs = { "When the HUD says more mobs are left than it can see (pylons at the top of a boss room), it walks up the room to find them.", "Recommended: ON." },
 		rangedFirst = { "Kills mobs that shoot or hit from far away first, but only when they're actually firing at you.", "Recommended: ON." },
-		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step). Never during boss fights.", "Recommended: On." },
+		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step).", "Recommended: On." },
+		bossRolls = { "In boss fights, rolls through the boss for extra damage, but only when no attack zone is within 18 st (25 st on a 1-HP run), nothing is winding up and no boss attack is expected for 2 s.", "Recommended: ON." },
+		pushForward = { "When the floor timer reaches the danger time, ores ahead come first and with nothing left to mine it walks up the tunnel, away from the collapse. Under 5 s it won't go back for an ore behind it.", "Recommended: ON." },
 		rollKey = { "The key your game uses for roll / dash.", "Recommended: Q (the game's default). Change only if you rebound it." },
 		cardPick = { "Picks relics, blessings, forks and trader buys by itself using the brain's scores.", "Recommended: ON for AFK. OFF shows the pick but lets you choose." },
 		relicExplore = { "Now and then takes a relic it has never taken, so the brain learns the whole relic index. Never instead of a second chance, luck relic or set completion.", "Recommended: ON." },

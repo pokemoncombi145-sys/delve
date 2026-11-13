@@ -1,6 +1,14 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.27 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.28 | Brain`).
+
+## v5.28: Up the tunnel on a low timer, rolls through bosses (not yet verified in gameplay)
+- **Low floor timer (10 s by default):** it now knows which way is "up the tunnel": away from the tiles that just collapsed (or, before the collapse starts, away from where it came into the room).
+  - Ores ahead get priority (x1.6), ores behind toward the collapse go last (x0.25).
+  - With nothing left to mine it walks to the far end of the floor around hazards instead of standing still.
+  - Under 5 s it won't walk back for an ore behind it.
+  - Toggle: **Low timer: head up the tunnel** (Combat tab).
+- **Rolls through bosses:** attack rolls used to be off for the whole boss fight. Now it rolls at the current target (boss or pylon), straight through the boss, when it's quiet: no attack zone within 18 st (25 st on a 1-HP run), nothing timed or winding up, and no boss attack predicted for 2 s. Toggle: **Roll through bosses when no attack is near**.
 
 ## v5.27: Engages bullet-hell bosses (not yet verified in gameplay)
 - **Bug:** against The Pale Warden it spent 40 s at 40-60 st ("attack zone between us, no way around, holding outside") and never closed in. Route planning treated every projectile's flight lane as a wall, and so did the "zone ahead" check, so with a constant bullet stream there was never a way to the boss.
