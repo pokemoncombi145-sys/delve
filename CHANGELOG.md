@@ -3,6 +3,7 @@
 Newest first. The version is shown in the script window title (`Delve v5.34 | Brain`).
 
 ## v5.34: Keeps its lead on the collapse (not yet verified in gameplay)
+- **Docs (no script change):** the README now has a "Status: what has been checked in play" table: which features real runs have shown working, which haven't been exercised yet, and the known open issues. One finding from that review: the "unexplained" `-269` / `-329` hits in the dodge log come from the run ending (one at the cave-in, another about 17 s later as the next run starts), not from missed attacks.
 - **What ended the runs (13 Nov, 17:25-19:33):** five cave-ins (15,220 m, 11,140 m, 800 m right after a prestige, 12,180 m, 13,140 m) and no deaths in the Delve. In two hours there were 139 "timer Ns: ignoring mobs" lines and not one "walking up the road" line. The bot reacted to the collapse only when it was under 1.5 s from an ore it was mining in place, and chests and fights didn't check it at all.
 - **What the collapse does (from the session data):**
   - the front speeds up with depth (2.65 rows/s at chamber 52, 3.0 at 64); Cursed Path's +30% made it 3.7 rows/s from chamber 66, about the bot's whole pace with mining;

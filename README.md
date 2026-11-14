@@ -10,6 +10,34 @@ Current version: **v5.34** (shown in the window title, `Delve v5.34 | Brain`). E
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
+## Status: what has been checked in play
+Every release passes a syntax and scope check (Lua parse, the 200-local limit, no unknown globals) and the file GitHub serves is compared byte for byte with the installed copies. That proves the script loads and runs; it doesn't prove a new behaviour works. This table says which features real runs have shown working, from the logs of 13 Nov 2026 (Volt, about 25 runs).
+
+| Feature | Since | Seen working in play? | Evidence |
+|---|---|---|---|
+| Auto Farm loop: Play again, relic drafts, traders, shrines, forks, boss gifts | v5.x | **Yes** | 12 runs back to back from 15:00 to 19:33; 31 trader buys; Descend taken at every Worldheart fork per your setting |
+| Game attack plans (MobPlan feed) | v5.30 | **Yes** | listening in every session, 5,400+ planned attacks read |
+| Bullet model (Pale Warden's bullet storm) | v5.31.1 | **Yes** | in the storm the model sat 0.07-0.16 st from the bullets on screen; 10 of 17 checks since v5.33 under 0.55 st (the 7 large ones were next to Cherub / Storm Harpy attacks that fire no bullets: a quirk of the check, not a miss) |
+| Boss fights (Worldheart, Pale Warden) | v5.33 | **Yes** | 5 Worldheart and 7 Pale Warden kills since v5.33 with no death to either; a logged donut was escaped straight away |
+| Walking into the prestige portal after the Unmaker | v5.33 | **Yes** | 18:17: walked 80 st to the portal and prestiged (slow: 30 s) |
+| Recorder (helper with `-Capture`, unattended) | v5.32.1 | **Yes** | saved clips on its own: near misses, a bullet storm and a death, each with matching logs |
+| F2 stop / resume | v5.23 | **Yes** | 24 presses logged, each acted on at once |
+| Prestige detection | v5.16 | **Yes** | every prestige logged |
+| Collapse guard: chest skips, ignoring mobs by the collapse front, ores ahead first | v5.34 | Not yet | new; look for `skipping a chest` and `collapse Ns: ignoring mobs` in `DelveReasoning.txt` |
+| Collapse log (`session:` lines with your gap and the chamber clock) | v5.34 | Not yet | new; in `dodge_log.txt` |
+| Stall watchdog (`DelveStall.txt`, "Delve: stuck" alert) | v5.33 | Not yet | never needed to fire |
+| Walking without a floor map / past the last floor tile | v5.33 | Not yet | never needed |
+| Discord disconnect and Roblox-closed alerts | v5.20 | Not in these logs | no disconnect or crash while farming happened |
+| Index / Stats / Equipment scan every N runs | v3.8 | Not in these logs | the run count since it last ran hadn't been reached |
+| Rare shop (Vesper) portal | v5.30 | Never used | your setting is Prestige; the script never sells there |
+
+Known open issues:
+- **Deep runs end in cave-ins.** The collapse speeds up with depth, and Cursed Path adds 30% (3.7 rows/s from about chamber 66, about the bot's whole pace with mining). v5.34 is the first attempt at keeping the lead; choosing Safe Path at forks would help most.
+- After a prestige the game once reported the collapse as stopped while it kept moving (58 rows), so the bot saw no danger.
+- Two hits 0.4 s apart (the Elder Dragon's double ring in Infernia wave 100) can't both be covered by one roll.
+- The walk into the portal is slow (about 3.5 st/s); it gets there.
+- The `-269` / `-329` hits with "no planned attack" in the dodge log come from the run ending: one at the cave-in and another about 17 s later as the next run starts. They aren't missed attacks.
+
 ## What it does
 - **Auto Farm.** From the hub it clicks GO MINE!, scrolls to your stage (Delve or any mine), selects it and descends. **Play again when a run ends** repeats it.
 - **Mining.** Mines every ore (needed to progress). When the floor starts collapsing, ores near the collapse are mined last and holes in the floor are walked around. Pillars are mapped per floor and routed around. In a Delve it tracks how many seconds the collapse is behind you (the collapse front and the chamber clock): under 12 s it mines ahead first, takes no detours for chests, and only goes back for a missed ore with 3 s to spare.
