@@ -1,6 +1,28 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.38.1 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.39 | Brain`).
+
+## v5.39: Worldheart donut, gates, Vesper's shop ping and pause (not yet verified in gameplay)
+From the night of 13-14 Nov (34 runs, best 57,320 m at Prestige III). 20 of the 34 runs ended at one of four places: the gates of chambers 65 (7 cave-ins) and 55 (6), the Worldheart (4 deaths) and the Pale Warden (2).
+- **Worldheart donut (3 of the 4 Worldheart deaths):**
+  - the donut hits everything out to 171 st except a 27 st circle in the middle;
+  - the game draws it as full discs plus a "safe" disc, and the bot read those drawings as one solid danger circle, so it ran for the room's edge (still inside the donut) and was hit there;
+  - now, with the game's attack plans on, a drawn shape where a planned attack is gets ignored and the plan's own zone is used (with its safe middle and its timing). Drawings away from every plan still count, as before.
+- **Gates (12 of the 34 runs ended in a cave-in at a gate):** the gate's clock ran out with the bot 15-20 rows short of the gate's end.
+  - In a gate, mobs no longer get "boss mechanic" priority: a gate has guardians and their pack, not mechanics. It went for targets 80-270 st away and switched target every 2 s.
+  - It stays on its target unless another mob is 12+ st closer.
+  - **Not solved yet:** why it stood still for the last 10-20 s with no mobs left. New logging for the next review:
+    - a `[gate]` line in `DelveReasoning.txt` every few seconds in a gate: mobs left (the game's count and how many it sees), the clock, the collapse, your row, what it's doing, the forward goal;
+    - the mobs left in the `session:` lines of `dodge_log.txt`;
+    - `DelveRoomDump_gate.txt` when a gate's clock is nearly out (once per run).
+- **Vesper's shop:**
+  - when you arrive at Vesper's shop (through the ????? portal, walked by you or by the bot), Discord pings you and everything pauses like F2. Press F2 to start farming again;
+  - setting: Relics tab > "At Vesper's shop: ping me and pause (like F2)", on by default. The bot never buys or sells there.
+- **Portal fix:**
+  - the shop's ring (`VesperGate`) carries the same tag as the Prestige portal and stands 28 st from it. The bot walks to the nearest tagged portal, so it could have walked into the shop when heading for Prestige. Now it never takes the shop's ring for Prestige;
+  - with "Rare shop (?????)" picked, it walks into the shop's ring instead of to Vesper standing next to it.
+- **Quieter log:** "hits from range" is logged once a minute per mob (it was every 20 s: 1,163 lines in one night).
+- **Brain unchanged:** nothing about learning or the brain file changed in this version. The brain audit (`DelveBrainAudit.md` in the Volt workspace) lists proposals for review first.
 
 ## v5.38.1: Auto-rejoin says why it isn't rejoining
 - **First test (21:51):** the disconnect came while the farm was paused. F2 at 21:48 paused it, and re-running the script at 21:50 kept it off. Auto-rejoin only acts while Auto Farm is on, so it doesn't pull you back in when you've taken control. The log line and notification didn't say so, so it looked like nothing happened.

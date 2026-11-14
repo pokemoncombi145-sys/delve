@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.38.1** (shown in the window title, `Delve v5.38.1 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.39** (shown in the window title, `Delve v5.39 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -19,7 +19,7 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Game attack plans (MobPlan feed) | v5.30 | **Yes** | listening in every session, 5,400+ planned attacks read |
 | Bullet model (Pale Warden's bullet storm) | v5.31.1 | **Yes** | in the storm the model sat 0.07-0.16 st from the bullets on screen; 10 of 17 checks since v5.33 under 0.55 st (the 7 large ones were next to Cherub / Storm Harpy attacks that fire no bullets: a quirk of the check, not a miss) |
 | Boss fights (Worldheart, Pale Warden) | v5.33 | **Yes** | 5 Worldheart and 7 Pale Warden kills since v5.33 with no death to either; a logged donut was escaped straight away |
-| Walking into the prestige portal after the Unmaker | v5.33 | **Yes** | 18:17: walked 80 st to the portal and prestiged (slow: 30 s) |
+| Walking into the prestige portal after the Unmaker | v5.33 | **Yes** | 18:19 on 13 Nov to 05:55 on 14 Nov: 28 prestiges, up to Prestige III (57,320 m) |
 | Recorder (helper with `-Capture`, unattended) | v5.32.1 | **Yes** | saved clips on its own: near misses, a bullet storm and a death, each with matching logs |
 | F2 stop / resume | v5.23 | **Yes** (v5.36) | after a clean rejoin one press = one action (20:42:09); before that, the portal walk ignored it and a re-run left two copies answering each press. Not yet watched through a whole pause in a run |
 | Prestige detection | v5.16 | **Yes** | every prestige logged |
@@ -30,13 +30,18 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Discord disconnect and Roblox-closed alerts | v5.20 | Not in these logs | no disconnect or crash while farming happened |
 | Auto-rejoin after a disconnect | v5.38 | **Yes** | 13 Nov, Wi-Fi cut while farming: disconnect at 21:57:33, first try failed with no internet, second try at 21:58:13 worked, script back through the autoexec at 21:58:35 (loaded once), farming again at 21:58:48 |
 | Index / Stats / Equipment scan every N runs | v3.8 | Not in these logs | the run count since it last ran hadn't been reached |
-| Room dump after the end boss (`DelveRoomDump.txt`) | v5.35 | Not yet | the Seraph run had no dump (only the Unmaker counted); v5.36 counts both |
+| Room dump after the end boss (`DelveRoomDump.txt`) | v5.35 | **Yes** | 20 dumps written after the Unmaker's reward on 13-14 Nov |
 | No fighting at the collapse (danger time) | v5.36 | Not yet | in ore chambers only a mob on top of you is fought near the collapse; gates and bosses are always fought (v5.37) |
 | Learned floors, attack patterns, shooters (relearned in v5.37) | v5.37 | Not yet | cleared once with a backup; watch for fewer "hits from range" lines and no "Learned a dangerous floor" in the hub |
-| Rare shop (Vesper) portal | v5.30 | Never used | your setting is Prestige; the script never sells there |
+| Rare shop (Vesper) portal | v5.30 (v5.39 walks into the shop's ring) | Never used | your setting is Prestige; the script never sells there |
+| Ping and pause (F2) on arrival at Vesper's shop | v5.39 | Not yet | new; look for "arrived at Vesper's shop" in `DelveReasoning.txt` and the "At Vesper's shop" Discord ping |
+| Worldheart donut: plan zones instead of the drawn discs | v5.39 | Not yet | new; it should step into the safe middle, not run for the edge |
+| Gates: nearest mob first, stays on its target, `[gate]` log lines | v5.39 | Not yet | new; look for `[gate]` lines in `DelveReasoning.txt` and `DelveRoomDump_gate.txt` |
 
 Known open issues:
 - **Deep runs end in cave-ins.** The collapse speeds up with depth, and Cursed Path adds 30% (3.7 rows/s from about chamber 66, about the bot's whole pace with mining). v5.34 is the first attempt at keeping the lead; choosing Safe Path at forks would help most.
+- **Gate cave-ins.** 12 of 34 runs on 13-14 Nov caved in at the gates of chambers 55 and 65 (10,020 m and 12,100 m on the depth label): the gate's clock ran out with the bot 15-20 rows short of the gate's end and nothing logged for the last 10-20 s. v5.39 stops the far-target chasing there and logs every gate so the next review can find the rest.
+- **Pale Warden one-shots.** Twice overnight it died at full health about 80 st from the Pale Warden with no planned attack on that spot; not explained yet.
 - After a prestige the game once reported the collapse as stopped while it kept moving (58 rows), so the bot saw no danger.
 - Two hits 0.4 s apart (the Elder Dragon's double ring in Infernia wave 100) can't both be covered by one roll.
 - The walk into the portal is slow (about 3.5 st/s); it gets there.
@@ -46,6 +51,7 @@ Known open issues:
 - **F2** pauses everything (farm, walking, relic picks, Play again, starting a stage) so you can play yourself; F2 again resumes. **F8** saves a recorder clip.
 - **Auto Farm.** From the hub it clicks GO MINE!, scrolls to your stage (Delve or any mine), selects it and descends. **Play again when a run ends** repeats it.
 - **Auto-rejoin.** After a disconnect while farming (lost connection, server shut down), it joins a new Delve server inside the same Roblox, so Volt stays connected; the script loads again and the farm carries on. Never after a kick or ban, or when your account joined from another device; at most 5 rejoins an hour. If Roblox itself closes or crashes, press Launch in Volt (the helper pings you).
+- **Vesper's shop.** When you go through the ????? portal after the Unmaker, Discord pings you on arrival and everything pauses like F2; F2 starts farming again. It never buys or sells there.
 - **Mining.** Mines every ore (needed to progress). When the floor starts collapsing, ores near the collapse are mined last and holes in the floor are walked around. Pillars are mapped per floor and routed around. In a Delve it tracks how many seconds the collapse is behind you (the collapse front and the chamber clock): under 12 s it mines ahead first, takes no detours for chests, and only goes back for a missed ore with 3 s to spare.
 - **Combat.** Fights mobs that are close or threatening, bosses, and floors that need mobs dead ("2 MOBS LEFT"), searching the room for the ones it can't see yet. Below 15 s on the Delve timer it ignores mobs except those right next to you. Mob types that have killed you 3+ times, and shooters or long-reach mobs that are actively a threat, are taken out first.
 - **Dodging.** Rolls out of attack zones (or walks, when walking is fast enough), rolls on a mob's learned wind-up, dodges past an enemy (behind or beside it) to keep hitting it, and keeps the roll for defence in boss fights and right after a hit. Every attack type learns its own safe distance and roll timing. Where there is no tile floor (the Arena) or no safe tile, it scans the real floor for open ground away from walls and rolls there only when walking is too slow; one-hit runs (Glass Soul) roll sooner.
@@ -127,6 +133,7 @@ Nothing is uploaded, and the recorder never affects movement or dodging. Options
 | `DelveStall.txt` | the latest "standing still" report: what it was doing, the floor, the portals it can see, the last decisions |
 | `DelveRejoins.json` | auto-rejoin: when it last rejoined and why (for the "at most 5 an hour" rule) |
 | `DelveRoomDump.txt`, `DelveRoomDump_portal.txt` | what the room after the end boss (Unmaker or Seraph) is made of (floor, portals, parts within 200 st), written after its reward and when a portal walk fails |
+| `DelveRoomDump_gate.txt` | the room when a gate's clock is nearly out (once per run), to see why it didn't get out in time |
 | `DelveGuiDump_*.txt` | layouts of game screens, used to fix the readers |
 
 ## Safety

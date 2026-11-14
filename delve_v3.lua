@@ -162,6 +162,7 @@ local m = {
 		pingDrops = true,
 		pingDisconnect = true,
 		autoRejoin = true,
+		vesperPause = true,
 		webhookUrl = "",
 		webhookDelay = 1.5,
 		dropWebhook = true,
@@ -2347,6 +2348,26 @@ local function Xl(m, G)
 	local Pq = r.plan;
 	local planOn = Pq ~= nil and Pq.hooked == true and CFG.planFeed ~= false;
 	local skipFx, skipSmall = false, false;
+	-- (v5.39) the game's plans are read first. A shape drawn in Hazards where a planned attack is, is that attack's
+	-- drawing (HazardView), so the plan's exact zone (with its safe middle and its timing) is used instead. The
+	-- Worldheart's donut is drawn as full discs plus a "safe" disc, which read as one solid danger circle: the bot
+	-- fled to the room's edge (still inside the 171 st donut) instead of into its safe middle (3 deaths on 2026-11-14).
+	-- Drawn parts away from every plan still count, as before.
+	local planZones, planCl, planCover, skipPlanned = nil, nil, nil, false;
+	if planOn then
+		local okP, pzs, pcl = pcall(Pq.frame, e, m);
+		if okP and pzs then planZones, planCl = pzs, pcl; end;
+		-- covered: today's zones, and every plan still on the books (kept 0.5 s after it ends, while its drawing fades)
+		planCover = {};
+		local function cover(z)
+			if type(z) ~= "table" or not (z.x and z.z) then return; end;
+			local h1, h2 = tonumber(z.h1) or 0, tonumber(z.h2) or 0;
+			local rad = z.circle and h1 or math.sqrt(h1 * h1 + h2 * h2);
+			if rad > 0 then planCover[#planCover + 1] = { z.x, z.z, (rad + 3) ^ 2 }; end;
+		end;
+		for _, z in ipairs(planZones or {}) do cover(z); end;
+		for _, pe in ipairs(type(Pq.hz) == "table" and Pq.hz or {}) do cover(pe.zone); end;
+	end;
 	local function w(G)
 		local r, Q = pcall(function()
 				return G.Size;
@@ -2361,6 +2382,11 @@ local function Xl(m, G)
 		end;
 		if skipFx and G:IsA("Part") and G.Shape == Enum.PartType.Ball then return; end;
 		if skipSmall and math.max(Q.X, Q.Y, Q.Z) < 3 and not (Dl(Q.X) or Dl(Q.Y) or Dl(Q.Z)) then return; end;
+		if skipPlanned and planCover then
+			for _, pc in ipairs(planCover) do
+				if (q.X - pc[1]) ^ 2 + (q.Z - pc[2]) ^ 2 <= pc[3] then return; end;
+			end;
+		end;
 		local l = math.max(Q.X, Q.Y, Q.Z) >= 1.5;
 		local d = Dl(Q.X) or Dl(Q.Y) or Dl(Q.Z);
 		if l or d then
@@ -2412,10 +2438,11 @@ local function Xl(m, G)
 		if r then
 			skipFx = planOn and (G == "Hazards" or (G == "MobTelegraphs" and Pq.shotHooked == true));
 			skipSmall = planOn and G == "Hazards";
+			skipPlanned = planOn and G == "Hazards";
 			q(r);
 		end;
 	end;
-	skipFx, skipSmall = false, false;
+	skipFx, skipSmall, skipPlanned = false, false, false;
 	local l = {};
 	for G, r in ipairs(Ll(e)) do
 		local Q, e = nil, 0;
@@ -2508,10 +2535,9 @@ local function Xl(m, G)
 		end;
 	end;
 	if planOn then
-		local okP, pzs, pcl = pcall(Pq.frame, e, m);
-		if okP and pzs then
-			for _, z in ipairs(pzs) do Fl[#Fl + 1] = z; end;
-			Pq.cl = pcl;
+		if planZones then
+			for _, z in ipairs(planZones) do Fl[#Fl + 1] = z; end;
+			Pq.cl = planCl;
 		else
 			Pq.cl = nil;
 		end;
@@ -6244,6 +6270,17 @@ do
 		local cfg = cm and require(cm);
 		CELL = tonumber(cfg and cfg.Grid and cfg.Grid.CellSize) or CELL;
 	end);
+	-- (v5.39) gates: every 5th chamber that isn't a boss room (30 Pale Warden, 50 Worldheart, 90 Unmaker, ...)
+	function RM.isGate(c)
+		c = tonumber(c);
+		if not c or c < 5 or c % 5 ~= 0 then return false; end;
+		if c == 30 or c == 50 or (c > 50 and (c - 50) % 40 == 0) then return false; end;
+		return true;
+	end;
+	function RM.inGate()
+		if not run.isDelve then return false; end;
+		return RM.isGate(RM.s.chamber) and d() - RM.sAt < 120;
+	end;
 	function RM.onSession(p)
 		if type(p) ~= "table" then return; end;
 		if p.active then
@@ -6252,7 +6289,9 @@ do
 			for k, v in pairs(p) do RM.s[k] = v; end;
 			RM.sAt = d();
 			local sp = tonumber(p.collapseSpeed) or 0;
-			local sig = tostring(p.chamber) .. "|" .. string.format("%.2f", sp) .. "|" .. tostring(p.collapseFrom);
+			-- (v5.39) in a gate a change in the mobs left is logged too
+			local sig = tostring(p.chamber) .. "|" .. string.format("%.2f", sp) .. "|" .. tostring(p.collapseFrom)
+				.. (RM.isGate(p.chamber) and ("|" .. tostring(RM.s.mobsLeft)) or "");
 			local fr;
 			pcall(function() fr = RM.front(); end);
 			local jump = before and fr and p.collapseX and math.abs(fr - before) > 3;
@@ -6272,6 +6311,7 @@ do
 					end;
 					local ce = tonumber(p.chamberEnds);
 					if ce then extra = extra .. string.format("; chamber clock %.0f s", ce - srv); end;
+					if RM.s.mobsLeft ~= nil then extra = extra .. "; mobs left " .. tostring(RM.s.mobsLeft); end;
 				end);
 				f(string.format("session: chamber %s%s%s%s", tostring(p.chamber),
 					p.collapseX and string.format(", collapse front at row %.1f (+%.2f rows/s)", fr or tonumber(p.collapseX) or 0, sp) or "",
@@ -6349,6 +6389,39 @@ do
 			if okN and type(b2) == "number" then goalRow, why = b2, "next chamber's exit"; end;
 		end;
 		return oz - (goalRow - 1) * CELL, goalRow, c, src, myRow, why;
+	end;
+	-- (v5.39) GATE WATCH: 12 of 34 runs on 2026-11-14 caved in at the gates of chambers 55 and 65. The gate's clock ran
+	-- out with the bot 15-20 rows short of the gate's end, and nothing was logged in the last 10-20 s. While in a
+	-- gate: a line when what it sees or does changes (at most every 3 s), and a room dump (DelveRoomDump_gate.txt)
+	-- when the gate's clock is nearly out, once per run. Nothing here changes what it does.
+	function RM.gateNote(G, S, m)
+		if not RM.inGate() then return; end;
+		local s0 = RM.s;
+		local srv = (r.plan and r.plan.srv) and r.plan.srv() or workspace:GetServerTimeNow();
+		local clock = tonumber(s0.chamberEnds) and (tonumber(s0.chamberEnds) - srv) or nil;
+		if clock and clock < 4 and clock > -3 and r.roomDump then
+			local dk = tostring(r.cycleKey and r.cycleKey() or "") .. "|" .. tostring(s0.chamber);
+			if RM.gateDumped ~= dk then
+				RM.gateDumped = dk;
+				task.spawn(function()
+					pcall(r.roomDump, string.format("gate %s clock %.1f s, %s mobs left (game), %d seen, last step: %s", tostring(s0.chamber), clock,
+						tostring(s0.mobsLeft or "?"), #S, tostring(r.lhBranch)), "DelveRoomDump_gate.txt");
+				end);
+			end;
+		end;
+		if not r.why then return; end;
+		local key = tostring(s0.chamber) .. "|" .. tostring(s0.mobsLeft) .. "|" .. tostring(#S) .. "|" .. tostring(WQ) .. "|" .. tostring(r.lhBranch);
+		if m - (RM.gateAt or -1e9) < 3 or (key == RM.gateKey and m - (RM.gateAt or -1e9) < 8) then return; end;
+		RM.gateKey, RM.gateAt = key, m;
+		local oz = RM.originZ();
+		local row = oz and ((oz - G.Z) / CELL + 1) or nil;
+		local fr, spd = RM.front();
+		local okF, fx, _, _, _, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
+		r.why("gate", string.format("gate %s: %s mobs left (game), %d seen; clock %s; %s; you at row %s; doing: %s, %s%s",
+			tostring(s0.chamber), tostring(s0.mobsLeft or "?"), #S, clock and string.format("%.0f s", clock) or "?",
+			(fr and row) and string.format("collapse %.0f rows behind (+%.2f/s)", row - fr, spd or 0) or "collapse ?",
+			row and string.format("%.0f", row) or "?", tostring(WQ), tostring(r.lhBranch or "?"),
+			(okF and fx) and string.format("; forward goal: %s, %.0f st", tostring(fsrc), tonumber(gp) or 0) or "; no forward goal"));
 	end;
 	-- the collapse front in rows, on the game's clock (PlateRenderer._collapseStep)
 	function RM.front()
@@ -7123,6 +7196,9 @@ end;
 function bossStudy.bias(mob)
 	local cur = bossStudy.cur;
 	if not cur or mob.addr == cur.addr then return 0; end;
+	-- (v5.39) a gate has guardians and their pack, not boss mechanics: the "boss mechanic" priority made it run
+	-- 80-270 st across the gate between far targets while the gate's clock ran out. In a gate the nearest mob comes first.
+	if r.room and r.room.inGate and r.room.inGate() then return 0; end;
 	local b = bossStudy.biasRaw(mob, cur);
 	if b > 0 and (tonumber(mob.d) or 0) > 12 then
 		-- go for it if there's a way around the hazards (straight lines across the arena always crossed a burn strip)
@@ -7377,6 +7453,9 @@ do
 		local best;
 		local function consider(o, how)
 			if not (o and o.Parent) then return; end;
+			-- (v5.39) the shop's ring (Plates...VesperGate) carries the PrestigePortal tag too, 28 st from the real one:
+			-- never take it (or Vesper standing next to it) when heading for Prestige
+			if not wantShop and tostring(o.Name):find("Vesper", 1, true) then return; end;
 			local bad = r.portalBad and r.portalBad[o];
 			if bad and now < bad then return; end;
 			local okC, pos = pcall(corePos, o);
@@ -7388,15 +7467,31 @@ do
 				best = { inst = o, pos = pos, how = how, dd = dd, axis = axis };
 			end;
 		end;
-		pcall(function()
-			for _, o in ipairs(CS:GetTagged(tag)) do consider(o, tag .. " tag"); end;
-		end);
-		for o, nm in pairs(r.portalModels or {}) do
-			if nm == tag and o.Parent and o:FindFirstChild("Deep") then consider(o, "a model named " .. nm); end;
+		-- (v5.39) the shop: its own ring first (VesperGate, tagged PrestigePortal). The VesperInGate tag is Vesper
+		-- standing next to it, and walking into Vesper doesn't take you through.
+		local ring;
+		if wantShop then
+			pcall(function()
+				for _, o in ipairs(CS:GetTagged("PrestigePortal")) do
+					if o.Name == "VesperGate" then consider(o, "the shop's ring (VesperGate)"); end;
+				end;
+			end);
+			for o, nm in pairs(r.portalModels or {}) do
+				if nm == "VesperGate" and o.Parent and o:FindFirstChild("Deep") then consider(o, "a model named VesperGate"); end;
+			end;
+			ring = best;
 		end;
-		-- the sign over it: the main signal for the rare shop (garbled label), a fallback for prestige
+		if not ring then
+			pcall(function()
+				for _, o in ipairs(CS:GetTagged(tag)) do consider(o, tag .. " tag"); end;
+			end);
+			for o, nm in pairs(r.portalModels or {}) do
+				if nm == tag and o.Parent and o:FindFirstChild("Deep") then consider(o, "a model named " .. nm); end;
+			end;
+		end;
+		-- the sign over it: the main signal for the rare shop (garbled label) when its ring isn't found, a fallback for prestige
 		local bb = r.portalSigns and (wantShop and r.portalSigns.mystery or r.portalSigns.prestige);
-		if bb and bb.Parent and (wantShop or not best) then
+		if bb and bb.Parent and ((wantShop and not ring) or not best) then
 			local sp;
 			pcall(function()
 				local holder = bb.Adornee or bb.Parent;
@@ -7926,6 +8021,8 @@ local function lh(m)
 		r.orbitShrink = math.max(0, r.orbitShrink - .01);
 	end;
 	r.mobCount = #S;
+	-- (v5.39) gate watch: a log line while in a gate (it doesn't change what it does)
+	if r.room and r.room.gateNote then pcall(r.room.gateNote, G, S, m); end;
 	if #S > 0 and Q.combat and wantFight(S, G, m) then
 		WQ = "combat";
 	elseif Q.mine then
@@ -7968,7 +8065,7 @@ local function lh(m)
 				if (firedAt and d() - firedAt < 8) or (Q.d or 99) <= reach0 + 4 then
 					e = e - 25;
 					r.rangedNote = r.rangedNote or {};
-					if r.why and d() - (r.rangedNote[nmKey] or 0) > 20 then
+					if r.why and d() - (r.rangedNote[nmKey] or 0) > 60 then
 						r.rangedNote[nmKey] = d();
 						r.why("combat", string.format("%s hits from range (%.0f st away): taking it out first", nmKey, Q.d or 0));
 					end;
@@ -7976,7 +8073,8 @@ local function lh(m)
 			end;
 		end;
 		if r.keepTarget == Q.addr then
-			e = e - 4;
+			-- (v5.39) in a gate it stays on its target unless another mob is 12+ st closer (it switched every 2 s)
+			e = e - ((r.room and r.room.inGate and r.room.inGate()) and 12 or 4);
 		end;
 		if not q or e < q then
 			w, q = Q, e;
@@ -8059,7 +8157,7 @@ local function lh(m)
 			end;
 		end;
 		local function checkModel(o)
-			if o.Name == "PrestigePortal" or o.Name == "VesperInGate" then r.portalModels[o] = o.Name; end;
+			if o.Name == "PrestigePortal" or o.Name == "VesperInGate" or o.Name == "VesperGate" then r.portalModels[o] = o.Name; end;
 		end;
 		pcall(function()
 			workspace.DescendantAdded:Connect(function(o)
@@ -8526,7 +8624,7 @@ r.discordPayload = function(embed, kind)
 	local payload = { username = "Delve Brain", embeds = { embed } };
 	local id = tostring(CFG.pingUserId or ""):match("^%s*(%d%d%d%d%d+)%s*$");
 	local want = (kind == "run" and CFG.pingRuns ~= false) or (kind == "drop" and CFG.pingDrops ~= false) or kind == "test"
-		or (kind == "alert" and CFG.pingDisconnect ~= false);
+		or (kind == "alert" and CFG.pingDisconnect ~= false) or (kind == "vesper" and CFG.vesperPause ~= false);
 	if id and want then
 		payload.content = "<@" .. id .. ">";
 		payload.allowed_mentions = { users = { id } };
@@ -8705,6 +8803,68 @@ r.postEmbed = function(embed, kind)
 	});
 	return ok and type(res) == "table" and (tonumber(res.StatusCode) or 999) < 300;
 end;
+-- (v5.39) VESPER'S SHOP: the "?????" portal after the Unmaker (Plates...VesperGate) takes you to workspace.VesperSanctum,
+-- far from the delve. When you arrive there: a Discord ping and everything paused like F2 (press F2 to carry on).
+-- Checked once a second (a distance or two); the bot never buys, sells or talks to Vesper.
+task.spawn(function()
+	local inside, since, notified, awaySince = false, nil, false, nil;
+	local box = { at = -1e9 };
+	while not r.stopped do
+		task.wait(1);
+		pcall(function()
+			if CFG.vesperPause == false then inside, since, notified = false, nil, false; return; end;
+			local sanctum = workspace:FindFirstChild("VesperSanctum");
+			local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+			local here = false;
+			if sanctum and hrp then
+				local pos = hrp.Position;
+				local gate = sanctum:FindFirstChild("ReturnGate");
+				local okA, anchor = pcall(function()
+					if gate and gate:IsA("Model") then return gate:GetPivot().Position; end;
+					if gate and gate:IsA("BasePart") then return gate.Position; end;
+					return sanctum:GetPivot().Position;
+				end);
+				if okA and anchor and (pos - anchor).Magnitude < (inside and 900 or 600) then here = true; end;
+				if not here then
+					-- the sanctum's outline (read every 30 s; ignored if it's huge)
+					if box.model ~= sanctum or os.clock() - box.at > 30 then
+						box.model, box.at = sanctum, os.clock();
+						local okB, cf, size = pcall(function() return sanctum:GetBoundingBox(); end);
+						box.cf, box.size = okB and cf or nil, okB and size or nil;
+					end;
+					if box.cf and box.size and box.size.X < 2500 and box.size.Z < 2500 then
+						local lp = box.cf:PointToObjectSpace(pos);
+						here = math.abs(lp.X) <= box.size.X / 2 + 25 and math.abs(lp.Z) <= box.size.Z / 2 + 25 and math.abs(lp.Y) <= box.size.Y / 2 + 80;
+					end;
+				end;
+			end;
+			inside = here;
+			if not here then
+				-- gone for 5 s (not a blink while the character reloads): the next visit pings again
+				since = nil;
+				awaySince = awaySince or os.clock();
+				if os.clock() - awaySince >= 5 then notified = false; end;
+				return;
+			end;
+			awaySince = nil;
+			since = since or os.clock();
+			-- right away; the pause waits for the window (the F2 code) for up to 15 s after the script loads
+			if notified or not (r.f2Pause or os.clock() - since >= 15) then return; end;
+			notified = true;
+			local paused = r.f2Pause and r.f2Pause() or false;
+			notify("At Vesper's shop: everything is paused (like F2). Press F2 to start farming again.", "Delve");
+			if r.why then
+				r.why("run", string.format("arrived at Vesper's shop%s; Discord ping sent (realm %s)",
+					paused and ": everything paused like F2" or " (already paused)", tostring(r.room and r.room.s and r.room.s.realm)));
+			end;
+			pcall(r.postEmbed, {
+				title = "At Vesper's shop",
+				description = "You went through the ????? portal and arrived at Vesper's shop. Everything is paused (like F2), so you have control. Press F2 to start farming again.",
+				color = 10181046,
+			}, "vesper");
+		end);
+	end;
+end);
 -- DISCONNECT ALERT: Roblox's "Disconnected" / kick prompt pings you on Discord (with the helper running it
 -- keeps retrying until the internet is back). A heartbeat file lets the helper ping you too if Roblox
 -- closes, crashes or freezes while the bot was on.
@@ -10668,6 +10828,7 @@ end;
 				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
 				{ k = "afterBossPath", t = "combo", text = "After Worldheart", items = { "Descend", "Ascend", "Let the brain decide" } },
 				{ k = "afterUnmaker", t = "combo", text = "After the Unmaker (portal)", items = { "Prestige I", "Rare shop (?????)", "Don't enter" } },
+				{ k = "vesperPause", t = "toggle", text = "At Vesper's shop: ping me and pause (like F2)" },
 				{ k = "traderBuy", t = "toggle", text = "Buy from traders" },
 				{ k = "traderMinScore", t = "slider", text = "Trader: buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
 			},
@@ -11084,7 +11245,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.38.1 | Brain",
+		Title = "Delve v5.39 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -11223,6 +11384,7 @@ end;
 		forkPath = { "Safe or Cursed tunnel at forks. Smart picks Cursed when the run is healthy, Safe when it's in trouble.", "Recommended: Smart." },
 		afterBossPath = { "After Worldheart: Descend (more mobs, combat relics first) or Ascend (more rock, mining relics first).", "Recommended: Descend." },
 		afterUnmaker = { "After the Unmaker: walks into the Prestige portal, Vesper's shop portal (it never sells anything there), or neither.", "Recommended: Prestige I." },
+		vesperPause = { "When you arrive at Vesper's shop (through the ????? portal after the Unmaker, walked by you or by the bot), Discord pings you and everything pauses like F2, so you have control there. Press F2 to start farming again. The bot never buys or sells anything at Vesper's.", "Recommended: ON." },
 		traderBuy = { "Buys from the in-run relic trader when a relic is worth it. Uses in-run currency only.", "Recommended: ON." },
 		traderMinScore = { "Only buys from the trader when the relic's score is at least this.", "Recommended: 5." },
 		autoIndexScan = { "Every few runs goes to the hub and reads the T menu (Index, Stats, Equipment) so the brain knows drop odds and your gear.", "Recommended: ON." },
@@ -11610,6 +11772,17 @@ end;
 	end);
 	-- F2: stop everything (farm, Play again, Auto Farm, scan-trip restarts). F2 again: back on as it was.
 	pcall(function()
+		-- (v5.39) the pause itself, also used when you arrive at Vesper's shop; false if it was already paused
+		r.f2Pause = function()
+			if r.f2Paused then return false; end;
+			r.f2Paused = { farm = Q.on == true };
+			r.autoStart = false;
+			r.hubForScan = nil;
+			farmSwitch(false);
+			if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
+			pcall(dQ);
+			return true;
+		end;
 		if r.f2Conn then pcall(function() r.f2Conn:Disconnect(); end); end;
 		r.f2Conn = game:GetService("UserInputService").InputBegan:Connect(function(io)
 			if io.KeyCode == Enum.KeyCode.F8 then
@@ -11626,12 +11799,7 @@ end;
 			if d() - (r.f2At or -1e9) < .4 then return; end;
 			r.f2At = d();
 			if not r.f2Paused then
-				r.f2Paused = { farm = Q.on == true };
-				r.autoStart = false;
-				r.hubForScan = nil;
-				farmSwitch(false);
-				if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
-				pcall(dQ);
+				r.f2Pause();
 				notify("F2: everything paused (farm, walking, relic picks, Play again, stage start). Press F2 again to resume.", "Delve");
 				if r.why then r.why("run", "F2 pressed: farming stopped (everything paused, you have control)"); end;
 			else
