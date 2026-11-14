@@ -161,6 +161,7 @@ local m = {
 		pingRuns = true,
 		pingDrops = true,
 		pingDisconnect = true,
+		autoRejoin = true,
 		webhookUrl = "",
 		webhookDelay = 1.5,
 		dropWebhook = true,
@@ -202,6 +203,7 @@ if G and G.f2Conn then
 	pcall(function() G.f2Conn:Disconnect(); end);
 end;
 env.Delve = { cfg = (G and G.cfg) or m };
+env.DelveLoadedAt = os.time();
 local r = env.Delve;
 local Q = r.cfg;
 local CFG = Q; -- stable alias: much of the original code shadows Q locally
@@ -8710,21 +8712,130 @@ task.spawn(function()
 	local Hs = game:GetService("HttpService");
 	local GS = game:GetService("GuiService");
 	local alerted = false;
+	-- (v5.38) AUTO-REJOIN: after a disconnect while farming it joins a new Delve server inside the same Roblox, so
+	-- Volt (which only connects to a Roblox it launched) stays connected and the script loads again: the autoexec
+	-- does that, and a queued loader covers the case where the autoexec doesn't run after a teleport. Never after a
+	-- kick or ban, or when the account joined from another device (rejoining would throw that session out). A rejoin
+	-- that worked is counted when the script loads again; after 5 in an hour it stops and pings you.
+	local REJOIN_FILE = "DelveRejoins.json";
+	local function rejoinState()
+		local okR, data = pcall(function()
+			if type(isfile) == "function" and isfile(REJOIN_FILE) then return Hs:JSONDecode(readfile(REJOIN_FILE)); end;
+			return nil;
+		end);
+		local st = (okR and type(data) == "table") and data or {};
+		st.times = type(st.times) == "table" and st.times or {};
+		return st;
+	end;
+	local function saveRejoinState(st)
+		pcall(function() if type(writefile) == "function" then writefile(REJOIN_FILE, Hs:JSONEncode(st)); end; end);
+	end;
+	local function recentRejoins(st, now)
+		local keep = {};
+		for _, t0 in ipairs(st.times) do
+			if now - (tonumber(t0) or 0) < 3600 then keep[#keep + 1] = t0; end;
+		end;
+		st.times = keep;
+		return #keep;
+	end;
+	-- back after a rejoin: count it and say so (no ping)
+	pcall(function()
+		local st = rejoinState();
+		local now = os.time();
+		if type(st.pending) == "table" and now - (tonumber(st.pending.at) or 0) < 1800 then
+			recentRejoins(st, now);
+			st.times[#st.times + 1] = now;
+			local why0 = tostring(st.pending.msg or "");
+			st.pending = nil;
+			saveRejoinState(st);
+			if r.why then r.why("run", string.format("back in Delve after a disconnect (rejoin %d in the last hour): %s", #st.times, why0)); end;
+			pcall(r.postEmbed, {
+				title = "Back in Delve",
+				description = string.format("Rejoined by itself after a disconnect (%s). Farming carries on. Rejoins in the last hour: %d of 5.",
+					why0 ~= "" and why0 or "no message", #st.times),
+				color = 3066993,
+			}, "rejoin");
+		elseif st.pending then
+			st.pending = nil;
+			saveRejoinState(st);
+		end;
+	end);
+	-- messages that must not be answered with a rejoin
+	local function rejoinBlockedBy(mu)
+		local rules = {
+			{ "ANOTHER DEVICE", "your account joined from another device" }, { "DIFFERENT DEVICE", "your account joined from another device" },
+			{ "SAME ACCOUNT", "your account joined from another device" }, { "BANNED", "a ban" }, { "EXPLOIT", "the game flagged the client" },
+			{ "UNEXPECTED CLIENT", "the game flagged the client" }, { "KICK", "you were kicked" },
+		};
+		for _, rule in ipairs(rules) do
+			if mu:find(rule[1], 1, true) and not (rule[1] == "KICK" and mu:find("IDLE", 1, true)) then return rule[2]; end;
+		end;
+		return nil;
+	end;
+	local function startRejoin(msg)
+		task.spawn(function()
+			local TS = game:GetService("TeleportService");
+			local failMsg;
+			pcall(function()
+				TS.TeleportInitFailed:Connect(function(_, result, em)
+					failMsg = tostring(result) .. (em ~= nil and (": " .. tostring(em)) or "");
+				end);
+			end);
+			local st = rejoinState();
+			st.pending = { at = os.time(), msg = msg };
+			saveRejoinState(st);
+			-- if the autoexec doesn't run after the teleport, this loads the script 35 s after arriving (only if
+			-- nothing else did by then)
+			pcall(function()
+				local q = (type(queue_on_teleport) == "function" and queue_on_teleport) or (type(queueonteleport) == "function" and queueonteleport) or nil;
+				if q then
+					q([[task.spawn(function() local arrived = os.time(); task.wait(35); local env = (type(getgenv) == "function" and getgenv()) or _G; if (tonumber(env.DelveLoadedAt) or 0) < arrived then loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))(); end; end)]]);
+				end;
+			end);
+			local waits = { 5, 15, 30, 60 };
+			local started = os.time();
+			for attempt = 1, 200 do
+				task.wait(attempt <= #waits and waits[attempt] or 120);
+				if os.time() - started > 3 * 3600 then break; end;
+				failMsg = nil;
+				pcall(function() if r.why then r.why("run", string.format("rejoining Delve (try %d)", attempt)); end; end);
+				-- Delve's start place (the hub): the farm starts the stage from there, as after any join
+				local target = (tostring(game.GameId) == "10766181632") and 132273490031319 or game.PlaceId;
+				pcall(function() TS:Teleport(target, l); end);
+				-- a teleport that works ends this script here (the new server loads it again); otherwise try again
+				task.wait(20);
+				if failMsg then pcall(function() if r.why then r.why("run", "rejoin try failed: " .. failMsg); end; end); end;
+			end;
+			pcall(r.postEmbed, { title = "Delve: auto-rejoin gave up", description = "Couldn't get back in for 3 hours.", color = 15158332 }, "alert");
+		end);
+	end;
 	local function alert(msg)
-		if alerted then return; end;
+		if alerted or r.stopped then return; end;
 		-- you left / closed the game yourself (or a normal teleport): not a disconnect, no ping
 		local mu = tostring(msg or ""):upper();
 		if mu:find("CLIENTINITIATED", 1, true) or mu:find("CLIENT INITIATED", 1, true) or mu:find("LEFT THE GAME", 1, true) then return; end;
 		alerted = true;
 		msg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "");
-		pcall(function() if r.why then r.why("run", "disconnected: " .. msg); end; end);
-		pcall(function() notify("Disconnected: " .. msg, "Delve"); end);
+		-- (v5.38) rejoin by itself? only while farming, when the message allows it, and at most 5 rejoins an hour
+		local rejoin, notWhy = false, nil;
+		if CFG.autoRejoin ~= false and (CFG.on or r.autoStart) then
+			notWhy = rejoinBlockedBy(mu);
+			if not notWhy then
+				local st = rejoinState();
+				if recentRejoins(st, os.time()) >= 5 then notWhy = "it already rejoined 5 times in the last hour"; else rejoin = true; end;
+			end;
+		end;
+		local tail = rejoin and " (rejoining by itself)" or (notWhy and (" (not rejoining: " .. notWhy .. ")") or "");
+		pcall(function() if r.why then r.why("run", "disconnected: " .. msg .. tail); end; end);
+		pcall(function() notify("Disconnected: " .. msg .. (rejoin and " Rejoining by itself..." or ""), "Delve"); end);
 		local depth = (type(run) == "table" and run.depth) or 0;
 		pcall(r.postEmbed, {
 			title = "Disconnected from Delve",
-			description = (msg ~= "" and msg or "Roblox showed a disconnect prompt.") .. string.format("\nDepth when it happened: %s m", tostring(depth)),
+			description = (msg ~= "" and msg or "Roblox showed a disconnect prompt.") .. string.format("\nDepth when it happened: %s m", tostring(depth))
+				.. (rejoin and "\nRejoining by itself in 5 s." or (notWhy and ("\nNot rejoining: " .. notWhy .. ".") or "")),
 			color = 15158332,
 		}, "alert");
+		if rejoin then startRejoin(msg); end;
 	end;
 	pcall(function()
 		GS.ErrorMessageChanged:Connect(function()
@@ -8748,6 +8859,7 @@ task.spawn(function()
 	end);
 	-- heartbeat for the helper (only while webhooks are set up)
 	while true do
+		if r.stopped then break; end;
 		pcall(function()
 			local url = tostring(CFG.webhookUrl or ""):gsub("^%s+", ""):gsub("%s+$", "");
 			if CFG.webhookOn == true and CFG.pingDisconnect ~= false and type(writefile) == "function"
@@ -8757,7 +8869,7 @@ task.spawn(function()
 					t = os.time(), farming = (CFG.on or r.autoStart) and true or false, alerted = alerted, url = url,
 					payload = r.discordPayload({
 						title = "Delve stopped",
-						description = string.format("The script stopped reporting: Roblox closed, crashed or froze. Last depth %s m.", tostring(depth)),
+						description = string.format("The script stopped reporting: Roblox closed, crashed or froze. Last depth %s m. Auto-rejoin can't start Roblox again: press Launch in Volt.", tostring(depth)),
 						color = 15158332,
 					}, "alert"),
 				}));
@@ -10417,6 +10529,7 @@ r.stop = function()
 			return;
 		end;
 		dh = true;
+		r.stopped = true; -- (v5.38) a stopped or replaced copy no longer alerts, rejoins or writes the heartbeat
 		r.disconnectAntiAfk();
 		pcall(function()
 			for _, c in ipairs(type(r.planConns) == "table" and r.planConns or {}) do c:Disconnect(); end;
@@ -10496,6 +10609,7 @@ end;
 				{ k = "autoReplay", t = "toggle", text = "Play again when a run ends" },
 				{ k = "replayDelay", t = "slider", text = "Play again after", min = .5, max = 10, step = .5, suffix = " s" },
 				{ k = "autoStartFarm", t = "toggle", text = "Turn the farm back on after a restart" },
+				{ k = "autoRejoin", t = "toggle", text = "Rejoin after a disconnect" },
 			},
 		},
 		{
@@ -10965,7 +11079,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.37 | Brain",
+		Title = "Delve v5.38 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -11066,6 +11180,7 @@ end;
 		autoStage = { "The one on/off switch (also F2). In a run: mines, fights, dodges and picks relics. In the hub: opens GO MINE!, picks the stage below and starts it; the farm turns on once the run loads.", "Recommended: ON for AFK farming." },
 		stage = { "Which stage Auto Farm starts from the hub.", "Recommended: Delve." },
 		stageOther = { "Type a stage name that isn't in the list. Anything here overrides the Stage list.", "Recommended: leave empty." },
+		autoRejoin = { "After a disconnect while farming (lost connection, server shut down, no response), it joins a new Delve server inside the same Roblox, so Volt stays connected and the script loads again by itself; farming carries on and Discord gets a note. Never when you were kicked or banned, or when your account joined from another device (that would throw your other session out). At most 5 rejoins an hour. If Roblox itself closes or crashes, press Launch in Volt (the helper pings you).", "Recommended: ON for AFK farming." },
 		autoReplay = { "Clicks BACK TO MINE on the end screen so the next run starts by itself (only while Auto Farm is on; F2 pauses it).", "Recommended: ON for AFK farming." },
 		replayDelay = { "Seconds to wait on the end screen before playing again (gives the screenshot time to be taken).", "Recommended: 2.5 s. Don't go below 1.5 s if Discord posts are on." },
 		autoStartFarm = { "Turns the farm back on by itself after you rejoin or re-run the script.", "Recommended: ON." },

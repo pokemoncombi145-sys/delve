@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.37** (shown in the window title, `Delve v5.37 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.38** (shown in the window title, `Delve v5.38 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -28,6 +28,7 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Stall watchdog (`DelveStall.txt`, "Delve: stuck" alert) | v5.33 | Not yet | never needed to fire |
 | Walking without a floor map / past the last floor tile | v5.33 | Not yet | never needed |
 | Discord disconnect and Roblox-closed alerts | v5.20 | Not in these logs | no disconnect or crash while farming happened |
+| Auto-rejoin after a disconnect | v5.38 | Not yet | new; look for "rejoining Delve" and "back in Delve after a disconnect" in `DelveReasoning.txt` and the "Back in Delve" Discord note |
 | Index / Stats / Equipment scan every N runs | v3.8 | Not in these logs | the run count since it last ran hadn't been reached |
 | Room dump after the end boss (`DelveRoomDump.txt`) | v5.35 | Not yet | the Seraph run had no dump (only the Unmaker counted); v5.36 counts both |
 | No fighting at the collapse (danger time) | v5.36 | Not yet | in ore chambers only a mob on top of you is fought near the collapse; gates and bosses are always fought (v5.37) |
@@ -44,6 +45,7 @@ Known open issues:
 ## What it does
 - **F2** pauses everything (farm, walking, relic picks, Play again, starting a stage) so you can play yourself; F2 again resumes. **F8** saves a recorder clip.
 - **Auto Farm.** From the hub it clicks GO MINE!, scrolls to your stage (Delve or any mine), selects it and descends. **Play again when a run ends** repeats it.
+- **Auto-rejoin.** After a disconnect while farming (lost connection, server shut down), it joins a new Delve server inside the same Roblox, so Volt stays connected; the script loads again and the farm carries on. Never after a kick or ban, or when your account joined from another device; at most 5 rejoins an hour. If Roblox itself closes or crashes, press Launch in Volt (the helper pings you).
 - **Mining.** Mines every ore (needed to progress). When the floor starts collapsing, ores near the collapse are mined last and holes in the floor are walked around. Pillars are mapped per floor and routed around. In a Delve it tracks how many seconds the collapse is behind you (the collapse front and the chamber clock): under 12 s it mines ahead first, takes no detours for chests, and only goes back for a missed ore with 3 s to spare.
 - **Combat.** Fights mobs that are close or threatening, bosses, and floors that need mobs dead ("2 MOBS LEFT"), searching the room for the ones it can't see yet. Below 15 s on the Delve timer it ignores mobs except those right next to you. Mob types that have killed you 3+ times, and shooters or long-reach mobs that are actively a threat, are taken out first.
 - **Dodging.** Rolls out of attack zones (or walks, when walking is fast enough), rolls on a mob's learned wind-up, dodges past an enemy (behind or beside it) to keep hitting it, and keeps the roll for defence in boss fights and right after a hit. Every attack type learns its own safe distance and roll timing. Where there is no tile floor (the Arena) or no safe tile, it scans the real floor for open ground away from walls and rolls there only when walking is too slow; one-hit runs (Glass Soul) roll sooner.
@@ -123,6 +125,7 @@ Nothing is uploaded, and the recorder never affects movement or dodging. Options
 | `DelveReasoning.txt` | why it fought, mined or picked each relic (older part in `DelveReasoning_old.txt`) |
 | `dodge_log.txt` | every dodge, roll and hit, if "Log dodges to file" is on (older part in `dodge_log_old.txt`) |
 | `DelveStall.txt` | the latest "standing still" report: what it was doing, the floor, the portals it can see, the last decisions |
+| `DelveRejoins.json` | auto-rejoin: when it last rejoined and why (for the "at most 5 an hour" rule) |
 | `DelveRoomDump.txt`, `DelveRoomDump_portal.txt` | what the room after the end boss (Unmaker or Seraph) is made of (floor, portals, parts within 200 st), written after its reward and when a portal walk fails |
 | `DelveGuiDump_*.txt` | layouts of game screens, used to fix the readers |
 

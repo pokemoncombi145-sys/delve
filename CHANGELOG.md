@@ -1,6 +1,24 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.37 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.38 | Brain`).
+
+## v5.38: Auto-rejoin after a disconnect (not yet verified in gameplay)
+- **What it does:** when Roblox shows a disconnect while the farm is on (lost connection, server shut down for an update, no response), the bot joins a new Delve server by itself, inside the same Roblox:
+  - Volt stays connected, because Volt only connects to a Roblox launched from its own Launch button, and this never starts a new Roblox;
+  - your autoexec loads the script in the new server, and the farm turns itself back on and starts the run from the hub, as after any join;
+  - if the autoexec doesn't run after a teleport, a small loader queued before the teleport (`queue_on_teleport`) loads the script 35 s after arriving, only if nothing else did by then.
+- **Discord:**
+  - the disconnect alert says "Rejoining by itself in 5 s" (or why it won't);
+  - once back in, a "Back in Delve" note (no ping) says how many rejoins there were in the last hour.
+- **Retries:** after 5 s, 15 s, 30 s and 60 s, then every 2 minutes, for up to 3 hours (for example while the internet is down). A rejoin is counted when the script loads in the new server; `DelveRejoins.json` keeps the times.
+- **Never rejoins:**
+  - after a kick (unless it's for being idle), a ban, or when the game flagged the client;
+  - when your account joined from another device (rejoining would throw your other session out);
+  - when the farm was off or paused with F2;
+  - after 5 rejoins in one hour; then it stops and pings you.
+- **Not covered:** if Roblox itself closes or crashes, the bot can't start it again (only Volt's Launch button gives Volt the new Roblox). The helper's "Delve stopped" ping now says to press Launch in Volt.
+- **Setting:** Settings > Auto Farm > "Rejoin after a disconnect" (on by default; the "i" explains it).
+- **Also:** a copy of the script that was stopped or replaced no longer sends its own disconnect alert, starts a rejoin or writes the heartbeat file.
 
 ## v5.37: Fixes to what it learned; Auto Farm off stops all walking (not yet verified in gameplay)
 - **F2 after your rejoin (v5.36):** one press at 20:42:09, one log line; the doubled listener is gone. If you ever re-run an *older* version in the same session, rejoin once so only one copy is listening.
