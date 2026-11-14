@@ -106,7 +106,7 @@ local m = {
 		chests = true,
 		centerFarm = false,
 		autoReplay = false,
-		antiAfk = false,
+		antiAfk = true,
 		dodgeLog = false,
 		replayDelay = 2.5,
 		chestRange = 120,
@@ -310,8 +310,10 @@ end;
 --   * background key and walk methods: Auto / Both (they find what works by themselves)
 --   * the game's attack plans, walking up the road and the dodge log: always on
 --   * Vesper's shop: the ping and pause on arrival are always on; "After the Unmaker" picks the portal
+--   * (v5.42) anti-AFK: always on. When Roblox flags you as idle it sends one right-click, which the game doesn't use
 for k, v in pairs({ autoStats = true, autoEquip = true, pickSlot = 1, weaponSlot = 2, useLearned = false, rollKey = "Q",
-	bgKeyMethod = "Auto", bgMoveMethod = "Both", planFeed = true, pushForward = true, dodgeLog = true, vesperPause = true }) do
+	bgKeyMethod = "Auto", bgMoveMethod = "Both", planFeed = true, pushForward = true, dodgeLog = true, vesperPause = true,
+	antiAfk = true }) do
 	Q[k] = v;
 end;
 do
@@ -10814,10 +10816,16 @@ do
 				virtualUser:Button2Up(Vector2.zero, cameraFrame);
 			end);
 			handlingIdle = false;
+			-- (v5.42) always on now, and Roblox flags an AFK farm as idle every couple of minutes: no pop-up each time
 			if ok then
-				notify("Idle input sent.", "Delve Anti-AFK");
-			else
-				notify(tostring(err), "Delve Anti-AFK error");
+				if r.why and os.clock() - (r.afkNoteAt or -1e9) > 1800 then
+					r.afkNoteAt = os.clock();
+					r.why("run", "anti-AFK: Roblox flagged you as idle; sent one right-click so it doesn't kick you");
+				end;
+			elseif not r.afkErrNoted then
+				r.afkErrNoted = true;
+				notify("Anti-AFK couldn't send its idle click: " .. tostring(err), "Delve Anti-AFK error");
+				if r.why then r.why("run", "anti-AFK error: " .. tostring(err)); end;
 			end;
 		end);
 	end;
@@ -10998,7 +11006,6 @@ end;
 				{ k = "mechNotify", t = "toggle", text = "Pop-ups: new relics and mechanics" },
 				{ k = "background", t = "toggle", text = "Background mode (work while tabbed out)" },
 				{ k = "silentAim", t = "toggle", text = "Silent aim (don't move my mouse)" },
-				{ k = "antiAfk", t = "toggle", text = "Anti-AFK" },
 				{ k = "dangerView", t = "toggle", text = "Show what it sees (danger map)" },
 			},
 		},
@@ -11369,7 +11376,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.41 | Brain",
+		Title = "Delve v5.42 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -11522,7 +11529,6 @@ end;
 		mechNotify = { "Pop-up when it meets a new relic or mechanic.", "Recommended: ON." },
 		background = { "Keeps farming while Roblox is tabbed out (sends input without your real mouse/keyboard).", "Recommended: ON if you use the PC while farming." },
 		silentAim = { "Aims without moving your real mouse cursor.", "Recommended: ON together with Background mode, otherwise OFF." },
-		antiAfk = { "Stops Roblox from kicking you for being idle.", "Recommended: ON for AFK farming." },
 		dangerView = { "Draws the danger zones, safe spots and route it sees on screen.", "Not recommended for farming (costs FPS). Use it to watch what it thinks." },
 	};
 	local function infoText(it)

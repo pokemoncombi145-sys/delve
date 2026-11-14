@@ -1,6 +1,16 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.41 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.42 | Brain`).
+
+## v5.42: Anti-AFK built in (not yet verified in gameplay)
+- **Always on:** the Anti-AFK switch is gone (Settings tab).
+  - When Roblox flags you as idle (no real input for about 2 minutes), it sends one right-click, which the game doesn't use for anything, so Roblox doesn't kick you.
+  - It never fires while you're playing yourself (for example after F2), since then you aren't idle.
+- **Quiet:**
+  - no "Idle input sent." pop-up every couple of minutes;
+  - a line in `DelveReasoning.txt` at most every 30 minutes;
+  - an error, if any, shown once.
+- **Volt's own anti-AFK** (on in its settings) keeps working alongside it; the two don't get in each other's way.
 
 ## v5.41: Fewer settings: one portal choice, automatic mining reach and tools (not yet verified in gameplay)
 - **One portal setting:**
