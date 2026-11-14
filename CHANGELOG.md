@@ -1,6 +1,27 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.39 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.40 | Brain`).
+
+## v5.40: Safe brain saves, smaller brain file (not yet verified in gameplay)
+Proposals A and B from the brain audit (`DelveBrainAudit.md` in the Volt workspace). What it learns and how it decides are unchanged.
+- **A damaged brain file:**
+  - before, a brain file cut off by Roblox closing in the middle of a save loaded as an empty brain without a word, and the next save wrote that empty brain over it;
+  - now the damaged file is set aside as `DelveBackups/BrainUnreadable_*.json` (the newest 3 are kept, and they don't take one of the 8 backup slots);
+  - the last good copy (`DelveBrain_prev.json`) is loaded instead, or else the newest backup that reads;
+  - you're told: a pop-up, a line in `DelveReasoning.txt` and a Discord note (no ping).
+- **Last good copy:** `DelveBrain_prev.json`, written at most every 10 minutes, and only after it reads back correctly.
+- **Shrink guard:**
+  - a save that would make the brain less than half the size of what's on disk is refused. It tells you once, and what it would have written goes to `DelveBrain_rejected.json`;
+  - a migration or "Reset everything the brain learned" can still shrink it.
+- **Values that aren't numbers:** a NaN or infinity would make the whole file unreadable. It's saved as 0, and logged once.
+- **Fewer writes:**
+  - no full brain save right after every relic pick (89 in a Prestige III run, each in the middle of play). The pick goes out with the next regular save, at most 20 s later;
+  - deaths and run ends still save at once.
+- **Smaller file:**
+  - decimals are cut to 3 places in the file, while the brain in memory keeps full precision;
+  - tested on your brain: 549 KB to 464 KB (15% smaller), no value moved by more than 0.001, and none of its 32,488 text entries changed;
+  - 47 tiny values under 0.001 (sub-millisecond gaps between boss attacks) are saved as 0.
+- **"Save brain now"** says why when it couldn't save.
 
 ## v5.39: Worldheart donut, gates, Vesper's shop ping and pause (not yet verified in gameplay)
 From the night of 13-14 Nov (34 runs, best 57,320 m at Prestige III). 19 of the 34 runs ended at or just past one of four places: the gates of chambers 65 (7 cave-ins) and 55 (5 cave-ins, 1 death), the Worldheart (4 deaths) and the Pale Warden (2).

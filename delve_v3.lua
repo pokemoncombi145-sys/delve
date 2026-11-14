@@ -411,25 +411,81 @@ local brain = {
 };
 do
 	local Http, BRAIN_FILE = game:GetService("HttpService"), brain.file;
-	local okRead, raw = pcall(function()
-		if type(isfile) == "function" and not isfile(BRAIN_FILE) then return nil; end;
-		return type(readfile) == "function" and readfile(BRAIN_FILE) or nil;
-	end);
-	if okRead and type(raw) == "string" and #raw > 2 then
-		local okDec, data = pcall(Http.JSONDecode, Http, raw);
-		if okDec and type(data) == "table" then
-			for k, v in pairs(data) do
-				if type(v) == type(brain[k]) or brain[k] == nil then
-					brain[k] = v;
+	-- (v5.40) SAFE LOAD. A brain file cut off by a crash in the middle of a save used to load as an empty brain
+	-- without a word, and the next save wrote that empty brain over it. Now an unreadable file is set aside
+	-- (DelveBackups/BrainUnreadable_*.json, not one of the 8 backups) and the last good copy (DelveBrain_prev.json,
+	-- checked when it was written) is loaded instead, or else the newest backup that reads; you're told either way.
+	-- readBrain: the decoded table and its text; false + text if the file is there but unreadable; nil if missing.
+	local function readBrain(name)
+		local okR, text = pcall(function()
+			if type(isfile) == "function" and not isfile(name) then return nil; end;
+			return type(readfile) == "function" and readfile(name) or nil;
+		end);
+		if not okR or type(text) ~= "string" then return nil, nil; end;
+		if #text == 0 and type(isfile) ~= "function" then return nil, nil; end;
+		if #text <= 2 then return false, text; end;
+		local okDec, data = pcall(Http.JSONDecode, Http, text);
+		if okDec and type(data) == "table" then return data, text; end;
+		return false, text;
+	end;
+	local data, raw = readBrain(BRAIN_FILE);
+	if data == false then
+		local badSize = #raw >= 1024 and string.format("%d KB", math.floor(#raw / 1024)) or string.format("%d bytes", #raw);
+		pcall(function()
+			if type(makefolder) == "function" and not (type(isfolder) == "function" and isfolder("DelveBackups")) then
+				pcall(makefolder, "DelveBackups");
+			end;
+			writefile(string.format("DelveBackups/BrainUnreadable_%s.json", os.date("%Y%m%d-%H%M%S")), raw);
+			-- only the newest 3 unreadable files are kept
+			if type(listfiles) == "function" and type(delfile) == "function" then
+				local files = {};
+				for _, f in ipairs(listfiles("DelveBackups")) do
+					if tostring(f):find("BrainUnreadable_", 1, true) then files[#files + 1] = tostring(f); end;
+				end;
+				table.sort(files);
+				for k = 1, #files - 3 do pcall(delfile, files[k]); end;
+			end;
+		end);
+		local from;
+		local d2, s2 = readBrain("DelveBrain_prev.json");
+		if d2 then
+			data, raw, from = d2, s2, "the last good copy (DelveBrain_prev.json)";
+		elseif type(listfiles) == "function" then
+			local files = {};
+			pcall(function()
+				for _, f in ipairs(listfiles("DelveBackups")) do
+					if tostring(f):find("DelveBrain_", 1, true) then files[#files + 1] = tostring(f); end;
+				end;
+			end);
+			table.sort(files); -- names start with the date: newest last
+			for k = #files, 1, -1 do
+				local d3, s3 = readBrain(files[k]);
+				if d3 then
+					data, raw, from = d3, s3, "the backup " .. (files[k]:match("[^/\\]+$") or files[k]);
+					break;
 				end;
 			end;
 		end;
+		if from then
+			r.brainLoadNote = string.format("The brain file was damaged (cut off at %s, most likely Roblox closed during a save). Loaded %s instead; the damaged file is in DelveBackups (BrainUnreadable_...).", badSize, from);
+		else
+			data, raw = nil, nil;
+			r.brainLoadNote = string.format("The brain file was damaged (cut off at %s) and no good copy was found, so the brain starts empty. The damaged file is in DelveBackups (BrainUnreadable_...).", badSize);
+		end;
+	end;
+	if type(data) == "table" then
+		for k, v in pairs(data) do
+			if type(v) == type(brain[k]) or brain[k] == nil then
+				brain[k] = v;
+			end;
+		end;
+		r.brainLoadedSize = #raw;
 	end;
 	for _, key in ipairs({ "relics", "cat", "sets", "runs", "mobReach", "windups", "codex", "pairs", "catMode", "threat", "mech", "attacks", "floorHaz" }) do
 		if type(brain[key]) ~= "table" then brain[key] = {}; end;
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
-	if okRead and type(raw) == "string" and #raw > 2 then
+	if type(data) == "table" and type(raw) == "string" then
 		local migrating = (tonumber(brain.learnV) or 0) < 5 or (tonumber(brain.cleanV) or 0) < 3;
 		if migrating or os.time() - (tonumber(brain.lastBackupAt) or 0) > 21600 then
 			if r.brainBackup(migrating and "before-migration" or "auto", raw) then brain.lastBackupAt = os.time(); end;
@@ -491,20 +547,82 @@ do
 		end;
 	end;
 end;
-local brainState = { dirty = false, savedAt = -1e9 };
+-- (v5.40) SAFE SAVE + SMALLER FILE (brain audit of 14 Nov, proposals A and B):
+--   * decimals are cut to 3 places in the file (the brain in memory keeps full precision): about 15% smaller.
+--     Only JSON numbers are touched (after : , or [ and before , ] } or an exponent); two passes, because a
+--     match takes the comma after it, which the next number in a list needs.
+--   * a value that isn't a number (NaN / infinity) would make the whole file unreadable: it's saved as 0.
+--   * a save that would shrink the brain to under half of what's on disk is refused (it tells you once, and
+--     what it would have written goes to DelveBrain_rejected.json), unless a migration or "Reset everything" did it.
+--   * DelveBrain_prev.json: a copy checked by reading it back, at most every 10 minutes; loaded if the main file
+--     is ever unreadable.
+-- Returns true when written, or false and why.
+local brainState = { dirty = false, savedAt = -1e9, prevAt = -1e9, diskSize = r.brainLoadedSize, shrinkOk = r.brainMigrated == true };
 local function saveBrain(force)
 	local now = d();
-	if not force and (not brainState.dirty or now - brainState.savedAt < 15) then return; end;
+	if not force and (not brainState.dirty or now - brainState.savedAt < 15) then return false, "nothing new to save"; end;
 	brainState.dirty, brainState.savedAt = false, now;
-	if type(writefile) ~= "function" then return; end;
+	if type(writefile) ~= "function" then return false, "this executor has no writefile"; end;
 	if type(r.windups) == "table" then
 		for name, dur in pairs(r.windups) do brain.windups[tostring(name)] = dur; end;
 	end;
-	pcall(function() writefile("DelveBrain.json", game:GetService("HttpService"):JSONEncode(brain)); end);
+	local Http = game:GetService("HttpService");
+	local okE, json = pcall(Http.JSONEncode, Http, brain);
+	if not okE or type(json) ~= "string" or #json < 3 then
+		if r.why and not brainState.encodeNoted then
+			brainState.encodeNoted = true;
+			r.why("brain", "brain not saved: it couldn't be written as JSON (" .. tostring(json) .. "); the file on disk is unchanged");
+		end;
+		return false, "it couldn't be written as JSON";
+	end;
+	for _ = 1, 2 do json = json:gsub("([:,%[]%-?%d+%.%d%d%d)%d+([eE,%]}])", "%1%2"); end;
+	if json:find("[:,%[]%-?[iI][nN][fF]") or json:find("[:,%[]%-?[nN][aA][nN]") or json:find("[:,%[]%-?%d%.#") then
+		local n1, n2, n3;
+		json, n1 = json:gsub("([:,%[])%-?[iI][nN][fF][%a]*([,%]}])", "%10%2");
+		json, n2 = json:gsub("([:,%[])%-?[nN][aA][nN][%w%(%)]*([,%]}])", "%10%2");
+		json, n3 = json:gsub("([:,%[])%-?%d%.#%u+%d*([,%]}])", "%10%2");
+		if n1 + n2 + n3 > 0 and r.why and not brainState.nanNoted then
+			brainState.nanNoted = true;
+			r.why("brain", "a learned value wasn't a number (NaN or infinity): saved as 0 so the file stays readable");
+		end;
+	end;
+	local disk = tonumber(brainState.diskSize);
+	if disk and #json < disk * .5 and not brainState.shrinkOk then
+		local msg = string.format("Brain not saved: it would shrink from %d KB to %d KB. The brain on disk is kept; what it would have written is in DelveBrain_rejected.json.",
+			math.floor(disk / 1024), math.floor(#json / 1024));
+		if not brainState.refusedNoted then
+			brainState.refusedNoted = true;
+			pcall(writefile, "DelveBrain_rejected.json", json);
+			notify(msg, "Delve brain");
+			if r.why then r.why("brain", msg); end;
+		end;
+		-- try again in 5 minutes (sooner on a forced save: a death, a run's end, the Save button)
+		brainState.dirty, brainState.savedAt = true, now + 285;
+		return false, msg;
+	end;
+	if not pcall(writefile, "DelveBrain.json", json) then return false, "writing DelveBrain.json failed"; end;
+	brainState.diskSize, brainState.shrinkOk = #json, false;
+	if now - brainState.prevAt >= 600 then
+		brainState.prevAt = now;
+		if pcall(Http.JSONDecode, Http, json) then pcall(writefile, "DelveBrain_prev.json", json); end;
+	end;
+	return true;
 end;
 local function markBrain() brainState.dirty = true; end;
 -- (v5.37) a migrated brain is written on the next save, so the old file isn't migrated (and backed up) again
 if r.brainMigrated then markBrain(); end;
+-- (v5.40) a damaged brain file: say so once the window is up (log, pop-up, Discord without a ping)
+if r.brainLoadNote then
+	if r.why then pcall(r.why, "brain", r.brainLoadNote); end;
+	task.spawn(function()
+		for _ = 1, 40 do
+			if uiNotify then break; end;
+			task.wait(1);
+		end;
+		notify(r.brainLoadNote, "Delve brain");
+		if r.postEmbed then pcall(r.postEmbed, { title = "Delve: the brain file was damaged", description = r.brainLoadNote, color = 15105570 }, "brain"); end;
+	end);
+end;
 r.brain = brain;
 -- current run, used to judge how good the relics picked during it were
 local run = { active = false, relics = {}, depth = 0, wave = 0, died = false, hits = 0, combatT = 0, mineT = 0 };
@@ -4390,8 +4508,9 @@ local relicAPI = (function()
 				notify(string.format("Noted: you picked %s over my choice %s. I'll weigh that next time.", picked.name, draft.choice.name), "Delve brain");
 			end;
 		end;
+		-- (v5.40) saved with the next regular save (at most 20 s later), not with a full save right after every
+		-- pick: a Prestige III run has 89 picks, each was a full brain write in the middle of play
 		markBrain();
-		saveBrain(true);
 		draft = nil;
 	end;
 	local function sigOf(cards)
@@ -11245,7 +11364,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.39 | Brain",
+		Title = "Delve v5.40 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -11633,8 +11752,9 @@ end;
 			tab:Button({
 				Title = "Save brain now",
 				Callback = function()
-					saveBrain(true);
-					notify(type(writefile) == "function" and "Saved to DelveBrain.json" or "This executor has no writefile; learning lasts until you rejoin.", "Delve brain");
+					local okS, why = saveBrain(true);
+					notify(okS and "Saved to DelveBrain.json"
+						or (type(writefile) ~= "function" and "This executor has no writefile; learning lasts until you rejoin." or ("Not saved: " .. tostring(why))), "Delve brain");
 				end,
 			});
 			tab:Button({
@@ -11644,6 +11764,7 @@ end;
 					brain.relics, brain.cat, brain.sets, brain.runs, brain.mobReach = {}, {}, {}, {}, {};
 					brain.dodge = { extra = 0, leadAdj = 0, hits = 0, dodges = 0 };
 					if r.sync then r.sync(); end;
+					brainState.shrinkOk = true; -- (v5.40) a reset may make the file much smaller
 					saveBrain(true);
 					notify("Brain reset.", "Delve brain");
 				end,

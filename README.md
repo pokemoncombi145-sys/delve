@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.39** (shown in the window title, `Delve v5.39 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.40** (shown in the window title, `Delve v5.40 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -37,6 +37,8 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Ping and pause (F2) on arrival at Vesper's shop | v5.39 | Not yet | new; look for "arrived at Vesper's shop" in `DelveReasoning.txt` and the "At Vesper's shop" Discord ping |
 | Worldheart donut: plan zones instead of the drawn discs | v5.39 | Not yet | new; it should step into the safe middle, not run for the edge |
 | Gates: nearest mob first, stays on its target, `[gate]` log lines | v5.39 | Not yet | new; look for `[gate]` lines in `DelveReasoning.txt` and `DelveRoomDump_gate.txt` |
+| Safe brain saves: damaged-file recovery, last good copy, shrink guard | v5.40 | Not yet | new; `DelveBrain_prev.json` should appear in the workspace after the first save |
+| Brain file decimals cut to 3 places | v5.40 | Not yet | tested on your brain file (549 KB to 464 KB, nothing moved by more than 0.001); `DelveBrain.json` should be about 464 KB after the first save |
 
 Known open issues:
 - **Deep runs end in cave-ins.** The collapse speeds up with depth, and Cursed Path adds 30% (3.7 rows/s from about chamber 66, about the bot's whole pace with mining). v5.34 is the first attempt at keeping the lead; choosing Safe Path at forks would help most.
@@ -69,7 +71,7 @@ Known open issues:
 - **Never stands still for long.** If it hasn't moved and nothing has changed for 25 s while farming a Delve, it writes down what it was doing (`DelveReasoning.txt`, `DelveStall.txt`), skips the ores there and walks on; still stuck after 3 minutes, one Discord alert.
 - **Discord.** A Run Complete post with the end-screen screenshot and real stats, alerts with a screenshot for Mythic-or-higher drops (including Forsaken and Eternal), and an optional ping.
 - **Learning curve.** A graph window (Brain tab) for Delve and Mines separately: the last 100 runs, a 10-run average, and the last 50 runs against the 50 before.
-- **Autosave.** Settings and everything learned are saved and restored; the brain file is backed up automatically.
+- **Autosave.** Settings and everything learned are saved and restored. The brain file is backed up automatically, a checked last good copy is kept, and a damaged brain file is set aside and replaced by that copy (you're told).
 
 ## Tabs
 | Tab | What's there |
@@ -123,7 +125,9 @@ Nothing is uploaded, and the recorder never affects movement or dodging. Options
 |---|---|
 | `DelveSettings.json` | your settings |
 | `DelveBrain.json` | everything learned: relics, codex, attacks, bosses, mobs, Index, gear |
-| `DelveBackups/` | the newest 8 copies of the brain file (before resets and migrations, and every 6 h) |
+| `DelveBrain_prev.json` | the last good copy of the brain (read back before it's written, at most every 10 minutes), loaded if `DelveBrain.json` is ever damaged |
+| `DelveBrain_rejected.json` | only if a save was refused because it would have shrunk the brain to under half: what it would have written |
+| `DelveBackups/` | the newest 8 copies of the brain file (before resets and migrations, and every 6 h); damaged brain files set aside as `BrainUnreadable_*.json` (the newest 3) |
 | `DelveRuns.jsonl` | one line per run (depth or wave, deaths, hits, rocks, XP, relics) |
 | `DelveDeaths.jsonl` | the last 5 seconds before each death |
 | `DelveDrops.jsonl` | one line per rare drop |
