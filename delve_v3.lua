@@ -4480,7 +4480,14 @@ local relicAPI = (function()
 			elseif draft.trader then head = choice and ("trader: buy " .. choice.name) or "trader: nothing worth buying, walk on by";
 			else head = "pick " .. (choice and choice.name or "?") .. (draft.explored and (" (" .. tostring(draft.explored) .. ")") or " (highest score)"); end;
 			r.why("relic", string.format("%s | %s", tostring(draft.room or "draft"), head));
-			if tostring(draft.room or ""):upper():find("UNMAKER", 1, true) and r.cycleKey then r.unmakerDownKey = r.cycleKey(); end;
+			if tostring(draft.room or ""):upper():find("UNMAKER", 1, true) and r.cycleKey then
+				r.unmakerDownKey = r.cycleKey();
+				-- (v5.35) what the room after the Unmaker is made of, once per cycle
+				if r.roomDump and r.roomDumpKey ~= r.unmakerDownKey then
+					r.roomDumpKey = r.unmakerDownKey;
+					task.delay(3, function() pcall(r.roomDump, "3 s after the Unmaker's Tithe", "DelveRoomDump.txt"); end);
+				end;
+			end;
 			for _, ln in ipairs(lines) do r.why("relic", "   " .. ln); end;
 		end;
 		if Q.relicNotify ~= false and draft.fork and choice then
@@ -7349,6 +7356,10 @@ do
 		if m - st.bestAt > 25 then
 			ignorePortal(tg.inst, m);
 			if r.why then r.why("move", string.format("not getting closer to the %s portal (%.0f st away for 25 s): leaving it for a minute", name, tg.dist)); end;
+			if r.roomDump and m - (r.portalDumpAt or -1e9) > 60 then
+				r.portalDumpAt = m;
+				task.spawn(function() pcall(r.roomDump, "portal walk: not getting closer", "DelveRoomDump_portal.txt"); end);
+			end;
 			return false;
 		end;
 		local tx, tz = tg.pos.X, tg.pos.Z;
@@ -7359,6 +7370,10 @@ do
 			if held > 15 then
 				ignorePortal(tg.inst, m);
 				if r.why then r.why("move", string.format("the %s portal didn't take me in after 15 s at it: leaving it for a minute", name)); end;
+				if r.roomDump and m - (r.portalDumpAt or -1e9) > 60 then
+					r.portalDumpAt = m;
+					task.spawn(function() pcall(r.roomDump, "portal walk: at the portal, nothing happened", "DelveRoomDump_portal.txt"); end);
+				end;
 				return false;
 			end;
 			if held > 1.5 then
@@ -7555,6 +7570,118 @@ do
 			end;
 		end;
 		return nil;
+	end;
+	-- (v5.35) ROOM DUMP: what the room after the Unmaker is made of: the floor around you (a ray down every
+	-- 8 st out to 64 in 8 directions), both portals with their facing and solid / trigger parts, and every
+	-- part within 200 st (shaft tiles only counted, attack effects skipped). Written 3 s after the Unmaker's
+	-- Tithe (DelveRoomDump.txt, once per cycle) and when a portal walk fails (DelveRoomDump_portal.txt, at
+	-- most once a minute). Read-only; it pauses a frame every 4,000 objects so the game doesn't hitch.
+	r.roomDump = function(why, file)
+		if type(writefile) ~= "function" then return; end;
+		local char = l.Character;
+		local hrp = char and char:FindFirstChild("HumanoidRootPart");
+		if not hrp then return; end;
+		local hum = char:FindFirstChildOfClass("Humanoid");
+		local p0 = hrp.Position;
+		local RANGE = 200;
+		local out = {};
+		local function put(x) out[#out + 1] = x; end;
+		local function v3(v) return string.format("%.1f, %.1f, %.1f", v.X, v.Y, v.Z); end;
+		local function flat(a) return math.sqrt((a.X - p0.X) ^ 2 + (a.Z - p0.Z) ^ 2); end;
+		put(string.format("Delve room dump %s (v5.35): %s", os.date("%Y-%m-%d %H:%M:%S"), tostring(why)));
+		put(string.format("you at %s, walk speed %s, depth %s m, prestige %s, last step: %s", v3(p0), tostring(hum and hum.WalkSpeed),
+			tostring(run.curDepth), tostring(run.prestige), tostring(r.lhBranch)));
+		pcall(function()
+			local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, p0.X, p0.Z);
+			put("forward goal: " .. ((okF and fx) and string.format("%s, %.0f st", tostring(fsrc), tonumber(gp) or 0) or "none"));
+			local okP, tg = pcall(r.portalFind, p0, false);
+			put("portal the bot picks: " .. ((okP and tg) and string.format("%.0f st away (%s), aiming at %s", tg.dist, tg.how, v3(tg.pos)) or "none"));
+		end);
+		local rp = RaycastParams.new();
+		rp.FilterType = Enum.RaycastFilterType.Exclude;
+		rp.FilterDescendantsInstances = { char };
+		put("");
+		put("FLOOR (distance:part@height; none = no floor there)");
+		for _, dv in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { .71, .71 }, { -.71, .71 }, { .71, -.71 }, { -.71, -.71 } }) do
+			local row = {};
+			for dist = 0, 64, 8 do
+				local hit = workspace:Raycast(Vector3.new(p0.X + dv[1] * dist, p0.Y + 6, p0.Z + dv[2] * dist), Vector3.new(0, -30, 0), rp);
+				row[#row + 1] = hit and string.format("%d:%s@%.1f", dist, hit.Instance.Name, hit.Position.Y) or (tostring(dist) .. ":none");
+			end;
+			put(string.format("  toward %5.2f, %5.2f   %s", dv[1], dv[2], table.concat(row, "  ")));
+		end;
+		put("");
+		put("PORTALS");
+		for _, tag in ipairs({ "PrestigePortal", "VesperInGate" }) do
+			pcall(function()
+				for _, o in ipairs(CS:GetTagged(tag)) do
+					local okC, pos = pcall(corePos, o);
+					if not okC then pos = nil; end;
+					put(string.format("  %s: %s %s, core at %s, %.0f st away", tag, o.ClassName, o:GetFullName(), pos and v3(pos) or "?", pos and flat(pos) or -1));
+					local at = {};
+					for k, v in pairs(o:GetAttributes()) do at[#at + 1] = tostring(k) .. "=" .. tostring(v); end;
+					if #at > 0 then put("    attributes: " .. table.concat(at, ", ")); end;
+					if o:IsA("Model") then
+						local cf = o:GetPivot();
+						put("    pivot " .. v3(cf.Position) .. ", facing " .. v3(cf.LookVector) .. ", ring axis " .. v3(cf.RightVector));
+					end;
+					for _, c in ipairs(o:GetDescendants()) do
+						if c:IsA("BasePart") and (c.Name == "Deep" or c.Name == "Core" or c.CanCollide or (c.CanTouch and c.Transparency >= 1)) then
+							put(string.format("    part %s at %s, size %s, collide=%s, touch=%s, transparency %.2f", c.Name, v3(c.Position), v3(c.Size),
+								tostring(c.CanCollide), tostring(c.CanTouch), c.Transparency));
+						end;
+					end;
+				end;
+			end);
+		end;
+		local skipF = {};
+		for _, nm in ipairs({ "Hazards", "MobTelegraphs" }) do
+			local f0 = workspace:FindFirstChild(nm);
+			if f0 then skipF[#skipF + 1] = f0; end;
+		end;
+		local tiles, lo, hi = 0, math.huge, -math.huge;
+		local near = {};
+		local okScan, scanErr = pcall(function()
+		for k, o in ipairs(workspace:GetDescendants()) do
+			if k % 4000 == 0 then task.wait(); end;
+			if o:IsA("BasePart") and o.Parent and not o:IsDescendantOf(char) then
+				local skipIt = false;
+				for _, f0 in ipairs(skipF) do if o:IsDescendantOf(f0) then skipIt = true; break; end; end;
+				if not skipIt then
+					local row = tonumber((o.Name:match("^Tile_(%-?%d+)_")));
+					if row then
+						tiles, lo, hi = tiles + 1, math.min(lo, row), math.max(hi, row);
+					else
+						local dd = flat(o.Position);
+						if dd <= RANGE and o.Size.Magnitude > .5 then
+							local tags = CS:GetTags(o);
+							near[#near + 1] = { dd, string.format("  %.0f st  %s (%s) at %s, size %s, collide=%s, transparency %.2f%s", dd, o:GetFullName(), o.ClassName,
+								v3(o.Position), v3(o.Size), tostring(o.CanCollide), o.Transparency, #tags > 0 and (", tags " .. table.concat(tags, "/")) or "") };
+						end;
+					end;
+				end;
+			end;
+		end;
+		end);
+		if not okScan then put("(part scan stopped early: " .. tostring(scanErr) .. ")"); end;
+		table.sort(near, function(a, b) return a[1] < b[1]; end);
+		put("");
+		put(string.format("SHAFT TILES: %d loaded (rows %s to %s)", tiles, tiles > 0 and tostring(lo) or "-", tiles > 0 and tostring(hi) or "-"));
+		put(string.format("PARTS within %d st: %d (nearest first, up to 1500)", RANGE, #near));
+		for k = 1, math.min(#near, 1500) do put(near[k][2]); end;
+		put("");
+		local names = {};
+		for _, c0 in ipairs(workspace:GetChildren()) do names[#names + 1] = c0.Name .. " (" .. c0.ClassName .. ")"; end;
+		put("WORKSPACE: " .. table.concat(names, ", "));
+		local plates = workspace:FindFirstChild("Plates");
+		if plates then
+			for _, c0 in ipairs(plates:GetChildren()) do
+				local okV, pv = pcall(function() return (c0:IsA("Model") and c0:GetPivot().Position) or (c0:IsA("BasePart") and c0.Position) or nil; end);
+				put(string.format("  Plates/%s at %s", c0.Name, (okV and pv) and v3(pv) or "?"));
+			end;
+		end;
+		writefile(file, table.concat(out, "\n"));
+		if r.why then r.why("move", string.format("room dump written to %s (%d lines): %s", file, #out, tostring(why))); end;
 	end;
 	r.stallTick = function(G, S, m)
 		local hum0 = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
@@ -10706,7 +10833,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.34 | Brain",
+		Title = "Delve v5.35 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,

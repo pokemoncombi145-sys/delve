@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.34** (shown in the window title, `Delve v5.34 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.35** (shown in the window title, `Delve v5.35 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -29,6 +29,7 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Walking without a floor map / past the last floor tile | v5.33 | Not yet | never needed |
 | Discord disconnect and Roblox-closed alerts | v5.20 | Not in these logs | no disconnect or crash while farming happened |
 | Index / Stats / Equipment scan every N runs | v3.8 | Not in these logs | the run count since it last ran hadn't been reached |
+| Room dump after the Unmaker (`DelveRoomDump.txt`) | v5.35 | Not yet | new; written 3 s after the Tithe |
 | Rare shop (Vesper) portal | v5.30 | Never used | your setting is Prestige; the script never sells there |
 
 Known open issues:
@@ -119,6 +120,7 @@ Nothing is uploaded, and the recorder never affects movement or dodging. Options
 | `DelveReasoning.txt` | why it fought, mined or picked each relic (older part in `DelveReasoning_old.txt`) |
 | `dodge_log.txt` | every dodge, roll and hit, if "Log dodges to file" is on (older part in `dodge_log_old.txt`) |
 | `DelveStall.txt` | the latest "standing still" report: what it was doing, the floor, the portals it can see, the last decisions |
+| `DelveRoomDump.txt`, `DelveRoomDump_portal.txt` | what the room after the Unmaker is made of (floor, portals, parts within 200 st), written after the Tithe and when a portal walk fails |
 | `DelveGuiDump_*.txt` | layouts of game screens, used to fix the readers |
 
 ## Safety

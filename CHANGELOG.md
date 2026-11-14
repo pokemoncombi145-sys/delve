@@ -1,6 +1,21 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.34 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.35 | Brain`).
+
+## v5.35: Automatic room dump after the Unmaker (not yet verified in gameplay)
+- **Why:** the walk into the portal works but is slow (about 3.5 st/s, 30 s for 80 st), and the room after the Unmaker isn't part of the shaft floor the bot maps. Nothing else ran during that walk. A picture of that room shows what the floor is made of and what's in the way. You farm away from the screen, so the bot takes it itself.
+- **What it writes:**
+  - **3 s after the Unmaker's Tithe**, once per cycle, it writes `DelveRoomDump.txt` to the Volt workspace;
+  - **when a portal walk fails** (not getting closer for 25 s, or nothing happens at the ring for 15 s), it writes `DelveRoomDump_portal.txt`, at most once a minute;
+  - each new dump replaces the last one.
+- **What's in it:**
+  - where you are, your walk speed, the forward goal, and which portal the bot picks and where it aims;
+  - the floor around you: a ray down every 8 st out to 64 st in 8 directions, so you can see where the floor ends and what it's made of;
+  - both portals: their core, facing and ring axis, attributes, and their solid and trigger parts;
+  - every part within 200 st, nearest first: size, whether it blocks you, tags;
+  - how many shaft tiles are loaded (and which rows), plus the top-level world and Plates contents.
+- **Safety:** read-only, it never moves or clicks anything. It pauses a frame every 4,000 objects so the game doesn't hitch, and if the part scan fails, the rest is still written.
+- The same dump can be run by hand: `DelveRoomDump.lua` in Volt's scripts folder (local only, not in this repo).
 
 ## v5.34: Keeps its lead on the collapse (not yet verified in gameplay)
 - **Docs (no script change):** the README now has a "Status: what has been checked in play" table: which features real runs have shown working, which haven't been exercised yet, and the known open issues. One finding from that review: the "unexplained" `-269` / `-329` hits in the dodge log come from the run ending (one at the cave-in, another about 17 s later as the next run starts), not from missed attacks.
