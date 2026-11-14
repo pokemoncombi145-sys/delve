@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.35** (shown in the window title, `Delve v5.35 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.36** (shown in the window title, `Delve v5.36 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -21,7 +21,7 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Boss fights (Worldheart, Pale Warden) | v5.33 | **Yes** | 5 Worldheart and 7 Pale Warden kills since v5.33 with no death to either; a logged donut was escaped straight away |
 | Walking into the prestige portal after the Unmaker | v5.33 | **Yes** | 18:17: walked 80 st to the portal and prestiged (slow: 30 s) |
 | Recorder (helper with `-Capture`, unattended) | v5.32.1 | **Yes** | saved clips on its own: near misses, a bullet storm and a death, each with matching logs |
-| F2 stop / resume | v5.23 | **Yes** | 24 presses logged, each acted on at once |
+| F2 stop / resume | v5.23 | Partly | it stopped the farm, but the portal walk ignored it, and after re-running the script two copies answered each press; v5.36 fixes both (one listener, F2 pauses everything): not yet seen in play |
 | Prestige detection | v5.16 | **Yes** | every prestige logged |
 | Collapse guard: chest skips, ignoring mobs by the collapse front, ores ahead first | v5.34 | Not yet | new; look for `skipping a chest` and `collapse Ns: ignoring mobs` in `DelveReasoning.txt` |
 | Collapse log (`session:` lines with your gap and the chamber clock) | v5.34 | Not yet | new; in `dodge_log.txt` |
@@ -29,7 +29,8 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Walking without a floor map / past the last floor tile | v5.33 | Not yet | never needed |
 | Discord disconnect and Roblox-closed alerts | v5.20 | Not in these logs | no disconnect or crash while farming happened |
 | Index / Stats / Equipment scan every N runs | v3.8 | Not in these logs | the run count since it last ran hadn't been reached |
-| Room dump after the Unmaker (`DelveRoomDump.txt`) | v5.35 | Not yet | new; written 3 s after the Tithe |
+| Room dump after the end boss (`DelveRoomDump.txt`) | v5.35 | Not yet | the Seraph run had no dump (only the Unmaker counted); v5.36 counts both |
+| No fighting at the collapse (danger time) | v5.36 | Not yet | new; look for "the mobs are behind me" in `DelveReasoning.txt` |
 | Rare shop (Vesper) portal | v5.30 | Never used | your setting is Prestige; the script never sells there |
 
 Known open issues:
@@ -40,6 +41,7 @@ Known open issues:
 - The `-269` / `-329` hits with "no planned attack" in the dodge log come from the run ending: one at the cave-in and another about 17 s later as the next run starts. They aren't missed attacks.
 
 ## What it does
+- **F2** pauses everything (farm, walking, relic picks, Play again, starting a stage) so you can play yourself; F2 again resumes. **F8** saves a recorder clip.
 - **Auto Farm.** From the hub it clicks GO MINE!, scrolls to your stage (Delve or any mine), selects it and descends. **Play again when a run ends** repeats it.
 - **Mining.** Mines every ore (needed to progress). When the floor starts collapsing, ores near the collapse are mined last and holes in the floor are walked around. Pillars are mapped per floor and routed around. In a Delve it tracks how many seconds the collapse is behind you (the collapse front and the chamber clock): under 12 s it mines ahead first, takes no detours for chests, and only goes back for a missed ore with 3 s to spare.
 - **Combat.** Fights mobs that are close or threatening, bosses, and floors that need mobs dead ("2 MOBS LEFT"), searching the room for the ones it can't see yet. Below 15 s on the Delve timer it ignores mobs except those right next to you. Mob types that have killed you 3+ times, and shooters or long-reach mobs that are actively a threat, are taken out first.
@@ -120,7 +122,7 @@ Nothing is uploaded, and the recorder never affects movement or dodging. Options
 | `DelveReasoning.txt` | why it fought, mined or picked each relic (older part in `DelveReasoning_old.txt`) |
 | `dodge_log.txt` | every dodge, roll and hit, if "Log dodges to file" is on (older part in `dodge_log_old.txt`) |
 | `DelveStall.txt` | the latest "standing still" report: what it was doing, the floor, the portals it can see, the last decisions |
-| `DelveRoomDump.txt`, `DelveRoomDump_portal.txt` | what the room after the Unmaker is made of (floor, portals, parts within 200 st), written after the Tithe and when a portal walk fails |
+| `DelveRoomDump.txt`, `DelveRoomDump_portal.txt` | what the room after the end boss (Unmaker or Seraph) is made of (floor, portals, parts within 200 st), written after its reward and when a portal walk fails |
 | `DelveGuiDump_*.txt` | layouts of game screens, used to fix the readers |
 
 ## Safety

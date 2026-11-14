@@ -1,6 +1,27 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.35 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.36 | Brain`).
+
+## v5.36: F2 really hands you control; no fighting at the collapse (not yet verified in gameplay)
+- **F2 didn't give you control (13 Nov, 20:14-20:29):**
+  - at 20:14:57 you pressed F2 by the portal and the bot kept walking into it: the portal walk and the "find the mobs left" walk didn't check the pause;
+  - you re-ran the script at 20:16, and the old copy's F2 listener stayed connected (stopping a copy didn't drop it). Both copies share the settings, so from then on every press switched the farm off and straight back on (the log shows "stopped" and "resumed" in the same second at 20:16:43 and four times at 20:29), and a run started at 20:29:36 while you were pressing F2.
+- **Now:**
+  - there's one F2 listener: loading the script drops the previous copy's (older versions included), and stopping the script drops its own;
+  - **F2 pauses everything:** no movement at all (portal walk and mob search included), no relic / blessing / fork / trader picks, no stage start from the hub, no hub scans, no Play again. Keys it was holding are let go once and yours are never touched;
+  - F2 again, or turning Auto Farm on in the menu, ends the pause.
+- **Fighting at the collapse (20:28-20:29, caved in at 15,540 m):**
+  - in the gate room at chamber 80 it chased a Bonewalker 80 st away, and its lead on the collapse went from 42 rows (44 s) to 11 rows (6 s);
+  - in chambers 81-82, with the clock at 5, 2 and 0 s, it stopped to fight mobs 5-7 st away ("too close: clear it, then mine"). That rule ran before the clock check.
+- **Now, inside the danger time** (collapse or chamber clock, your "danger time" setting, 15 s):
+  - only a mob within 3 st is fought as "too close", and at 6 s or less none;
+  - mobs behind you (toward the collapse) and more than 12 st away aren't chased, in boss and gate rooms too (if every mob is back there, it keeps mining and moving on and lets them come);
+  - as targets, mobs behind you go last.
+- **Why there was no room dump:** this cycle ended with the **Seraph** (Ascend path), "THE SERAPH'S GRACE", and the dump only looked for the Unmaker's Tithe. Both end bosses now count (the dump, and the "past the boss" rule from v5.34). The status line now says which boss it was.
+- **Seen in the logs:**
+  - the v5.34 collapse log works and shows the chamber clock is the seconds until the collapse reaches your chamber (16 s / 16 s, 20 / 20, 44 / 45);
+  - your hand-run dump at 20:24 shows a walk speed of 105 st/s (so the collapse, 30 st/s at most, only wins on time spent mining, fighting and on chests), and that the real floor is invisible `Plates.Plate_delve_0.Seg_*` slabs (64 x 8 x 24 st) under the drawn tiles;
+  - the PrestigePortal tag also sits on `VesperSanctum.ReturnGate`, 13,000 st away (ignored: the bot only takes portals within 800 st).
 
 ## v5.35: Automatic room dump after the Unmaker (not yet verified in gameplay)
 - **Why:** the walk into the portal works but is slow (about 3.5 st/s, 30 s for 80 st), and the room after the Unmaker isn't part of the shaft floor the bot maps. Nothing else ran during that walk. A picture of that room shows what the floor is made of and what's in the way. You farm away from the screen, so the bot takes it itself.

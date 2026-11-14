@@ -197,6 +197,10 @@ local G = env.Delve;
 if G and G.stop then
 	pcall(G.stop);
 end;
+-- (v5.36) the previous copy's F2 listener too (older versions didn't drop it when stopped)
+if G and G.f2Conn then
+	pcall(function() G.f2Conn:Disconnect(); end);
+end;
 env.Delve = { cfg = (G and G.cfg) or m };
 local r = env.Delve;
 local Q = r.cfg;
@@ -4480,12 +4484,15 @@ local relicAPI = (function()
 			elseif draft.trader then head = choice and ("trader: buy " .. choice.name) or "trader: nothing worth buying, walk on by";
 			else head = "pick " .. (choice and choice.name or "?") .. (draft.explored and (" (" .. tostring(draft.explored) .. ")") or " (highest score)"); end;
 			r.why("relic", string.format("%s | %s", tostring(draft.room or "draft"), head));
-			if tostring(draft.room or ""):upper():find("UNMAKER", 1, true) and r.cycleKey then
+			local roomU = tostring(draft.room or ""):upper();
+			if (roomU:find("UNMAKER", 1, true) or roomU:find("SERAPH", 1, true)) and r.cycleKey then
+				-- (v5.36) the Seraph (Ascend path) ends a cycle like the Unmaker: "THE SERAPH'S GRACE"
 				r.unmakerDownKey = r.cycleKey();
+				r.finalBoss = roomU:find("SERAPH", 1, true) and "Seraph" or "Unmaker";
 				-- (v5.35) what the room after the Unmaker is made of, once per cycle
 				if r.roomDump and r.roomDumpKey ~= r.unmakerDownKey then
 					r.roomDumpKey = r.unmakerDownKey;
-					task.delay(3, function() pcall(r.roomDump, "3 s after the Unmaker's Tithe", "DelveRoomDump.txt"); end);
+					task.delay(3, function() pcall(r.roomDump, "3 s after the " .. tostring(r.finalBoss) .. "'s reward", "DelveRoomDump.txt"); end);
 				end;
 			end;
 			for _, ln in ipairs(lines) do r.why("relic", "   " .. ln); end;
@@ -4556,7 +4563,7 @@ local relicAPI = (function()
 		draft.lastSeen = now;
 		local ps = posSig(cards);
 		if ps ~= draft.pos then draft.pos, draft.stableSince = ps, now; end;
-		if not Q.cardPick or draft.picked then
+		if not Q.cardPick or draft.picked or r.f2Paused then
 			if MQ.phase == "down" then inp.mouseUp(); end;
 			MQ.phase = "idle";
 			return false;
@@ -7081,6 +7088,7 @@ function bossStudy.biasRaw(mob, cur)
 end;
 local function wantFight(list, pos, now)
 	local pr = CFG.mobPriority or "Smart";
+	r.collapseHurry, r.collapseFwd = nil, nil;
 	if pr == "Always fight" or not CFG.mine then
 		r.fightWhy = "always";
 		return true;
@@ -7115,11 +7123,46 @@ local function wantFight(list, pos, now)
 	-- health of the others is still worth fighting, but it's not a boss: calling it one switched sets, marked
 	-- normal floors (340 m, 880 m) as boss floors and blocked early dodges against everything else.
 	run.bossNow = boss;
-	if boss then r.fightWhy = "boss"; return true; end;
+	-- (v5.36) the collapse / chamber clock first: it decides how much fighting is affordable
+	local dz0 = tonumber(CFG.dangerTime) or 10;
+	local csec, chow = math.huge, "timer";
+	do
+		local tlx = tonumber(run.timeLeft);
+		if tlx and now - (tonumber(run.timeAt) or -1e9) < 2 then csec = tlx; end;
+		if run.isDelve and r.collapseState then
+			local okC, sc, how = pcall(r.collapseState, pos);
+			if okC and sc and sc < csec then csec, chow = sc, how; end;
+		end;
+	end;
+	local hurry = run.isDelve and csec <= dz0; -- (waves: the clock is the session timer, nothing is "behind")
+	if hurry then
+		r.collapseHurry = csec;
+		local okF, fx, fz = pcall(r.forwardInfo, pos.X, pos.Z);
+		if okF and fx then r.collapseFwd = { fx, fz }; end;
+	end;
+	-- in a hurry, a mob behind you (toward the collapse) and over 12 st away isn't worth walking back for
+	local function worthIt(mob)
+		local fw = r.collapseFwd;
+		if not (hurry and fw) then return true; end;
+		local dx, dz = mob.x - pos.X, mob.z - pos.Z;
+		return not ((dx * fw[1] + dz * fw[2]) < -6 and dx * dx + dz * dz > 144);
+	end;
+	local function holdOff(what)
+		for _, mob in ipairs(list) do if worthIt(mob) then return false; end; end;
+		r.fightWhy = nil;
+		r.danger, r.dangerWhy = true, string.format("%s %.0fs, the %s are behind me", chow, csec, what);
+		return true;
+	end;
+	if boss then
+		if hurry and holdOff("mobs") then return false; end;
+		r.fightWhy = "boss";
+		return true;
+	end;
 	-- (the "big mob" rule comes after the timer check: a 42,840 m run caved in chasing big mobs 25-45 st
 	-- away with 5 s left on the timer)
 	if stage:find("MOB") or stage:find("ENEM") or stage:find("FIGHT") or stage:find("HORDE") or stage:find("SLAY") or stage:find("KILL")
 		or stage:find("ELITE") or stage:find("DEFEAT") or stage:find("CLEAR") then
+		if hurry and holdOff("mobs") then return false; end;
 		r.fightWhy = "mob stage";
 		return true;
 	end;
@@ -7131,14 +7174,15 @@ local function wantFight(list, pos, now)
 			if dd < closest then closest = dd; end;
 		end;
 		local tooClose = math.max(5, math.min(9, (tonumber(CFG.fightDist) or 8)));
-		if closest <= tooClose then
+		-- (v5.36) close to the collapse only a mob right on top of you is fought; at 6 s or less none
+		if hurry then tooClose = csec <= 6 and 0 or 3; end;
+		if tooClose > 0 and closest <= tooClose then
 			r.fightWhy = string.format("too close (%.1f st): clear it, then mine", closest);
 			return true;
 		end;
 	end;
 	-- delve floor timer in the danger zone: ignore mobs, every second goes to ores / getting down
 	local tl = tonumber(run.timeLeft);
-	local dz0 = tonumber(CFG.dangerTime) or 10;
 	if tl and tl <= dz0 and now - (tonumber(run.timeAt) or -1e9) < 2 then
 		r.fightWhy = nil;
 		r.danger, r.dangerWhy = true, string.format("timer %ss", tostring(tl));
@@ -7720,6 +7764,14 @@ local function lh(m)
 		Pl();
 		return;
 	end;
+	-- (v5.36) F2: you have control. Nothing moves the character (the portal walk and the mob search ignored
+	-- the pause before); keys it held are let go once, yours are never touched.
+	if r.f2Paused then
+		WQ, L, u, xQ = "idle", nil, nil, nil;
+		r.lhBranch = "paused (F2)";
+		Pl();
+		return;
+	end;
 	B();
 	local e = inp.active();
 	local N = false;
@@ -7843,6 +7895,8 @@ local function lh(m)
 			r.deathBias[nmKey] = db0;
 		end;
 		if db0 > 0 and (Q.d or 99) < 45 then e = e - db0; end;
+		-- (v5.36) close to the collapse: mobs behind you (toward it) go last
+		if r.collapseHurry and r.collapseFwd and ((Q.x - G.X) * r.collapseFwd[1] + (Q.z - G.Z) * r.collapseFwd[2]) < -6 then e = e + 40; end;
 		-- ranged mobs (seen shooting 3+ times, or learned reach 12+ st) go first, only when necessary:
 		-- it fired in the last 8 s, or you're inside its reach. A quiet shooter far away isn't chased.
 		if CFG.rangedFirst ~= false then
@@ -7970,7 +8024,7 @@ local function lh(m)
 				local okT, tg0 = pcall(r.portalFind, G, wantShop);
 				local okF, fx0, fz0, gx0, gz0, gp0, fsrc0 = pcall(r.forwardInfo, G.X, G.Z);
 				if r.why then
-					r.why("move", string.format("past the Unmaker (depth %s m): %s; forward goal %s; after it: %s", tostring(run.curDepth),
+					r.why("move", string.format("past the %s (depth %s m): %s; forward goal %s; after it: %s", tostring(r.finalBoss or "Unmaker"), tostring(run.curDepth),
 						(okT and tg0) and string.format("%s portal %.0f st away (%s)", wantShop and "shop" or "prestige", tg0.dist, tg0.how) or "no portal in sight yet",
 						(okF and fx0) and string.format("%s, %.0f st", tostring(fsrc0), tonumber(gp0) or 0) or "none", tostring(pick)));
 				end;
@@ -9747,7 +9801,7 @@ local indexAPI = (function()
 		local runsSince = (tonumber(brain.runCount) or 0) - (tonumber(brain.runsAtScan) or 0);
 		local due = brain.indexScannedAt == nil or runsSince >= every;
 		if r.hubForScan and inRun() and now - r.hubForScan > 30 then r.hubForScan = nil; end;
-		if due and not busy and not r.launching and CFG.autoIndexScan ~= false and now - startedAt > 10
+		if due and not busy and not r.launching and not r.f2Paused and CFG.autoIndexScan ~= false and now - startedAt > 10
 			and not run.active and not relicAPI.hasDraft() and now - (r.scanTryAt or 0) > 10
 			and not workspace:FindFirstChild("RunEndRoom") then
 			r.scanTryAt = now;
@@ -9757,7 +9811,7 @@ local indexAPI = (function()
 		-- after a scan trip to the hub, the next run starts from here even with Auto Farm off (scan first,
 		-- unless it keeps failing for 90 s)
 		local scanTrip = r.hubForScan and not r.f2Paused and (not (CFG.autoIndexScan ~= false and due) or now - r.hubForScan > 90);
-		if (CFG.autoStage == true or scanTrip) and not busy and not launch.busy and now - startedAt > 10 and not inRun()
+		if (CFG.autoStage == true or scanTrip) and not r.f2Paused and not busy and not launch.busy and now - startedAt > 10 and not inRun()
 			and not (CFG.autoStage == true and r.hubForScan and not scanTrip)
 			and not relicAPI.hasDraft() and now - launch.at > math.min(60, 8 + launch.fails * 6)
 			and now > (launch.lockedUntil or 0) and goMineButton() then
@@ -10291,6 +10345,7 @@ r.stop = function()
 			for _, c in ipairs(type(r.planConns) == "table" and r.planConns or {}) do c:Disconnect(); end;
 			r.planConns = {};
 		end);
+		pcall(function() if r.f2Conn then r.f2Conn:Disconnect(); r.f2Conn = nil; end; end);
 		pcall(function() r.stopBrain(); end);
 		pcall(function() r.stopIndex(); end);
 		pcall(function() relicAPI.finish(); end);
@@ -10833,7 +10888,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.35 | Brain",
+		Title = "Delve v5.36 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -10890,6 +10945,7 @@ end;
 	-- On load it shows what will actually happen: on only if the farm is coming back on by itself.
 	Q.autoStage = r.autoStart and true or false;
 	local function farmSwitch(enabled)
+		if enabled then r.f2Paused = nil; end; -- Auto Farm on (F2 or the menu) ends an F2 pause
 		if not enabled then
 			r.autoStart, r.hubForScan = false, nil;
 			Q.autoStage = false;
@@ -11379,8 +11435,8 @@ end;
 				farmSwitch(false);
 				if farmToggle then pcall(farmToggle.Set, farmToggle, false); end;
 				pcall(dQ);
-				notify("F2: Auto Farm off. Press F2 again to turn it back on.", "Delve");
-				if r.why then r.why("run", "F2 pressed: farming stopped"); end;
+				notify("F2: everything paused (farm, walking, relic picks, Play again, stage start). Press F2 again to resume.", "Delve");
+				if r.why then r.why("run", "F2 pressed: farming stopped (everything paused, you have control)"); end;
 			else
 				r.f2Paused = nil;
 				farmSwitch(true);
