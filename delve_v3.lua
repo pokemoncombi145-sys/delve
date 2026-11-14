@@ -243,9 +243,15 @@ do
 end;
 -- REASONING LOG: why it fought / mined / took a relic. DelveReasoning.txt in the workspace + last 40 in memory
 r.whyLines = {};
+-- (v5.43) a long log is moved to DelveReasoning_old.txt when the script loads (it used to be wiped, which lost a
+-- whole night's log when the script was loaded again before the log was looked at)
 pcall(function()
-	if type(isfile) == "function" and isfile("DelveReasoning.txt") and #readfile("DelveReasoning.txt") > 2000000 then
-		writefile("DelveReasoning.txt", "");
+	if type(isfile) == "function" and isfile("DelveReasoning.txt") then
+		local txt = readfile("DelveReasoning.txt");
+		if #txt > 2000000 then
+			writefile("DelveReasoning_old.txt", txt);
+			writefile("DelveReasoning.txt", "");
+		end;
 	end;
 end);
 r.why = function(kind, text)
@@ -6351,6 +6357,27 @@ r.routeTo = function(mob, G, reach, ignoreFloor)
 	r.routeCache[key] = { t = now, path = path };
 	return path;
 end;
+-- (v5.43) THE NEXT WAYPOINT of a route. A route is kept for 0.5 s, and the old pick ("the first waypoint more than
+-- 2 st away") sent it back to waypoints it had already walked past: on long routes it went back and forth and
+-- moved about a tile per route (a 204 st walk to Vesper's portal took over 24 s at 75 st/s walk speed). Now:
+-- start from the waypoint nearest to you, skip the ones you're already past (beyond them on the way to the next
+-- one) and the ones within 2 st. nil at the end of the route (the caller heads straight for the target).
+r.nextWaypoint = function(path, G)
+	if type(path) ~= "table" or #path == 0 or not G then return nil; end;
+	local px, pz = G.X, G.Z;
+	local i, best = 1, math.huge;
+	for k = 1, #path do
+		local p0 = path[k];
+		local dd = (p0.x - px) ^ 2 + (p0.z - pz) ^ 2;
+		if dd < best then i, best = k, dd; end;
+	end;
+	while i < #path do
+		local a, b = path[i], path[i + 1];
+		if (px - a.x) * (b.x - a.x) + (pz - a.z) * (b.z - a.z) > 0 then i = i + 1; else break; end;
+	end;
+	while i <= #path and (path[i].x - px) ^ 2 + (path[i].z - pz) ^ 2 <= 4 do i = i + 1; end;
+	return path[i];
+end;
 -- ===================================================================================
 -- ROOMS (v5.30). Delve is one straight shaft: its rows run along -Z (Shared/Grid.toWorld for the shaft
 -- plate), chambers follow each other along those rows (Shared/Delve startOf/depthOf/bounds, a gate every
@@ -7741,9 +7768,7 @@ do
 		if m - st.bestAt <= 8 then
 			local okRt, path = pcall(r.routeTo, { addr = "portal" .. name, x = tx, z = tz }, G, 2);
 			if okRt and path then
-				for _, p0 in ipairs(path) do
-					if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
-				end;
+				wp = r.nextWaypoint(path, G);
 			end;
 		end;
 		if wp then
@@ -8377,9 +8402,7 @@ local function lh(m)
 				local okRt, path = pcall(r.routeTo, { addr = "explore", x = goal.x, z = goal.z }, G, 3);
 				local wp;
 				if okRt and path then
-					for _, p0 in ipairs(path) do
-						if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
-					end;
+					wp = r.nextWaypoint(path, G);
 				end;
 				if wp then SQ(wp.x - G.X, wp.z - G.Z); else SQ(goal.x - G.X, goal.z - G.Z); end;
 				r.lhBranch = "looking for the mobs left";
@@ -8424,9 +8447,7 @@ local function lh(m)
 			end;
 			if path and #path > 0 then
 				local wp;
-				for _, p0 in ipairs(path) do
-					if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
-				end;
+				wp = r.nextWaypoint(path, G);
 				if wp then
 					if r.why and (r.routeNoteTo ~= w.addr or m - (r.routeNoteAt or 0) > 10) then
 						r.routeNoteTo, r.routeNoteAt = w.addr, m;
@@ -8615,9 +8636,7 @@ local function lh(m)
 				local okR, cpath = pcall(r.routeTo, { addr = "chest" .. math.floor(m.x) .. "_" .. math.floor(m.z), x = m.x, z = m.z }, G, 1.5);
 				local cwp;
 				if okR and cpath then
-					for _, p0 in ipairs(cpath) do
-						if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then cwp = p0; break; end;
-					end;
+					cwp = r.nextWaypoint(cpath, G);
 				end;
 				if cwp then
 					SQ(cwp.x - G.X, cwp.z - G.Z);
@@ -8684,9 +8703,7 @@ local function lh(m)
 						if nav.map then
 							local okRt, path = pcall(r.routeTo, { addr = "forward", x = gx, z = gz }, G, 3);
 							if okRt and path then
-								for _, p0 in ipairs(path) do
-									if (p0.x - G.X) ^ 2 + (p0.z - G.Z) ^ 2 > 4 then wp = p0; break; end;
-								end;
+								wp = r.nextWaypoint(path, G);
 							end;
 						end;
 						if wp then
@@ -8957,6 +8974,12 @@ task.spawn(function()
 			local sanctum = workspace:FindFirstChild("VesperSanctum");
 			local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
 			local here = false;
+			-- (v5.43) the game marks you while you're in the shop (player attribute InSanctum); without it, where you stand
+			local okA0, inSanctum = pcall(function() return l:GetAttribute("InSanctum"); end);
+			if okA0 and type(inSanctum) == "boolean" then
+				here = inSanctum;
+				sanctum = nil;
+			end;
 			if sanctum and hrp then
 				local pos = hrp.Position;
 				local gate = sanctum:FindFirstChild("ReturnGate");
@@ -11376,7 +11399,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.42 | Brain",
+		Title = "Delve v5.43 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,

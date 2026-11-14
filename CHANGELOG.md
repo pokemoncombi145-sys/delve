@@ -1,6 +1,19 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.42 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.43 | Brain`).
+
+## v5.43: Route walking fixed (portals, the road, chests, far mobs), Vesper detection, log kept at load (not yet verified in gameplay)
+- **Walking along a route went back and forth:**
+  - every walk that follows a route used the same rule: into a portal, up the road to a chamber's exit, to a chest, to a far mob, and searching a room for the mobs left;
+  - the rule was "the first waypoint more than 2 st away", on a route kept for half a second. Once it walked past a waypoint, that waypoint was behind it, so it turned back to it. It moved about one tile per route;
+  - seen on 14 Nov: after the Seraph, the walk to Vesper's portal went from 204 st to 69 st in 24 s (it walks 75 st/s), and you took over;
+  - a simulation of that walk: 55 s with the old rule, 2.5 s with the new one (around a pillar: 27 s against 1.7 s);
+  - very likely part of the gate cave-ins too: both the walk to the gate's end after its mobs died and the long routes to far mobs are route walks;
+  - now it starts from the waypoint nearest to you and skips the ones it's already past.
+- **Vesper's shop:**
+  - arrival is read from the game's own marker (`InSanctum` on your player, seen in your dump inside the shop), with the distance check as the fallback;
+  - the arrival ping worked on 14 Nov at 07:41:21, after you had walked in by hand.
+- **Reasoning log:** a log over 2 MB used to be wiped when the script loaded, and the reload on the morning of 14 Nov wiped the night's 3.4 MB log. Now it's moved to `DelveReasoning_old.txt`.
 
 ## v5.42: Anti-AFK built in (not yet verified in gameplay)
 - **Always on:** the Anti-AFK switch is gone (Settings tab).

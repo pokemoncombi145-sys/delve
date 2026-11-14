@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.42** (shown in the window title, `Delve v5.42 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.43** (shown in the window title, `Delve v5.43 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -33,13 +33,14 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Room dump after the end boss (`DelveRoomDump.txt`) | v5.35 | **Yes** | 20 dumps written after the Unmaker's reward on 13-14 Nov |
 | No fighting at the collapse (danger time) | v5.36 | Not yet | in ore chambers only a mob on top of you is fought near the collapse; gates and bosses are always fought (v5.37) |
 | Learned floors, attack patterns, shooters (relearned in v5.37) | v5.37 | Not yet | cleared once with a backup; watch for fewer "hits from range" lines and no "Learned a dangerous floor" in the hub |
-| Rare shop (Vesper) portal | v5.30 (v5.39 walks into the shop's ring) | Never used | your setting is Prestige; the script never sells there |
-| Ping and pause (F2) on arrival at Vesper's shop | v5.39 | Not yet | new; look for "arrived at Vesper's shop" in `DelveReasoning.txt` and the "At Vesper's shop" Discord ping |
+| Rare shop (Vesper) portal | v5.30 (v5.39 walks into the shop's ring) | Partly | 14 Nov 07:39: after the Seraph it found the shop's ring and walked toward it, far too slowly (the route bug fixed in v5.43); you walked in |
+| Ping and pause (F2) on arrival at Vesper's shop | v5.39 | Partly | 14 Nov 07:41:21: arrival seen and the Discord note sent (you had already paused with F2, so the pause itself wasn't needed) |
 | Worldheart donut: plan zones instead of the drawn discs | v5.39 | Not yet | new; it should step into the safe middle, not run for the edge |
 | Gates: nearest mob first, stays on its target, `[gate]` log lines | v5.39 | Not yet | new; look for `[gate]` lines in `DelveReasoning.txt` and `DelveRoomDump_gate.txt` |
 | Safe brain saves: damaged-file recovery, last good copy, shrink guard | v5.40 | Not yet | new; `DelveBrain_prev.json` should appear in the workspace after the first save |
 | Brain file decimals cut to 3 places | v5.40 | Not yet | tested on your brain file (549 KB to 464 KB, nothing moved by more than 0.001); `DelveBrain.json` should be about 464 KB after the first save |
 | Fewer settings: one portal choice, automatic reach, radius and tools | v5.41 | Not yet | new; the tabs are shorter, and tools should still switch while tabbed out |
+| Route walking (portals, the road, chests, far mobs) | v5.43 | Not yet | new; a portal walk should take a few seconds (the "walking into the ... portal" lines in `DelveReasoning.txt`) |
 
 Known open issues:
 - **Deep runs end in cave-ins.** The collapse speeds up with depth, and Cursed Path adds 30% (3.7 rows/s from about chamber 66, about the bot's whole pace with mining). v5.34 is the first attempt at keeping the lead; choosing Safe Path at forks would help most.
