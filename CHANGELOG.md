@@ -1,6 +1,24 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.33 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.34 | Brain`).
+
+## v5.34: Keeps its lead on the collapse (not yet verified in gameplay)
+- **What ended the runs (13 Nov, 17:25-19:33):** five cave-ins (15,220 m, 11,140 m, 800 m right after a prestige, 12,180 m, 13,140 m) and no deaths in the Delve. In two hours there were 139 "timer Ns: ignoring mobs" lines and not one "walking up the road" line. The bot reacted to the collapse only when it was under 1.5 s from an ore it was mining in place, and chests and fights didn't check it at all.
+- **What the collapse does (from the session data):**
+  - the front speeds up with depth (2.65 rows/s at chamber 52, 3.0 at 64); Cursed Path's +30% made it 3.7 rows/s from chamber 66, about the bot's whole pace with mining;
+  - the bot kept 60-74 rows ahead from chamber 52 to 66, then spent 17 s in chamber 66 and the gap went 66 → 28 → 17 → 14 → 11 rows, and then it caved in;
+  - the last straw was "walking to a chest 96 st away" with the clock at 8 s;
+  - after the prestige, the game reported the collapse as stopped in chambers 8-9, then the front jumped 58 rows while it mined chamber 9 for 33 s.
+- **Seconds until the collapse reaches you** is now the lower of the collapse front (SessionSync, the same maths the game draws it with) and the chamber clock (at 0:00 you're caved in). With that:
+  - **chests:** one the collapse would reach before you've walked there and opened it is skipped (`skipping a chest N st away: ...`); with under 12 s left, only chests ahead and within 25 st are taken;
+  - **mobs:** the "ignore mobs" danger mode also counts the collapse front, not only the clock (`collapse 9s: ignoring mobs`);
+  - **ores:** with under 12 s left, ores ahead count 2.5x and ores behind 0.03x (still mined if they're all that's left, in case the chamber needs them to open). Going back for a missed ore now needs 3 s to spare instead of 1 s, and an ore in reach is left when the collapse is 3 s (was 1.5 s) from your spot.
+- **Past the Unmaker** is now "its Tithe was taken in this cycle". The depth label keeps counting after a prestige, so the v5.33 rule ("deeper than 17,520 m") stayed on for the whole next cycle.
+- **Collapse log:** the dodge log's `session:` line is written on every change of chamber, speed or start time, and when the front moved more than 3 rows from where it was expected. It shows the current front, your row and how many rows and seconds you're ahead of it, and the chamber clock. That shows where the time went and what the game said during a "stopped" collapse.
+- **Seen in the logs, not changed:**
+  - the v5.33 portal walk worked: 80 → 41 → 15 → 4 st, prestige at 18:18:06 (slow: 30 s for 80 st);
+  - the stall watchdog never had to fire (no `DelveStall.txt`);
+  - the Infernia death (wave 100, Elder Dragon) was its double ring: one roll covered the first hit, and the second landed 0.4 s later.
 
 ## v5.33: No more standing still after the Unmaker; leaves announced attacks early (not yet verified in gameplay)
 - **Stall after the Unmaker (16:03, 17,760 m):** it killed the Unmaker, took BULWARK from the Tithe, then stood still for 48 minutes without a single log line until F2. The same happened at 13:12 (the second Unmaker of a session; you walked into the portal yourself). The main loop kept running (F2 was logged at once) and nothing errored, so it was standing still by choice, and the logs can't tell which way: the "walking into the portal" line was only written once per session (the second portal was silent), and with no floor map or no forward goal the walk up the road stopped without a word.

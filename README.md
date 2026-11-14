@@ -6,13 +6,13 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.33** (shown in the window title, `Delve v5.33 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.34** (shown in the window title, `Delve v5.34 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
 ## What it does
 - **Auto Farm.** From the hub it clicks GO MINE!, scrolls to your stage (Delve or any mine), selects it and descends. **Play again when a run ends** repeats it.
-- **Mining.** Mines every ore (needed to progress). When the floor starts collapsing, ores near the collapse are mined last and holes in the floor are walked around. Pillars are mapped per floor and routed around.
+- **Mining.** Mines every ore (needed to progress). When the floor starts collapsing, ores near the collapse are mined last and holes in the floor are walked around. Pillars are mapped per floor and routed around. In a Delve it tracks how many seconds the collapse is behind you (the collapse front and the chamber clock): under 12 s it mines ahead first, takes no detours for chests, and only goes back for a missed ore with 3 s to spare.
 - **Combat.** Fights mobs that are close or threatening, bosses, and floors that need mobs dead ("2 MOBS LEFT"), searching the room for the ones it can't see yet. Below 15 s on the Delve timer it ignores mobs except those right next to you. Mob types that have killed you 3+ times, and shooters or long-reach mobs that are actively a threat, are taken out first.
 - **Dodging.** Rolls out of attack zones (or walks, when walking is fast enough), rolls on a mob's learned wind-up, dodges past an enemy (behind or beside it) to keep hitting it, and keeps the roll for defence in boss fights and right after a hit. Every attack type learns its own safe distance and roll timing. Where there is no tile floor (the Arena) or no safe tile, it scans the real floor for open ground away from walls and rolls there only when walking is too slow; one-hit runs (Glass Soul) roll sooner.
 - **Bosses.** Recognised by the game's flag, the CONTRIBUTION panel, the boss intro card or by name (e.g. THE WORLDHEART, THE UNMAKER). The prestige level is read from the depth label and recorded with the run. Lava (burning floor) is avoided, and never crossed when one tick could kill you. It measures how much damage the boss really takes, goes for the things that make it vulnerable (Heart Pylons) along a route around hazards, never walks into an attack zone to chase, and keeps its distance at low HP.

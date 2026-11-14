@@ -1469,11 +1469,16 @@ local function Ql(m, G)
 	local minTier = tonumber(Q.minTier) or 1;
 	-- in a Delve: ores up the road (ahead) first, ores behind (toward the collapse) last, all the time
 	-- (v5.31; before, only when the floor timer was low)
-	local fwd;
+	local fwd, hurry;
 	do
 		if Q.pushForward ~= false and run.isDelve and r.forwardInfo then
 			local okF, fx, fz = pcall(r.forwardInfo, m.X, m.Z);
 			if okF and fx then fwd = { fx, fz }; end;
+			-- (v5.34) under 12 s from the collapse / clock: ores behind go (almost) last, ores ahead first
+			if fwd and r.collapseState then
+				local okC, sc = pcall(r.collapseState, m);
+				hurry = okC and sc ~= nil and sc < 12;
+			end;
 		end;
 	end;
 	for pass = 1, 2 do
@@ -1490,7 +1495,7 @@ local function Ql(m, G)
 					if risk > 0 then wt = wt * (risk >= 1 and .1 or .4); end;
 					if fwd then
 						local pr = (r.wx - m.X) * fwd[1] + (r.wz - m.Z) * fwd[2];
-						if pr < -4 then wt = wt * .25; elseif pr > 4 then wt = wt * 1.6; end;
+						if pr < -4 then wt = wt * (hurry and .03 or .25); elseif pr > 4 then wt = wt * (hurry and 2.5 or 1.6); end;
 					end;
 				end;
 				if wt > 0 and minTier > 1 then
@@ -4475,6 +4480,7 @@ local relicAPI = (function()
 			elseif draft.trader then head = choice and ("trader: buy " .. choice.name) or "trader: nothing worth buying, walk on by";
 			else head = "pick " .. (choice and choice.name or "?") .. (draft.explored and (" (" .. tostring(draft.explored) .. ")") or " (highest score)"); end;
 			r.why("relic", string.format("%s | %s", tostring(draft.room or "draft"), head));
+			if tostring(draft.room or ""):upper():find("UNMAKER", 1, true) and r.cycleKey then r.unmakerDownKey = r.cycleKey(); end;
 			for _, ln in ipairs(lines) do r.why("relic", "   " .. ln); end;
 		end;
 		if Q.relicNotify ~= false and draft.fork and choice then
@@ -6155,15 +6161,38 @@ do
 	function RM.onSession(p)
 		if type(p) ~= "table" then return; end;
 		if p.active then
+			local before;
+			pcall(function() before = RM.front(); end);
 			for k, v in pairs(p) do RM.s[k] = v; end;
 			RM.sAt = d();
-			if p.chamber ~= nil and p.chamber ~= RM.lastChamber then
-				RM.lastChamber = p.chamber;
-				f(string.format("session: chamber %s%s", tostring(p.chamber),
-					p.collapseX and string.format(", collapse front at row %.1f (+%.2f rows/s)", tonumber(p.collapseX) or 0, tonumber(p.collapseSpeed) or 0) or ""));
+			local sp = tonumber(p.collapseSpeed) or 0;
+			local sig = tostring(p.chamber) .. "|" .. string.format("%.2f", sp) .. "|" .. tostring(p.collapseFrom);
+			local fr;
+			pcall(function() fr = RM.front(); end);
+			local jump = before and fr and p.collapseX and math.abs(fr - before) > 3;
+			if p.chamber ~= nil and (sig ~= RM.lastSig or jump) then
+				RM.lastSig, RM.lastChamber = sig, p.chamber;
+				local extra = "";
+				pcall(function()
+					local srv = (r.plan and r.plan.srv) and r.plan.srv() or workspace:GetServerTimeNow();
+					local cf = tonumber(p.collapseFrom);
+					if cf and cf > srv + .2 then extra = extra .. string.format(", starts in %.1f s", cf - srv); end;
+					local hrp = l.Character and l.Character:FindFirstChild("HumanoidRootPart");
+					local oz = RM.originZ();
+					if hrp and oz and fr then
+						local row = (oz - hrp.Position.Z) / CELL + 1;
+						local secs = sp > 0 and (row - .5 - fr) / sp or nil;
+						extra = extra .. string.format("; you at row %.0f, %.0f rows ahead of it%s", row, row - fr, secs and string.format(" (%.0f s)", secs) or "");
+					end;
+					local ce = tonumber(p.chamberEnds);
+					if ce then extra = extra .. string.format("; chamber clock %.0f s", ce - srv); end;
+				end);
+				f(string.format("session: chamber %s%s%s%s", tostring(p.chamber),
+					p.collapseX and string.format(", collapse front at row %.1f (+%.2f rows/s)", fr or tonumber(p.collapseX) or 0, sp) or "",
+					jump and string.format(" [front moved %.1f rows from where it was expected]", fr - before) or "", extra));
 			end;
 		else
-			RM.s, RM.lastChamber = {}, nil;
+			RM.s, RM.lastChamber, RM.lastSig = {}, nil, nil;
 		end;
 	end;
 	-- the plate's row-1 Z, averaged over a few tiles; nil if the tiles don't agree (not a shaft plate)
@@ -7102,12 +7131,22 @@ local function wantFight(list, pos, now)
 	end;
 	-- delve floor timer in the danger zone: ignore mobs, every second goes to ores / getting down
 	local tl = tonumber(run.timeLeft);
-	if tl and tl <= (tonumber(CFG.dangerTime) or 10) and now - (tonumber(run.timeAt) or -1e9) < 2 then
+	local dz0 = tonumber(CFG.dangerTime) or 10;
+	if tl and tl <= dz0 and now - (tonumber(run.timeAt) or -1e9) < 2 then
 		r.fightWhy = nil;
-		r.danger = true;
+		r.danger, r.dangerWhy = true, string.format("timer %ss", tostring(tl));
 		return false;
 	end;
-	r.danger = false;
+	-- (v5.34) the collapse front itself (it caught runs with the clock still showing 8-9 s)
+	if run.isDelve and r.collapseState then
+		local okC, sc, how = pcall(r.collapseState, pos);
+		if okC and sc and sc <= dz0 then
+			r.fightWhy = nil;
+			r.danger, r.dangerWhy = true, string.format("%s %.0fs", how == "timer" and "timer" or "collapse", sc);
+			return false;
+		end;
+	end;
+	r.danger, r.dangerWhy = false, nil;
 	if #list >= 2 and maxMax > 0 and maxMax >= minMax * 5 then r.fightWhy = "big mob"; return true; end;
 	if next(D) == nil then r.fightWhy = "no ores"; return true; end;
 	local nearest = math.huge;
@@ -7477,6 +7516,46 @@ do
 			writefile("DelveStall.txt", table.concat(out, "\n"));
 		end);
 	end;
+	-- (v5.34) how close the collapse is: seconds until the front reaches where you stand (SessionSync, the
+	-- same maths the game draws it with) and the chamber clock (HUD; at 0:00 you're caved in), the lower one
+	r.collapseState = function(G)
+		local sf, st;
+		pcall(function() sf = r.room and r.room.secondsUntilFalls(G.Z); end);
+		if sf then sf = math.max(sf, 0); end;
+		local tl = tonumber(run.timeLeft);
+		if tl and d() - (tonumber(run.timeAt) or -1e9) < 2 then st = tl; end;
+		local sc = math.min(sf or math.huge, st or math.huge);
+		local how = (sf and sf <= (st or math.huge)) and "collapse" or "timer";
+		return sc, how, sf, st;
+	end;
+	-- one Delve cycle (a run, and each prestige inside it)
+	r.cycleKey = function()
+		return tostring(run.id) .. "|" .. tostring(run.cash0) .. "|" .. tostring(run.prestige or 0);
+	end;
+	-- a chest the collapse reaches before you've walked there and opened it, or (with under 12 s left) any
+	-- chest that isn't ahead and within 25 st: a reason to skip it, else nil. A 96 st walk back to a chest
+	-- with the timer at 8 s ended a 13,140 m run.
+	r.chestTooLate = function(G, c)
+		if not run.isDelve then return nil; end;
+		local dist = math.sqrt((c.x - G.X) ^ 2 + (c.z - G.Z) ^ 2);
+		local hum = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+		local spd = math.max(8, hum and hum.WalkSpeed or 16);
+		local need = dist / spd + 3;
+		local atChest;
+		pcall(function() atChest = r.room and r.room.secondsUntilFalls(c.z); end);
+		if atChest and atChest < need + 3 then
+			return string.format("the collapse gets there in %.0f s, walking there and opening it takes %.0f s", math.max(atChest, 0), need);
+		end;
+		local sc, how = r.collapseState(G);
+		if sc < 12 then
+			local okF, fx, fz = pcall(r.forwardInfo, G.X, G.Z);
+			local ahead = okF and fx and ((c.x - G.X) * fx + (c.z - G.Z) * fz) > -2;
+			if not ahead or dist > 25 then
+				return string.format("%s %.0f s away, no detours", how == "timer" and "the chamber clock runs out" or "the collapse is", sc);
+			end;
+		end;
+		return nil;
+	end;
 	r.stallTick = function(G, S, m)
 		local hum0 = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
 		local on = Q.on and run.isDelve and hum0 ~= nil and hum0.Health > 0 and WQ ~= "combat" and not r.f2Paused;
@@ -7670,7 +7749,7 @@ local function lh(m)
 	do
 		local tname = WQ == "combat" and w and tostring(w.name) or "-";
 		local reason = WQ == "combat" and tostring(r.fightWhy or "fight")
-			or (r.danger and string.format("timer %ss: ignoring mobs", tostring(run.timeLeft)) or (#S > 0 and "mobs not a threat, ores first" or "no mobs"));
+			or (r.danger and string.format("%s: ignoring mobs", tostring(r.dangerWhy or ("timer " .. tostring(run.timeLeft) .. "s"))) or (#S > 0 and "mobs not a threat, ores first" or "no mobs"));
 		local key = WQ .. "|" .. tname .. "|" .. reason;
 		if key ~= r.whyKey and m - (r.whyAt or 0) > 1.5 then
 			r.whyKey, r.whyAt = key, m;
@@ -7757,8 +7836,8 @@ local function lh(m)
 	do
 		local pick = CFG.afterUnmaker or "Prestige I";
 		local wantShop = pick == "?????" or tostring(pick):find("shop", 1, true) ~= nil;
-		if (tonumber(run.curDepth) or 0) > 17520 then
-			local key = tostring(run.id) .. "|" .. tostring(run.cash0) .. "|" .. tostring(run.prestige or 0);
+		if r.unmakerDownKey ~= nil and r.cycleKey and r.unmakerDownKey == r.cycleKey() then
+			local key = r.unmakerDownKey;
 			if r.pastBossKey ~= key then
 				r.pastBossKey = key;
 				local okT, tg0 = pcall(r.portalFind, G, wantShop);
@@ -8030,7 +8109,20 @@ local function lh(m)
 		local m = cl(G);
 		if m then
 			local Q, e = m.x - G.X, m.z - G.Z;
+			-- (v5.34) not a chest the collapse gets to first, and no detours with under 12 s left
+			local tooLate;
 			if Q * Q + e * e > 1 then
+				local okT, why = pcall(r.chestTooLate, G, m);
+				if okT and why then
+					tooLate = true;
+					local ck0 = math.floor(m.x) .. "_" .. math.floor(m.z);
+					if r.why and r.chestSkipFor ~= ck0 then
+						r.chestSkipFor = ck0;
+						r.why("move", string.format("skipping a chest %.0f st away: %s", math.sqrt(Q * Q + e * e), why));
+					end;
+				end;
+			end;
+			if Q * Q + e * e > 1 and not tooLate then
 				local ck = math.floor(m.x) .. "_" .. math.floor(m.z);
 				if r.why and ck ~= r.chestNoteFor then
 					r.chestNoteFor = ck;
@@ -8068,7 +8160,9 @@ local function lh(m)
 	do
 		if CFG.pushForward ~= false and run.isDelve and WQ ~= "combat" and Q.on then
 			local kick = r.stallKick and m < r.stallKick.untilT;
-			local pastBoss = (tonumber(run.curDepth) or 0) > 17520;
+			-- (v5.34) past the Unmaker = its Tithe was taken in this cycle (the depth label keeps counting after
+			-- a prestige, so "deeper than 17,520 m" stayed true for the whole next cycle)
+			local pastBoss = r.unmakerDownKey ~= nil and r.cycleKey and r.unmakerDownKey == r.cycleKey();
 			local okF, fx, fz, gx, gz, gp, fsrc = pcall(r.forwardInfo, G.X, G.Z);
 			if okF and fx then
 				local humS = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
@@ -8084,13 +8178,13 @@ local function lh(m)
 				if u and ((u.X - G.X) * fx + (u.Z - G.Z) * fz) < -4 then
 					local need = math.sqrt((u.X - G.X) ^ 2 + (u.Z - G.Z) ^ 2) / spd + 1.5;
 					local left, how = timeLeftAt(u.Z);
-					if need >= left - 1 then
+					if need >= left - 3 then
 						reason = string.format("ore behind needs %.1fs, %s leaves %.1fs", need, how, left);
 						stuckBack = true;
 					end;
 				elseif not u and L then
 					local left, how = timeLeftAt(G.Z);
-					if left < 1.5 then
+					if left < 3 then
 						reason = string.format("%s reaches this spot in %.1fs", how, left);
 						stuckBack = true;
 					end;
@@ -10612,7 +10706,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.33 | Brain",
+		Title = "Delve v5.34 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
