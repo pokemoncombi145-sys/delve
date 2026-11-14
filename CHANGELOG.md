@@ -1,6 +1,27 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.40 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.41 | Brain`).
+
+## v5.41: Fewer settings: one portal choice, automatic mining reach and tools (not yet verified in gameplay)
+- **One portal setting:**
+  - "After the Unmaker: which portal" (Relics tab) replaces the two settings, with three choices: Prestige portal, Vesper's shop (?????) or Neither;
+  - whenever you arrive at Vesper's shop, walked by the bot or by you, Discord pings you and everything pauses like F2. That part is always on now;
+  - your current choice carries over ("Prestige I" is now "Prestige portal").
+- **Mining reach and radius:**
+  - always read from the game, and again whenever your buffs change;
+  - the switch, the two sliders and the "Read mining stats now" button are gone.
+- **Tools:**
+  - the game binds the pickaxe to 1 and the weapon to 2 in its own code, with no way to rebind them, and the bot equips them by itself. The two slot sliders and "Auto-equip tools" are gone;
+  - the equip "learning" is gone too: the three buttons and "Use learned equip remotes". It only replayed the message to the server, while the game's own equip code also updates the client;
+  - key presses are used. In background mode the way keys are sent still switches by itself when a press doesn't register: that happened 24 times in the last long session, and each time it fixed itself.
+- **Roll key:** the game binds the roll to Q and Space, so it presses Q. The setting offered nine keys that wouldn't work.
+- **Always on now (switches removed):**
+  - the game's attack plans;
+  - walking up the road;
+  - the dodge log (the log reviews read it; it still rotates at 3 MB).
+- **Background mode:** the key and walk methods stay on Auto and Both, which find what works by themselves.
+- **Settings tab:** the "Check forward goal + attack plans" and "Test background support" buttons are gone (developer checks; the logs cover them).
+- **Old saved values** for the removed settings can't change anything: each is set again on every load. The attack-roll setting shows "On" if it was saved as "Auto" (same behaviour).
 
 ## v5.40: Safe brain saves, smaller brain file (not yet verified in gameplay)
 Proposals A and B from the brain audit (`DelveBrainAudit.md` in the Volt workspace). What it learns and how it decides are unchanged.

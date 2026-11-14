@@ -140,7 +140,7 @@ local m = {
 		dangerTimeV = 0,
 		forkPath = "Smart",
 		afterBossPath = "Descend",
-		afterUnmaker = "Prestige I",
+		afterUnmaker = "Prestige portal",
 		traderBuy = true,
 		traderMinScore = 5,
 		relicDelay = .3,
@@ -299,6 +299,26 @@ end;
 -- learning and safety features are built in now (no longer settings): always on
 for _, k in ipairs({ "relicLearn", "dodgeLearn", "smartEscape", "cornerAvoid", "windupLearn", "pingComp", "autoCombatStats" }) do
 	Q[k] = true;
+end;
+-- (v5.41) settings taken out of the window: automatic now, fixed by the game itself, or needed on:
+--   * mining reach and radius: always read from the game (and again whenever your buffs change)
+--   * tools: the game binds the pickaxe to 1 and the weapon to 2 (its PickaxeController / WeaponController), and the
+--     bot equips them by itself. The old "learned equip remotes" only replayed the message to the server (the game's
+--     own equip code also updates the client), so key presses are used; in background mode the way keys are sent
+--     still switches by itself when a press doesn't register.
+--   * the roll: the game binds it to Q and Space (DodgeController); it presses Q
+--   * background key and walk methods: Auto / Both (they find what works by themselves)
+--   * the game's attack plans, walking up the road and the dodge log: always on
+--   * Vesper's shop: the ping and pause on arrival are always on; "After the Unmaker" picks the portal
+for k, v in pairs({ autoStats = true, autoEquip = true, pickSlot = 1, weaponSlot = 2, useLearned = false, rollKey = "Q",
+	bgKeyMethod = "Auto", bgMoveMethod = "Both", planFeed = true, pushForward = true, dodgeLog = true, vesperPause = true }) do
+	Q[k] = v;
+end;
+do
+	-- (v5.41) the portal choice's new names; an old "Auto" attack-roll value is shown as "On" (it always meant on)
+	local oldPortal = { ["Prestige I"] = "Prestige portal", ["Rare shop (?????)"] = "Vesper's shop (?????)", ["Don't enter"] = "Neither" };
+	if oldPortal[Q.afterUnmaker] then Q.afterUnmaker = oldPortal[Q.afterUnmaker]; end;
+	if Q.attackRoll ~= "Off" then Q.attackRoll = "On"; end;
 end;
 if not Q.rareMigrated then
 	Q.rareMigrated = true;
@@ -8293,7 +8313,7 @@ local function lh(m)
 		end);
 	end;
 	do
-		local pick = CFG.afterUnmaker or "Prestige I";
+		local pick = CFG.afterUnmaker or "Prestige portal";
 		local wantShop = pick == "?????" or tostring(pick):find("shop", 1, true) ~= nil;
 		if r.unmakerDownKey ~= nil and r.cycleKey and r.unmakerDownKey == r.cycleKey() then
 			local key = r.unmakerDownKey;
@@ -8308,7 +8328,7 @@ local function lh(m)
 				end;
 			end;
 		end;
-		if CFG.on and pick ~= "Don't enter" then
+		if CFG.on and pick ~= "Neither" and pick ~= "Don't enter" then
 			local okP, tg = pcall(r.portalFind, G, wantShop);
 			if okP and tg then
 				local nearest = math.huge;
@@ -10899,16 +10919,12 @@ end;
 		{
 			name = "Mining",
 			icon = "pickaxe",
-			rescan = true,
 			items = {
 				{ k = "mine", t = "feat", text = "Mine rocks" },
 				{ k = "walk", t = "feat", text = "Walk to rocks" },
 				{ k = "chests", t = "feat", text = "Collect chests" },
 				{ k = "centerFarm", t = "toggle", text = "Mine from the chest / arena center" },
 				{ k = "centerCleanup", t = "toggle", text = "Center: walk to ores out of reach" },
-				{ k = "autoStats", t = "toggle", text = "Read mining reach and radius from the game" },
-				{ k = "reach", t = "slider", text = "Mining reach", min = .3, max = 20, step = .01, suffix = " st" },
-				{ k = "radius", t = "slider", text = "Mining radius", min = .1, max = 10, step = .01, suffix = " st" },
 				{ k = "mineRange", t = "slider", text = "Rock search range", min = 10, max = 400, step = 10, suffix = " st" },
 				{ k = "chestRange", t = "slider", text = "Chest range", min = 20, max = 300, step = 10, suffix = " st" },
 				{ k = "minTier", t = "slider", text = "Min rock tier", min = 1, max = 10, step = 1, suffix = "" },
@@ -10929,13 +10945,10 @@ end;
 				{ k = "crowdSize", t = "slider", text = "Fight when this many mobs are up", min = 2, max = 20, step = 1, suffix = "" },
 				{ k = "fightDist", t = "slider", text = "Circle distance", min = 2, max = 30, step = 1, suffix = " st" },
 				{ k = "flankDodge", t = "toggle", text = "Dodge past enemies to keep hitting them" },
-				{ k = "planFeed", t = "toggle", text = "Use the game's attack plans (exact timing)" },
 				{ k = "exploreForMobs", t = "toggle", text = "Search the room until all mobs left are found" },
 				{ k = "rangedFirst", t = "toggle", text = "Take out shooters first when they're a threat" },
 				{ k = "attackRoll", t = "combo", text = "Attack rolls (roll into the target)", items = { "On", "Off" } },
 				{ k = "bossRolls", t = "toggle", text = "Roll through bosses when no attack is near" },
-				{ k = "pushForward", t = "toggle", text = "Keep walking up the road" },
-				{ k = "rollKey", t = "combo", text = "Roll key", items = { "Q", "E", "R", "F", "C", "V", "X", "Z", "G", "Space", "LShift" } },
 			},
 		},
 		{
@@ -10946,8 +10959,7 @@ end;
 				{ k = "relicExplore", t = "toggle", text = "Try relics it has never taken (to learn the index)" },
 				{ k = "forkPath", t = "combo", text = "Tunnel fork path", items = { "Smart", "Safe", "Cursed" } },
 				{ k = "afterBossPath", t = "combo", text = "After Worldheart", items = { "Descend", "Ascend", "Let the brain decide" } },
-				{ k = "afterUnmaker", t = "combo", text = "After the Unmaker (portal)", items = { "Prestige I", "Rare shop (?????)", "Don't enter" } },
-				{ k = "vesperPause", t = "toggle", text = "At Vesper's shop: ping me and pause (like F2)" },
+				{ k = "afterUnmaker", t = "combo", text = "After the Unmaker: which portal", items = { "Prestige portal", "Vesper's shop (?????)", "Neither" } },
 				{ k = "traderBuy", t = "toggle", text = "Buy from traders" },
 				{ k = "traderMinScore", t = "slider", text = "Trader: buy if score is at least", min = -50, max = 100, step = 1, suffix = "" },
 			},
@@ -10986,14 +10998,7 @@ end;
 				{ k = "mechNotify", t = "toggle", text = "Pop-ups: new relics and mechanics" },
 				{ k = "background", t = "toggle", text = "Background mode (work while tabbed out)" },
 				{ k = "silentAim", t = "toggle", text = "Silent aim (don't move my mouse)" },
-				{ k = "bgKeyMethod", t = "combo", text = "Background key method", items = { "Auto", "VirtualInputManager", "Input connections" } },
-				{ k = "bgMoveMethod", t = "combo", text = "Background walk method", items = { "Both", "Humanoid:Move", "Velocity" } },
-				{ k = "useLearned", t = "toggle", text = "Use learned equip remotes in background" },
-				{ k = "autoEquip", t = "toggle", text = "Auto-equip tools" },
-				{ k = "pickSlot", t = "slider", text = "Pickaxe slot", min = 1, max = 9, step = 1, suffix = "" },
-				{ k = "weaponSlot", t = "slider", text = "Weapon slot", min = 1, max = 9, step = 1, suffix = "" },
 				{ k = "antiAfk", t = "toggle", text = "Anti-AFK" },
-				{ k = "dodgeLog", t = "toggle", text = "Log dodges to file" },
 				{ k = "dangerView", t = "toggle", text = "Show what it sees (danger map)" },
 			},
 		},
@@ -11364,7 +11369,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.40 | Brain",
+		Title = "Delve v5.41 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
@@ -11474,9 +11479,6 @@ end;
 		chests = { "Walks to and opens chests after a floor is cleared.", "Recommended: ON." },
 		centerFarm = { "Stands at the chest / arena center and mines from there (for wave stages with a fixed center).", "Recommended: OFF for Delve. Only for wave arenas." },
 		centerCleanup = { "With center mining, still walks out to ores that are out of reach.", "Recommended: OFF unless center mining is on." },
-		autoStats = { "Reads your real mining reach and radius from the game (Stats tab and buffs) and keeps them updated.", "Recommended: ON. Turn off only to set reach/radius by hand." },
-		reach = { "How far from a rock you can stand and still mine it. Set automatically when the option above is on.", "Recommended: don't touch while the game reading is on." },
-		radius = { "Size of your mining circle (area hit per swing). Set automatically when the reading is on.", "Recommended: don't touch while the game reading is on." },
 		mineRange = { "How far it looks for rocks to walk to.", "Recommended: 150 st. Higher wanders off, lower misses ores." },
 		chestRange = { "How far it looks for chests to walk to.", "Recommended: 120 st." },
 		minTier = { "Ignores rocks below this tier (1 = mine everything).", "Recommended: 1 in Delve (every ore counts toward the timer)." },
@@ -11491,19 +11493,15 @@ end;
 		crowdSize = { "When this many mobs are up at once, it clears them before mining.", "Recommended: 5." },
 		fightDist = { "How close it circles the target while fighting.", "Recommended: 8 st. Lower hits more but gets hit more." },
 		flankDodge = { "Dodges past the enemy (behind or beside it) instead of backing away, so it keeps hitting.", "Recommended: ON." },
-		planFeed = { "Reads the game's own attack plans (what will hit where, and exactly when) instead of guessing from the drawn shapes: escapes avoid spots that get hit while it's walking there, rolls land on spots that stay clear, and impact debris/smoke stop counting as attacks.", "Recommended: ON. Turn off only if dodging gets worse, then send the dodge log." },
 		exploreForMobs = { "When the HUD says more mobs are left than it can see (pylons at the top of a boss room), it walks up the room to find them.", "Recommended: ON." },
 		rangedFirst = { "Kills mobs that shoot or hit from far away first, but only when they're actually firing at you.", "Recommended: ON." },
 		attackRoll = { "Rolls into the target when nothing is about to hit you (good with roll perks like Onibi Step).", "Recommended: On." },
 		bossRolls = { "In boss fights, rolls through the boss for extra damage, but only when no attack zone is within 18 st (25 st on a 1-HP run), nothing is winding up and no boss attack is expected for 2 s.", "Recommended: ON." },
-		pushForward = { "Keeps it moving forward in Delve the whole time, timer or not: ores ahead come first, and with nothing to walk to it heads for the chamber's exit (also after the Unmaker and in boss rooms whose boss is out of sight). It still turns back for a missed ore if it can get there and mine it before that spot collapses.", "Recommended: ON." },
-		rollKey = { "The key your game uses for roll / dash.", "Recommended: Q (the game's default). Change only if you rebound it." },
 		cardPick = { "Picks relics, blessings, forks and trader buys by itself using the brain's scores.", "Recommended: ON for AFK. OFF shows the pick but lets you choose." },
 		relicExplore = { "Now and then takes a relic it has never taken, so the brain learns the whole relic index. Never instead of a second chance, luck relic or set completion.", "Recommended: ON." },
 		forkPath = { "Safe or Cursed tunnel at forks. Smart picks Cursed when the run is healthy, Safe when it's in trouble.", "Recommended: Smart." },
 		afterBossPath = { "After Worldheart: Descend (more mobs, combat relics first) or Ascend (more rock, mining relics first).", "Recommended: Descend." },
-		afterUnmaker = { "After the Unmaker: walks into the Prestige portal, Vesper's shop portal (it never sells anything there), or neither.", "Recommended: Prestige I." },
-		vesperPause = { "When you arrive at Vesper's shop (through the ????? portal after the Unmaker, walked by you or by the bot), Discord pings you and everything pauses like F2, so you have control there. Press F2 to start farming again. The bot never buys or sells anything at Vesper's.", "Recommended: ON." },
+		afterUnmaker = { "After the Unmaker the Prestige portal and Vesper's shop portal (?????) stand side by side. Prestige portal: keeps going deeper. Vesper's shop: walks into the shop. Whenever you arrive at Vesper's shop (walked by the bot or by you), Discord pings you and everything pauses like F2; press F2 to start farming again. The bot never buys or sells anything there. Neither: it stays in the room.", "Recommended: Prestige portal." },
 		traderBuy = { "Buys from the in-run relic trader when a relic is worth it. Uses in-run currency only.", "Recommended: ON." },
 		traderMinScore = { "Only buys from the trader when the relic's score is at least this.", "Recommended: 5." },
 		autoIndexScan = { "Every few runs goes to the hub and reads the T menu (Index, Stats, Equipment) so the brain knows drop odds and your gear.", "Recommended: ON." },
@@ -11524,14 +11522,7 @@ end;
 		mechNotify = { "Pop-up when it meets a new relic or mechanic.", "Recommended: ON." },
 		background = { "Keeps farming while Roblox is tabbed out (sends input without your real mouse/keyboard).", "Recommended: ON if you use the PC while farming." },
 		silentAim = { "Aims without moving your real mouse cursor.", "Recommended: ON together with Background mode, otherwise OFF." },
-		bgKeyMethod = { "How key presses are sent while tabbed out. Auto tries each method and keeps the one that works.", "Not recommended to change: leave on Auto." },
-		bgMoveMethod = { "How walking is done while tabbed out.", "Not recommended to change: leave on Both." },
-		useLearned = { "Equips tools through the game's own signals it learned, instead of key presses, while tabbed out.", "Not recommended to change: leave ON." },
-		autoEquip = { "Switches to the pickaxe for rocks and the weapon for mobs by itself.", "Recommended: ON." },
-		pickSlot = { "Hotbar slot of your pickaxe.", "Recommended: 1 (the game's default)." },
-		weaponSlot = { "Hotbar slot of your weapon.", "Recommended: 2 (the game's default)." },
 		antiAfk = { "Stops Roblox from kicking you for being idle.", "Recommended: ON for AFK farming." },
-		dodgeLog = { "Writes every dodge decision to dodge_log.txt (used for reviewing deaths).", "Recommended: ON while improving the script. It rotates at 3 MB." },
 		dangerView = { "Draws the danger zones, safe spots and route it sees on screen.", "Not recommended for farming (costs FPS). Use it to watch what it thinks." },
 	};
 	local function infoText(it)
@@ -11587,37 +11578,6 @@ end;
 				Desc = "From the hub it clicks GO MINE!, scrolls to your stage, selects it and descends. The farm turns on once the run loads. Right Shift or the Open Delve button shows this window. F2 stops all farming; F2 again resumes. F8 saves a capture (with the helper's recorder on).",
 			});
 			tab:Button({ Title = "Stop and unload", Callback = r.stop });
-		end;
-		if group.name == "Settings" then
-			tab:Button({
-				Title = "Check forward goal + attack plans",
-				Callback = function() if r.room and r.room.report then pcall(r.room.report); end; end,
-			});
-			tab:Button({
-				Title = "Test background support",
-				Callback = function()
-					notify(inp.report(), "Delve background");
-				end,
-			});
-			tab:Button({
-				Title = "Learn weapon equip (then press the key in game)",
-				Callback = function()
-					inp.learn("weapon", mQ);
-				end,
-			});
-			tab:Button({
-				Title = "Learn pickaxe equip (then press the key in game)",
-				Callback = function()
-					inp.learn("pickaxe", Il);
-				end,
-			});
-			tab:Button({
-				Title = "Forget learned equips",
-				Callback = function()
-					inp.learned.weapon, inp.learned.pickaxe = nil, nil;
-					notify("Learned equip remotes cleared.", "Delve learn");
-				end,
-			});
 		end;
 		if group.name == "Discord" then
 			tab:Button({

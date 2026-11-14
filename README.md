@@ -6,7 +6,7 @@ An auto-farm for the Roblox game **Delve** that learns from every run: it mines,
 loadstring(game:HttpGet("https://raw.githubusercontent.com/pokemoncombi145-sys/delve/main/delve_v3.lua"))()
 ```
 
-Current version: **v5.40** (shown in the window title, `Delve v5.40 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
+Current version: **v5.41** (shown in the window title, `Delve v5.41 | Brain`). Every change, with the evidence behind it, is in [CHANGELOG.md](CHANGELOG.md).
 
 Made for the **Volt** executor at 1920x1080; it falls back to the virtual input manager for anything an executor lacks.
 
@@ -39,6 +39,7 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Gates: nearest mob first, stays on its target, `[gate]` log lines | v5.39 | Not yet | new; look for `[gate]` lines in `DelveReasoning.txt` and `DelveRoomDump_gate.txt` |
 | Safe brain saves: damaged-file recovery, last good copy, shrink guard | v5.40 | Not yet | new; `DelveBrain_prev.json` should appear in the workspace after the first save |
 | Brain file decimals cut to 3 places | v5.40 | Not yet | tested on your brain file (549 KB to 464 KB, nothing moved by more than 0.001); `DelveBrain.json` should be about 464 KB after the first save |
+| Fewer settings: one portal choice, automatic reach, radius and tools | v5.41 | Not yet | new; the tabs are shorter, and tools should still switch while tabbed out |
 
 Known open issues:
 - **Deep runs end in cave-ins.** The collapse speeds up with depth, and Cursed Path adds 30% (3.7 rows/s from about chamber 66, about the bot's whole pace with mining). v5.34 is the first attempt at keeping the lead; choosing Safe Path at forks would help most.
@@ -77,12 +78,12 @@ Known open issues:
 | Tab | What's there |
 |---|---|
 | Farm | farm switch, Auto Farm stage, play again, start the stage now |
-| Mining | mining, walking, chests, reach and radius, ranges |
-| Combat | fighting, chasing, dodging, mob priority, timer danger zone, attack rolls, rolls through bosses, the game's attack plans, keep walking up the road |
-| Relics | relic picks, exploring, tunnel forks, after Worldheart, traders |
+| Mining | mining, walking, chests, ranges, minimum rock tier (reach and radius are read from the game) |
+| Combat | fighting, chasing, dodging, mob priority, timer danger zone, attack rolls, rolls through bosses |
+| Relics | relic picks, exploring, tunnel forks, after Worldheart, which portal after the Unmaker, traders |
 | Brain | T-menu scans, learning curve, reasoning, what it learned |
 | Discord | webhook, screenshot delay, drop posts, ping user ID |
-| Settings | window, font, pop-ups, danger map, background mode, tool slots, logs, "Check forward goal + attack plans" button |
+| Settings | window, font, pop-ups, danger map, background mode, silent aim, anti-AFK |
 
 ## Load automatically (Volt auto-execute)
 Put `delve_autoexec.lua` in `%LOCALAPPDATA%\Volt\autoexec`. Every time you join Delve it waits for the game to load, then 10 seconds, then loads the latest script from this repo. It does nothing in other games. Turn on **Auto Farm** in the Farm tab and it starts your stage from the hub on its own.
@@ -133,7 +134,7 @@ Nothing is uploaded, and the recorder never affects movement or dodging. Options
 | `DelveDrops.jsonl` | one line per rare drop |
 | `DelveMechanics.jsonl` | one line per new mechanic discovered |
 | `DelveReasoning.txt` | why it fought, mined or picked each relic (older part in `DelveReasoning_old.txt`) |
-| `dodge_log.txt` | every dodge, roll and hit, if "Log dodges to file" is on (older part in `dodge_log_old.txt`) |
+| `dodge_log.txt` | every dodge, roll and hit (always on; older part in `dodge_log_old.txt`) |
 | `DelveStall.txt` | the latest "standing still" report: what it was doing, the floor, the portals it can see, the last decisions |
 | `DelveRejoins.json` | auto-rejoin: when it last rejoined and why (for the "at most 5 an hour" rule) |
 | `DelveRoomDump.txt`, `DelveRoomDump_portal.txt` | what the room after the end boss (Unmaker or Seraph) is made of (floor, portals, parts within 200 st), written after its reward and when a portal walk fails |
