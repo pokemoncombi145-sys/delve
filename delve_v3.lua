@@ -8818,7 +8818,12 @@ task.spawn(function()
 		msg = tostring(msg or ""):gsub("^%s+", ""):gsub("%s+$", "");
 		-- (v5.38) rejoin by itself? only while farming, when the message allows it, and at most 5 rejoins an hour
 		local rejoin, notWhy = false, nil;
-		if CFG.autoRejoin ~= false and (CFG.on or r.autoStart) then
+		if CFG.autoRejoin == false then
+			notWhy = "\"Rejoin after a disconnect\" is off";
+		elseif not (CFG.on or r.autoStart) then
+			-- (v5.38.1) say so: a test with the farm paused looked like nothing happened
+			notWhy = "Auto Farm is off or paused with F2, so you have control";
+		else
 			notWhy = rejoinBlockedBy(mu);
 			if not notWhy then
 				local st = rejoinState();
@@ -8827,7 +8832,7 @@ task.spawn(function()
 		end;
 		local tail = rejoin and " (rejoining by itself)" or (notWhy and (" (not rejoining: " .. notWhy .. ")") or "");
 		pcall(function() if r.why then r.why("run", "disconnected: " .. msg .. tail); end; end);
-		pcall(function() notify("Disconnected: " .. msg .. (rejoin and " Rejoining by itself..." or ""), "Delve"); end);
+		pcall(function() notify("Disconnected: " .. msg .. (rejoin and " Rejoining by itself..." or (notWhy and (" Not rejoining: " .. notWhy .. ".") or "")), "Delve"); end);
 		local depth = (type(run) == "table" and run.depth) or 0;
 		pcall(r.postEmbed, {
 			title = "Disconnected from Delve",
@@ -11079,7 +11084,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.38 | Brain",
+		Title = "Delve v5.38.1 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,
