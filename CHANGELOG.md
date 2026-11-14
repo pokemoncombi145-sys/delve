@@ -6,6 +6,7 @@ Newest first. The version is shown in the script window title (`Delve v5.38.1 | 
 - **First test (21:51):** the disconnect came while the farm was paused. F2 at 21:48 paused it, and re-running the script at 21:50 kept it off. Auto-rejoin only acts while Auto Farm is on, so it doesn't pull you back in when you've taken control. The log line and notification didn't say so, so it looked like nothing happened.
 - **Now** the log, the notification and the Discord alert give the reason: "Auto Farm is off or paused with F2", "\"Rejoin after a disconnect\" is off", a kick or ban, another device, or 5 rejoins in the last hour.
 - **To test it:** turn Auto Farm on, let a run start, cut the internet until Roblox shows "Disconnected", then turn it back on.
+- **Verified in play (21:57):** with the farm on and the Wi-Fi cut, the first try failed ("A Http error has occurred", no internet yet) and the second worked. The autoexec loaded the script in the new server (once; the queued loader stayed out of the way), and it was farming again 75 s after the disconnect.
 
 ## v5.38: Auto-rejoin after a disconnect (not yet verified in gameplay)
 - **What it does:** when Roblox shows a disconnect while the farm is on (lost connection, server shut down for an update, no response), the bot joins a new Delve server by itself, inside the same Roblox:

@@ -28,7 +28,7 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 | Stall watchdog (`DelveStall.txt`, "Delve: stuck" alert) | v5.33 | Not yet | never needed to fire |
 | Walking without a floor map / past the last floor tile | v5.33 | Not yet | never needed |
 | Discord disconnect and Roblox-closed alerts | v5.20 | Not in these logs | no disconnect or crash while farming happened |
-| Auto-rejoin after a disconnect | v5.38 | Not yet | new; look for "rejoining Delve" and "back in Delve after a disconnect" in `DelveReasoning.txt` and the "Back in Delve" Discord note |
+| Auto-rejoin after a disconnect | v5.38 | **Yes** | 13 Nov, Wi-Fi cut while farming: disconnect at 21:57:33, first try failed with no internet, second try at 21:58:13 worked, script back through the autoexec at 21:58:35 (loaded once), farming again at 21:58:48 |
 | Index / Stats / Equipment scan every N runs | v3.8 | Not in these logs | the run count since it last ran hadn't been reached |
 | Room dump after the end boss (`DelveRoomDump.txt`) | v5.35 | Not yet | the Seraph run had no dump (only the Unmaker counted); v5.36 counts both |
 | No fighting at the collapse (danger time) | v5.36 | Not yet | in ore chambers only a mob on top of you is fought near the collapse; gates and bosses are always fought (v5.37) |
