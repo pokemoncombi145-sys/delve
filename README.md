@@ -40,7 +40,7 @@ Every release passes a syntax and scope check (Lua parse, the 200-local limit, n
 
 Known open issues:
 - **Deep runs end in cave-ins.** The collapse speeds up with depth, and Cursed Path adds 30% (3.7 rows/s from about chamber 66, about the bot's whole pace with mining). v5.34 is the first attempt at keeping the lead; choosing Safe Path at forks would help most.
-- **Gate cave-ins.** 12 of 34 runs on 13-14 Nov caved in at the gates of chambers 55 and 65 (10,020 m and 12,100 m on the depth label): the gate's clock ran out with the bot 15-20 rows short of the gate's end and nothing logged for the last 10-20 s. v5.39 stops the far-target chasing there and logs every gate so the next review can find the rest.
+- **Gate cave-ins.** 13 of 34 runs on 13-14 Nov caved in at a gate, 10 of them at chambers 55 and 65 (10,020 m and 12,100 m on the depth label): the gate's clock ran out with the bot 15-20 rows short of the gate's end and nothing logged for the last 10-20 s. v5.39 stops the far-target chasing there and logs every gate so the next review can find the rest.
 - **Pale Warden one-shots.** Twice overnight it died at full health about 80 st from the Pale Warden with no planned attack on that spot; not explained yet.
 - After a prestige the game once reported the collapse as stopped while it kept moving (58 rows), so the bot saw no danger.
 - Two hits 0.4 s apart (the Elder Dragon's double ring in Infernia wave 100) can't both be covered by one roll.

@@ -6390,7 +6390,7 @@ do
 		end;
 		return oz - (goalRow - 1) * CELL, goalRow, c, src, myRow, why;
 	end;
-	-- (v5.39) GATE WATCH: 12 of 34 runs on 2026-11-14 caved in at the gates of chambers 55 and 65. The gate's clock ran
+	-- (v5.39) GATE WATCH: 13 of 34 runs on 2026-11-14 caved in at a gate, 10 of them at chambers 55 and 65. The gate's clock ran
 	-- out with the bot 15-20 rows short of the gate's end, and nothing was logged in the last 10-20 s. While in a
 	-- gate: a line when what it sees or does changes (at most every 3 s), and a room dump (DelveRoomDump_gate.txt)
 	-- when the gate's clock is nearly out, once per run. Nothing here changes what it does.

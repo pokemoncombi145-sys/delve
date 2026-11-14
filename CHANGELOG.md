@@ -3,12 +3,12 @@
 Newest first. The version is shown in the script window title (`Delve v5.39 | Brain`).
 
 ## v5.39: Worldheart donut, gates, Vesper's shop ping and pause (not yet verified in gameplay)
-From the night of 13-14 Nov (34 runs, best 57,320 m at Prestige III). 20 of the 34 runs ended at one of four places: the gates of chambers 65 (7 cave-ins) and 55 (6), the Worldheart (4 deaths) and the Pale Warden (2).
+From the night of 13-14 Nov (34 runs, best 57,320 m at Prestige III). 19 of the 34 runs ended at or just past one of four places: the gates of chambers 65 (7 cave-ins) and 55 (5 cave-ins, 1 death), the Worldheart (4 deaths) and the Pale Warden (2).
 - **Worldheart donut (3 of the 4 Worldheart deaths):**
   - the donut hits everything out to 171 st except a 27 st circle in the middle;
   - the game draws it as full discs plus a "safe" disc, and the bot read those drawings as one solid danger circle, so it ran for the room's edge (still inside the donut) and was hit there;
   - now, with the game's attack plans on, a drawn shape where a planned attack is gets ignored and the plan's own zone is used (with its safe middle and its timing). Drawings away from every plan still count, as before.
-- **Gates (12 of the 34 runs ended in a cave-in at a gate):** the gate's clock ran out with the bot 15-20 rows short of the gate's end.
+- **Gates (13 of the 34 runs caved in at a gate, 10 of them at chambers 65 and 55):** the gate's clock ran out with the bot 15-20 rows short of the gate's end.
   - In a gate, mobs no longer get "boss mechanic" priority: a gate has guardians and their pack, not mechanics. It went for targets 80-270 st away and switched target every 2 s.
   - It stays on its target unless another mob is 12+ st closer.
   - **Not solved yet:** why it stood still for the last 10-20 s with no mobs left. New logging for the next review:
