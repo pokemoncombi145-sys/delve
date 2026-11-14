@@ -427,7 +427,7 @@ do
 	end;
 	if type(brain.dodge) ~= "table" then brain.dodge = {}; end;
 	if okRead and type(raw) == "string" and #raw > 2 then
-		local migrating = (tonumber(brain.learnV) or 0) < 4 or (tonumber(brain.cleanV) or 0) < 3;
+		local migrating = (tonumber(brain.learnV) or 0) < 5 or (tonumber(brain.cleanV) or 0) < 3;
 		if migrating or os.time() - (tonumber(brain.lastBackupAt) or 0) > 21600 then
 			if r.brainBackup(migrating and "before-migration" or "auto", raw) then brain.lastBackupAt = os.time(); end;
 		end;
@@ -453,6 +453,15 @@ do
 		brain.cat, brain.catMode = {}, {};
 		brain.dodge.iframe = .35;
 		brain.dodge.leadAdj = 0;
+	end;
+	if (tonumber(brain.learnV) or 0) == 4 then
+		-- v5.37 (a backup is written to DelveBackups first): floors were blamed for cave-in falls, the health reset
+		-- at a run's start and planned attacks (Seg_1, the first floor slab of every run, had 34 "hits" and was
+		-- avoided like lava); attack patterns and "seen shooting" counts went up every frame instead of once per
+		-- attack (6 million "attacks" for one mob, every mob counted as a shooter). Those three start fresh.
+		brain.learnV = 5;
+		brain.floorHaz, brain.patterns, brain.ranged = {}, {}, {};
+		r.brainMigrated = true;
 	end;
 	brain.dodge.extra = tonumber(brain.dodge.extra) or 0;
 	brain.dodge.leadAdj = tonumber(brain.dodge.leadAdj) or 0;
@@ -491,6 +500,8 @@ local function saveBrain(force)
 	pcall(function() writefile("DelveBrain.json", game:GetService("HttpService"):JSONEncode(brain)); end);
 end;
 local function markBrain() brainState.dirty = true; end;
+-- (v5.37) a migrated brain is written on the next save, so the old file isn't migrated (and backed up) again
+if r.brainMigrated then markBrain(); end;
 r.brain = brain;
 -- current run, used to judge how good the relics picked during it were
 local run = { active = false, relics = {}, depth = 0, wave = 0, died = false, hits = 0, combatT = 0, mineT = 0 };
@@ -2115,7 +2126,7 @@ end;
 --  * concentric circles: a small circle inside a big boss circle is the safe spot (stand close to the boss)
 --  * floor hazards: damage with no attack or mob to explain it marks the floor part under you (lava strips);
 --    after 2 such hits that kind of part is avoided like an attack zone
-local dangerMem = { floorZones = {}, refreshAt = -1e9 };
+local dangerMem = { floorZones = {}, refreshAt = -1e9, seenParts = setmetatable({}, { __mode = "k" }) };
 function dangerMem.tag(z, part, kind)
 	if type(z) ~= "table" then return; end;
 	if not z.sig then
@@ -2136,7 +2147,17 @@ function dangerMem.tag(z, part, kind)
 	if z.color == nil and part then pcall(function() z.color = part.Color; end); end;
 	if not z.seenAt and kind ~= "mob" and kind ~= "floor" then
 		z.seenAt = d();
-		pcall(dangerMem.onAttack, z, z.seenAt);
+		-- (v5.37) the zones are rebuilt every frame: only the first sighting of a part is a new attack
+		-- (every frame counted before: millions of "attacks", junk predictions, every mob a "shooter")
+		if part then
+			if dangerMem.seenParts[part] then return; end;
+			dangerMem.seenParts[part] = true;
+		end;
+		-- with the attack-plan feed, an attack drawn in Hazards is already recorded from its plan (twice made
+		-- "plan A, then drawn A 0.05 s later" look like a pattern)
+		local hzF = workspace:FindFirstChild("Hazards");
+		local planCovers = part ~= nil and hzF ~= nil and r.plan ~= nil and r.plan.hooked == true and CFG.planFeed ~= false and part:IsDescendantOf(hzF);
+		if not planCovers then pcall(dangerMem.onAttack, z, z.seenAt); end;
 		if kind == "projectile" then
 			local shooter, sd;
 			for _, mob in pairs(el) do
@@ -2238,39 +2259,80 @@ function dangerMem.onAttack(z, now)
 	if not boss then return; end;
 	brain.patterns = type(brain.patterns) == "table" and brain.patterns or {};
 	local key = tostring(boss.name);
+	-- (v5.37) the colour is left out (the game draws one attack in many colours, which made dozens of "attacks"
+	-- per mob), parts of one volley count once, and each boss keeps at most 40 attack types and 12 follow-ups each
+	local psig = tostring(z.sig);
+	local _, ncol = psig:gsub(":", "");
+	if ncol >= 3 then psig = psig:match("^(.*):[^:]*$") or psig; end;
+	local live = dangerMem.live;
+	if live and live.boss == key and live.psig == psig and now - live.at < .3 then
+		live.at = now;
+		return;
+	end;
 	local pt = type(brain.patterns[key]) == "table" and brain.patterns[key] or { n = 0, sigs = {}, trans = {} };
+	pt.sigs = type(pt.sigs) == "table" and pt.sigs or {};
+	pt.trans = type(pt.trans) == "table" and pt.trans or {};
+	local function count(t0)
+		local c = 0;
+		for _ in pairs(t0) do c = c + 1; end;
+		return c;
+	end;
+	if pt.sigs[psig] == nil and count(pt.sigs) >= 40 then return; end;
 	pt.n = (tonumber(pt.n) or 0) + 1;
-	local sg = type(pt.sigs[z.sig]) == "table" and pt.sigs[z.sig] or { n = 0 };
+	local sg = type(pt.sigs[psig]) == "table" and pt.sigs[psig] or { n = 0 };
 	sg.n = (tonumber(sg.n) or 0) + 1;
 	if z.circle then
 		sg.r = math.max(tonumber(sg.r) or 0, z.h1 or 0);
 		sg.onBoss = boss.x and (z.x - boss.x) ^ 2 + (z.z - boss.z) ^ 2 < 9 or false;
 	end;
 	if z.hole then sg.hole = z.hole; end;
-	pt.sigs[z.sig] = sg;
-	local live = dangerMem.live;
-	if live and live.boss == key and live.sig and now - live.at < 20 then
-		pt.trans[live.sig] = type(pt.trans[live.sig]) == "table" and pt.trans[live.sig] or {};
-		local tr = type(pt.trans[live.sig][z.sig]) == "table" and pt.trans[live.sig][z.sig] or { n = 0, gap = 0 };
-		tr.n = (tonumber(tr.n) or 0) + 1;
-		tr.gap = (tonumber(tr.gap) or 0) + (now - live.at);
-		pt.trans[live.sig][z.sig] = tr;
+	pt.sigs[psig] = sg;
+	if live and live.boss == key and live.psig and now - live.at < 20 then
+		local row = type(pt.trans[live.psig]) == "table" and pt.trans[live.psig] or {};
+		if row[psig] ~= nil or count(row) < 12 then
+			local tr = type(row[psig]) == "table" and row[psig] or { n = 0, gap = 0 };
+			tr.n = (tonumber(tr.n) or 0) + 1;
+			tr.gap = (tonumber(tr.gap) or 0) + (now - live.at);
+			row[psig] = tr;
+		end;
+		pt.trans[live.psig] = row;
 	end;
 	brain.patterns[key] = pt;
 	-- predict: the attack that most often came next, and after how long
 	local nextSig, bestN, gap = nil, 0, nil;
-	for ns, tr in pairs(type(pt.trans[z.sig]) == "table" and pt.trans[z.sig] or {}) do
-		if type(tr) == "table" and (tonumber(tr.n) or 0) > bestN then nextSig, bestN, gap = ns, tonumber(tr.n), tr.gap / tr.n; end;
-	end;
-	dangerMem.live = { boss = key, sig = z.sig, at = now };
 	local totalN = 0;
-	for _, tr in pairs(type(pt.trans[z.sig]) == "table" and pt.trans[z.sig] or {}) do
-		if type(tr) == "table" then totalN = totalN + (tonumber(tr.n) or 0); end;
+	for ns, tr in pairs(type(pt.trans[psig]) == "table" and pt.trans[psig] or {}) do
+		if type(tr) == "table" then
+			local n0 = tonumber(tr.n) or 0;
+			totalN = totalN + n0;
+			if n0 > bestN then nextSig, bestN, gap = ns, n0, (tonumber(tr.gap) or 0) / math.max(n0, 1); end;
+		end;
 	end;
+	dangerMem.live = { boss = key, sig = z.sig, psig = psig, at = now };
 	local conf = totalN > 0 and bestN / totalN or 0;
 	-- only act on a prediction seen 5+ times that comes true most of the time
 	dangerMem.predict = (nextSig and bestN >= 5 and conf >= .6)
 		and { boss = key, sig = nextSig, at = now + gap, info = pt.sigs[nextSig], conf = conf } or nil;
+end;
+-- (v5.37) "seen shooting": once per volley, by name (attack plans) or the mob nearest to where the shots start
+-- (MobShot names no mob). With the attack-plan feed the drawn bullets aren't scanned, so this is the source.
+r.noteShooter = function(nm, from, t)
+	if (nm == nil or nm == "?") and from then
+		local best, bd;
+		for _, mob in pairs(el) do
+			if mob.x and mob.name and not mob.dead then
+				local dd = (mob.x - from.X) ^ 2 + (mob.z - from.Z) ^ 2;
+				if dd < 144 and (not bd or dd < bd) then best, bd = mob, dd; end;
+			end;
+		end;
+		nm = best and best.name or nil;
+	end;
+	if nm == nil or nm == "?" then return; end;
+	nm = tostring(nm);
+	brain.ranged = type(brain.ranged) == "table" and brain.ranged or {};
+	brain.ranged[nm] = (tonumber(brain.ranged[nm]) or 0) + 1;
+	r.rangedSeen = r.rangedSeen or {};
+	r.rangedSeen[nm] = t or d();
 end;
 local function Xl(m, G)
 	Fl = {};
@@ -3016,6 +3078,8 @@ do
 				if not sh.visual then ns = ns + 1; first = math.min(first, sh.spawnAt); end;
 			end;
 		end;
+		-- (v5.37) "seen shooting" from the plan: one volley per plan that has shots
+		if ns > 0 and r.noteShooter then pcall(r.noteShooter, mob, nil, nowL); end;
 		-- (v5.32.1) a bullet storm (40+ planned shots): one automatic capture covering its first seconds
 		if ns >= 40 and first < math.huge then
 			local delay = math.max(2, math.min(12, (first - now) + 5));
@@ -3068,6 +3132,12 @@ do
 			end;
 		end;
 		if n > 0 then f(string.format("mob volley: %d %s", n, p.lob and "lob" or "shots")); end;
+		-- (v5.37) MobShot names no mob: credit the one nearest to where the shots start (within 12 st)
+		if n > 0 and r.noteShooter then
+			local from = (type(p.lob) == "table" and typeof(p.lob.from) == "Vector3" and p.lob.from)
+				or (type(p.shots) == "table" and type(p.shots[1]) == "table" and typeof(p.shots[1].from) == "Vector3" and p.shots[1].from) or nil;
+			if from then pcall(r.noteShooter, nil, from, nowL); end;
+		end;
 	end;
 	function P.onDodged(p)
 		P.dodged = (P.dodged or 0) + 1;
@@ -7140,29 +7210,13 @@ local function wantFight(list, pos, now)
 		local okF, fx, fz = pcall(r.forwardInfo, pos.X, pos.Z);
 		if okF and fx then r.collapseFwd = { fx, fz }; end;
 	end;
-	-- in a hurry, a mob behind you (toward the collapse) and over 12 st away isn't worth walking back for
-	local function worthIt(mob)
-		local fw = r.collapseFwd;
-		if not (hurry and fw) then return true; end;
-		local dx, dz = mob.x - pos.X, mob.z - pos.Z;
-		return not ((dx * fw[1] + dz * fw[2]) < -6 and dx * dx + dz * dz > 144);
-	end;
-	local function holdOff(what)
-		for _, mob in ipairs(list) do if worthIt(mob) then return false; end; end;
-		r.fightWhy = nil;
-		r.danger, r.dangerWhy = true, string.format("%s %.0fs, the %s are behind me", chow, csec, what);
-		return true;
-	end;
-	if boss then
-		if hurry and holdOff("mobs") then return false; end;
-		r.fightWhy = "boss";
-		return true;
-	end;
+	-- (v5.37) bosses and gate guardians are always fought: the way on only opens once they're dead, and a shooter
+	-- that stays back would never come to you. Near the collapse the ones ahead of you are picked first.
+	if boss then r.fightWhy = "boss"; return true; end;
 	-- (the "big mob" rule comes after the timer check: a 42,840 m run caved in chasing big mobs 25-45 st
 	-- away with 5 s left on the timer)
 	if stage:find("MOB") or stage:find("ENEM") or stage:find("FIGHT") or stage:find("HORDE") or stage:find("SLAY") or stage:find("KILL")
 		or stage:find("ELITE") or stage:find("DEFEAT") or stage:find("CLEAR") then
-		if hurry and holdOff("mobs") then return false; end;
 		r.fightWhy = "mob stage";
 		return true;
 	end;
@@ -7373,6 +7427,9 @@ do
 			st = { inst = tg.inst, best = tg.dist, bestAt = m };
 			r.portalState = st;
 		end;
+		-- (v5.37) back after a pause (a fight, F2): the "getting closer" clocks start over
+		if st.lastAt and m - st.lastAt > 3 then st.best, st.bestAt, st.nearAt = tg.dist, m, nil; end;
+		st.lastAt = m;
 		if tg.dist < st.best - 3 then st.best, st.bestAt = tg.dist, m; end;
 		if m - (r.portalNoteAt or -1e9) > 8 then
 			r.portalNoteAt = m;
@@ -7729,7 +7786,7 @@ do
 	end;
 	r.stallTick = function(G, S, m)
 		local hum0 = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
-		local on = Q.on and run.isDelve and hum0 ~= nil and hum0.Health > 0 and WQ ~= "combat" and not r.f2Paused;
+		local on = Q.on and run.isDelve and run.active and not r.scanning and hum0 ~= nil and hum0.Health > 0 and WQ ~= "combat" and not r.f2Paused;
 		local sr = r.stallRef;
 		local rc = tonumber(r.rockCount) or 0;
 		if not on or not sr or (G.X - sr.x) ^ 2 + (G.Z - sr.z) ^ 2 > 16 or rc ~= sr.rocks or #S ~= sr.mobs then
@@ -7769,6 +7826,8 @@ local function lh(m)
 	if r.f2Paused then
 		WQ, L, u, xQ = "idle", nil, nil, nil;
 		r.lhBranch = "paused (F2)";
+		if MQ.phase == "down" then pcall(inp.mouseUp); end;
+		MQ.phase = "idle";
 		Pl();
 		return;
 	end;
@@ -8030,7 +8089,7 @@ local function lh(m)
 				end;
 			end;
 		end;
-		if pick ~= "Don't enter" then
+		if CFG.on and pick ~= "Don't enter" then
 			local okP, tg = pcall(r.portalFind, G, wantShop);
 			if okP and tg then
 				local nearest = math.huge;
@@ -8056,7 +8115,7 @@ local function lh(m)
 		local need = tonumber(tostring(run.objective or ""):match("(%d+)%s*MOBS?%s*LEFT"));
 		local nearest = math.huge;
 		for _, mob in ipairs(S) do nearest = math.min(nearest, tonumber(mob.d) or math.huge); end;
-		if CFG.exploreForMobs ~= false and need and #S < need and nearest > 8 and not eh(Fl, G.X, G.Z) and nav.map and r.floorEntry then
+		if CFG.on and CFG.exploreForMobs ~= false and need and #S < need and nearest > 8 and not eh(Fl, G.X, G.Z) and nav.map and r.floorEntry then
 			local goal = r.exploreGoal;
 			if not goal or (goal.x - G.X) ^ 2 + (goal.z - G.Z) ^ 2 < 16 or m - goal.t > 6 then
 				-- the floor tile farthest from where we came in (and from here, once there), not in an attack
@@ -9978,7 +10037,25 @@ local brainTick = (function()
 			end;
 		end;
 		-- nothing explains this damage and no mob is near: it's the floor (lava strips etc.)
-		if not inZone and not best and not nearMob then
+		-- (v5.37) ...unless it was a planned attack (the Worldheart's donut was put on the floor slabs under it),
+		-- a fall into the collapse (health at 0 or below), the health reset in a run's first seconds (Seg_1, the
+		-- first slab of every run, had 34 "hits") or the hub (SnowMound)
+		local floorBlame = not inZone and not best and not nearMob;
+		if floorBlame then
+			local humF = l.Character and l.Character:FindFirstChildOfClass("Humanoid");
+			if not run.active or now - (tonumber(run.startAt) or -1e9) < 12 or (humF and humF.Health <= 0) then
+				floorBlame = false;
+			else
+				pcall(function()
+					local Pq = r.plan;
+					if Pq and Pq.hooked and CFG.planFeed ~= false then
+						local sv = Pq.srv();
+						if Pq.hitAt(pos.X, pos.Z, sv - .8, sv + .1) ~= nil then floorBlame = false; end;
+					end;
+				end);
+			end;
+		end;
+		if floorBlame then
 			local seenF = {};
 			for _, part in ipairs(dangerMem.partsNear(pos, 0, true)) do
 				local sig = dangerMem.sigOf(part);
@@ -10888,7 +10965,7 @@ end;
 	end;
 
 	local window = WindUI:CreateWindow({
-		Title = "Delve v5.36 | Brain",
+		Title = "Delve v5.37 | Brain",
 		Folder = "DelveV3",
 		Size = UDim2.fromOffset(900, 700),
 		ToggleKey = Enum.KeyCode.RightShift,

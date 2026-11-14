@@ -1,6 +1,29 @@
 # Changelog
 
-Newest first. The version is shown in the script window title (`Delve v5.36 | Brain`).
+Newest first. The version is shown in the script window title (`Delve v5.37 | Brain`).
+
+## v5.37: Fixes to what it learned; Auto Farm off stops all walking (not yet verified in gameplay)
+- **F2 after your rejoin (v5.36):** one press at 20:42:09, one log line; the doubled listener is gone. If you ever re-run an *older* version in the same session, rejoin once so only one copy is listening.
+- **Three things the bot learned were wrong** (found in `DelveBrain.json`):
+  - **Dangerous floors.** When you lost health with no attack or mob around, the floor part under you got the blame, and after two such hits it was avoided like lava. Cave-in falls, the health reset as a new run starts, the hub and planned attacks all counted. Results:
+    - `Seg_1`, the first floor slab of every run, had 34 "hits" and was treated as lava at the start of every run;
+    - the Worldheart and Pale Warden room floors, plain `Floor` and a hub snow mound were on the list too.
+
+    **Fix:** the floor is only blamed inside a run, after its first 12 s, with health above 0, and when no planned attack explains the hit.
+  - **Attack patterns** (which boss attack tends to follow which). Drawn attacks were counted every frame instead of once, and every colour counted as a different attack: 6 million "attacks" for one mob, 46 "bosses", 3 MB of the 3.4 MB brain file. The junk predictions from it could hold back the attack roll in boss fights.
+
+    **Fix:** each drawn part counts once, and not at all when the attack plan already recorded it; one volley counts once; the colour is ignored; each boss keeps at most 40 attack types and 12 follow-ups per type.
+  - **"Seen shooting" counts.** Also per frame (WailingShade 155,432, Bonewalker 61,332), so every mob counted as a shooter and "hits from range: taking it out first" fired 75 times last session, often on melee mobs 1-3 st away.
+
+    **Fix:** one count per volley, from the attack plans (which name the mob) and MobShot (the mob nearest to where the shots start).
+  - **Cleanup:** these three tables are cleared once (learning version 5). A copy of the brain file goes to `DelveBackups/` first, and the cleaned file is written right away so this runs only once. The brain file drops to about 0.4 MB, so the save every 20 s is about 8x lighter.
+- **Auto Farm off stops all walking.** With Auto Farm turned off in the menu (not F2), the portal walk and the search for missing mobs still moved the character; both need Auto Farm on now.
+- **Stall watchdog:** only inside a run and not while a scan has the menu open (it could have fired on the results screen or in the hub).
+- **Portal walk:** a pause (a fight, F2) no longer counts as "not getting closer", so it doesn't give up on the portal straight after a fight.
+- **Gates and bosses are always fought again.** v5.36 held off when every remaining mob was behind you near the collapse. But a gate only opens once its mobs are dead, and a shooter that stays back never comes to you. Kept from v5.36:
+  - near the collapse, mobs ahead of you are picked first;
+  - in ore chambers only a mob right on top of you is fought (none at 6 s or less).
+- **F2** also lets go of the mining click.
 
 ## v5.36: F2 really hands you control; no fighting at the collapse (not yet verified in gameplay)
 - **F2 didn't give you control (13 Nov, 20:14-20:29):**
